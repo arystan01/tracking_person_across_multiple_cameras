@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+.pytest_cache/
+
+# Local backups and macOS metadata
+backups/
+.DS_Store
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.pem
+*.key

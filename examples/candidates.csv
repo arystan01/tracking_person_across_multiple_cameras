@@ -1,0 +1,5 @@
+id,camera_id,observed_at,appearance_score
+track-A,A,2026-10-09T14:00:00+09:00,0.96
+track-B,B,2026-10-09T14:03:00+09:00,0.89
+track-C,C,2026-10-09T14:06:00+09:00,0.84
+distractor,D,2026-10-09T14:00:05+09:00,0.98

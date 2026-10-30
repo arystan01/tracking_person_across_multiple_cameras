@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "candidates": [
+    {"id": "track-A", "camera_id": "A", "observed_at": "2026-10-09T14:00:00+09:00", "appearance_score": 0.96},
+    {"id": "track-B", "camera_id": "B", "observed_at": "2026-10-09T14:03:00+09:00", "appearance_score": 0.89},
+    {"id": "track-C", "camera_id": "C", "observed_at": "2026-10-09T14:06:00+09:00", "appearance_score": 0.84},
+    {"id": "distractor", "camera_id": "D", "observed_at": "2026-10-09T14:00:05+09:00", "appearance_score": 0.98}
+  ]
+}
