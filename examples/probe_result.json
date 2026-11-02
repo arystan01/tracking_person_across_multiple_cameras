@@ -1,0 +1,47 @@
+{
+  "probe_id": "p_41",
+  "status": "DONE",
+  "tracklets": [
+    {
+      "tracklet_id": "t_412",
+      "case_id": "c_17",
+      "probe_id": "p_41",
+      "camera_id": "B",
+      "t_start": "2026-10-16T05:16:52Z",
+      "t_end": "2026-10-16T05:17:11Z",
+      "bbox_first": [
+        38.0,
+        210.0,
+        64.0,
+        150.0
+      ],
+      "bbox_last": [
+        598.0,
+        190.0,
+        70.0,
+        160.0
+      ],
+      "open": false,
+      "clipped_start": false,
+      "clipped_end": false,
+      "crop_paths": [],
+      "embedding_path": null,
+      "clip_ref": null
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "cand_03",
+      "tracklet_id": "t_412",
+      "appearance_score": 0.68,
+      "cosine": 0.57,
+      "calibration_version": "reid-cal-v1",
+      "association_id": null
+    }
+  ],
+  "coverage_ratio": 1.0,
+  "processed_duration_s": 120.0,
+  "n_tracklets_total": 7,
+  "stream_closed": false,
+  "error_code": null
+}

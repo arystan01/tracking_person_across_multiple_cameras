@@ -1,0 +1,141 @@
+[
+  {
+    "request_id": "request-login",
+    "method": "POST",
+    "path": "/v1/auth/login",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "username": "operator-demo",
+      "password": "fake-dashboard-password"
+    }
+  },
+  {
+    "request_id": "request-create",
+    "method": "POST",
+    "path": "/v1/cases",
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "request-create",
+      "authorization": "Bearer fake-dashboard-session"
+    },
+    "json": {
+      "case_id": "case-demo-001",
+      "operator_id": "operator-demo",
+      "target_id": "target-demo",
+      "reference_image_ref": {
+        "archive_id": null,
+        "object_key": "cases/case-demo-001/reference.jpg",
+        "uri": null
+      },
+      "last_known": {
+        "camera_id": "A",
+        "zone_id": null,
+        "time": "2026-10-16T05:16:00Z"
+      },
+      "window": {
+        "start": "2026-10-16T05:16:00Z",
+        "end": "2026-10-16T05:36:00Z"
+      },
+      "profile": "ADULT",
+      "site_id": "demo-site",
+      "site_version": "1"
+    }
+  },
+  {
+    "request_id": "request-view",
+    "method": "GET",
+    "path": "/v1/cases/case-demo-001/view",
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "request-view",
+      "authorization": "Bearer fake-dashboard-session"
+    },
+    "json": null
+  },
+  {
+    "request_id": "request-reject",
+    "method": "POST",
+    "path": "/v1/cases/case-demo-001/decisions",
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "request-reject",
+      "authorization": "Bearer fake-dashboard-session"
+    },
+    "json": {
+      "decision_id": "decision-000",
+      "candidate_id": "candidate-demo-001-rejected",
+      "tracklet_id": "tracklet-demo-001-rejected",
+      "decision": "REJECT",
+      "operator_id": "operator-demo",
+      "occurred_at": "2026-10-16T05:21:00Z"
+    }
+  },
+  {
+    "request_id": "request-confirm",
+    "method": "POST",
+    "path": "/v1/cases/case-demo-001/decisions",
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "request-confirm",
+      "authorization": "Bearer fake-dashboard-session"
+    },
+    "json": {
+      "decision_id": "decision-001",
+      "candidate_id": "candidate-demo-001",
+      "tracklet_id": "tracklet-demo-001",
+      "decision": "CONFIRM",
+      "operator_id": "operator-demo",
+      "occurred_at": "2026-10-16T05:21:00Z"
+    }
+  },
+  {
+    "request_id": "request-close",
+    "method": "POST",
+    "path": "/v1/cases/case-demo-001/commands/close",
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "request-close",
+      "authorization": "Bearer fake-dashboard-session"
+    },
+    "json": {
+      "command_id": "command-close",
+      "action": "CLOSE",
+      "operator_id": "operator-demo",
+      "occurred_at": "2026-10-16T05:21:00Z"
+    }
+  },
+  {
+    "request_id": "request-export",
+    "method": "POST",
+    "path": "/v1/cases/case-demo-001/commands/export",
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "request-export",
+      "authorization": "Bearer fake-dashboard-session"
+    },
+    "json": {
+      "command_id": "command-export",
+      "action": "EXPORT",
+      "operator_id": "operator-demo",
+      "occurred_at": "2026-10-16T05:21:00Z"
+    }
+  },
+  {
+    "request_id": "request-delete",
+    "method": "POST",
+    "path": "/v1/cases/case-demo-001/commands/delete",
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "request-delete",
+      "authorization": "Bearer fake-dashboard-session"
+    },
+    "json": {
+      "command_id": "command-delete",
+      "action": "DELETE",
+      "operator_id": "operator-demo",
+      "occurred_at": "2026-10-16T05:21:00Z"
+    }
+  }
+]

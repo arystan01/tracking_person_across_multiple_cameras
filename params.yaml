@@ -1,0 +1,42 @@
+version: "1"
+B: 5
+K: 4
+p_det: 0.85
+merge_gap_s: 10.0
+max_gap_s: 2400.0
+amb_delta: 1.0
+max_retries: 2
+new_hyp_floor: -20.0
+camera_minute_budget: 500.0
+max_speed: 2.0
+use_st: true
+amb_priority_bonus: 2.0
+dormant_watch_boost: 1.2
+score_clip_min: 0.01
+gate_speed: 4.0
+walk_speed: 1.3
+tmax_over_ttyp: 2.5
+clock_tolerance_s: 3.0
+rejected_top_n: 5
+tail_factor: 3.0
+tail_eps: 0.05
+heartbeat_s: 5
+cands_per_probe: 3
+merge_dist_frac: 0.25
+leak_prior: 0.02
+unknown_dwell: {median_s: 600, sigma: 1.2}
+group_corr: 0.7
+min_coverage: 0.5
+quiet_window_s: 120
+crowd_penalty_k: 0.3
+confirm_after_n: 2
+manual_time_sigma_s: 120
+live_current_priority: 2.0
+blind_path_priority: 0.3
+max_hidden_edges: 5
+dormant_border_priority: 0.5
+estimate_neighbour_share: 0.3
+profiles:
+  ADULT:   {tmin_k: 1.0, ttyp_k: 1.0, tmax_k: 1.0}
+  CHILD:   {tmin_k: 0.6, ttyp_k: 1.0, tmax_k: 1.6}
+  ELDERLY: {tmin_k: 1.0, ttyp_k: 1.5, tmax_k: 2.0}

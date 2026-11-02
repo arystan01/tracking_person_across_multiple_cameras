@@ -1,0 +1,64 @@
+projectionMatrix_3x4_w2p:
+- 94.166725
+- -67.413523
+- -25.166620
+- 1878.110018
+- -11.972194
+- -6.049044
+- -107.075055
+- 378.157510
+- 0.049877
+- 0.025201
+- -0.026215
+- 1.000000
+
+# The following modelInfo works for both PeopleNetTransformer and RTDETR detectors on the sample videos
+# If you only use PeopleNetTransformer detector, you set modelInfo as follows:
+# modelInfo:
+#   - classID: 1 # person
+#     height: 1.7
+#     radius: 0.3
+
+# If you only use RTDETR detector, you set modelInfo as follows:
+# modelInfo:
+#   - classID: 0 # person
+#     height: 1.7
+#     radius: 0.3
+#   - classID: 1 # agility_digit (not shown in the sample videos)
+#     height: 1.7
+#     radius: 0.3
+#   - classID: 2 # gr1_t2 (not shown in the sample videos)
+#     height: 1.7
+#     radius: 0.3
+#   - classID: 3 # nova_carter (not shown in the sample videos)
+#     height: 0.48
+#     radius: 0.3
+#   - classID: 4 # transporter (not shown in the sample videos)
+#     height: 0.2
+#     radius: 0.52
+#   - classID: 5 # forklift
+#     height: 2.2
+#     radius: 0.9
+#   - classID: 6 # pallet (filtered out in sample config)
+#     height: 0.48
+#     radius: 0.3
+
+modelInfo:
+  - classID: 0 # person (RTDETR)
+    height: 1.7
+    radius: 0.3
+  - classID: 1 # person (PeopleNetTransformer) / agility_digit (RTDETR, not shown in sample videos)
+    height: 1.7
+    radius: 0.3
+  - classID: 2 # gr1_t2 (RTDETR, not shown in sample videos)
+    height: 1.7
+    radius: 0.3
+  - classID: 3 # nova_carter (RTDETR, not shown in sample videos)
+    height: 1.7
+    radius: 0.3
+  - classID: 4 # transporter (RTDETR, not shown in sample videos)
+    height: 1.7
+    radius: 0.3
+  - classID: 5 # forklift (RTDETR)
+    height: 2.2
+    radius: 0.9

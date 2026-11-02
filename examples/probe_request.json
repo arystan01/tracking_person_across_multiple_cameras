@@ -1,0 +1,13 @@
+{
+  "probe_id": "p_41",
+  "camera_id": "B",
+  "t_from": "2026-10-16T05:16:00Z",
+  "t_to": "2026-10-16T05:18:00Z",
+  "priority": 0.72,
+  "reason": "ROUTE_EXPANSION",
+  "hypothesis_ids": [
+    "h_1"
+  ],
+  "retry_count": 0,
+  "retry_of": null
+}

@@ -1,0 +1,28 @@
+site: demo-building
+version: "2026-10-16"
+timezone: Asia/Seoul
+map:
+  floors:
+    - {id: 1F, image: maps/1F.png, size_px: [1600, 900], m_per_px: 0.05}
+cameras:
+  A:
+    zone: 1F-NW
+    floor: 1F
+    map_xy: [120, 340]
+    clock_offset_s: 0
+    regions:
+      east: [[610, 80], [640, 80], [640, 300], [610, 300]]
+  B: {zone: 1F-N, floor: 1F, map_xy: [300, 220], clock_offset_s: -2}
+edges:
+  - id: A-B-1
+    from: A
+    via: east
+    to: B
+    d_m: 25
+    t_min: 10
+    t_typ: 20
+    t_max: 60
+    map_path: [[120, 340], [210, 300], [300, 220]]
+blind_nodes:
+  - {id: shop_1F, floor: 1F, map_xy: [500, 400], borders: [B], dwell: {median_s: 300, sigma: 0.9}}
+max_gap_s: 2400

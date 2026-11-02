@@ -1,0 +1,35 @@
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging and local environments
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Local runtime state and generated output
+*.sqlite
+*.sqlite3
+demo_out/
+schemas/
+artifacts/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+
+
+# Perception: big local files
+tmp/
+perception_out/
+models/*
+!models/yolo26n.pt
+!models/osnet_ain_x1_0_msmt17.pt

@@ -1,0 +1,57 @@
+cameras:
+  cam_A:
+    zone: lobby
+    map_xy: [10, 20]
+    regions:
+      - name: door_north
+        edges: [A_to_B]
+        polygon: [[0, 0], [100, 0], [100, 50], [0, 50]]
+      - name: door_south  
+        edges: [A_to_C]
+        polygon: [[0, 200], [100, 200], [100, 250], [0, 250]]
+  cam_B:
+    zone: corridor
+    map_xy: [10, 50]
+  cam_C:
+    zone: office
+    map_xy: [10, 80]
+
+edges:
+  - id: A_to_B
+    source: cam_A
+    target: cam_B
+    t_min: 5
+    t_typ: 10
+    t_max: 30
+  - id: B_to_A
+    source: cam_B
+    target: cam_A
+    t_min: 5
+    t_typ: 10
+    t_max: 30
+  - id: A_to_C
+    source: cam_A
+    target: cam_C
+    t_min: 15
+    t_typ: 25
+    t_max: 60
+  - id: C_to_A
+    source: cam_C
+    target: cam_A
+    t_min: 15
+    t_typ: 25
+    t_max: 60
+
+blind_nodes:
+  - id: stairwell
+    dwell_median_s: 20
+    dwell_sigma: 0.5
+
+outside:
+  entrances:
+    cam_A: 0.7
+    cam_B: 0.3
+  dwell_median_s: 300
+  dwell_sigma: 1.0
+
+max_gap_s: 2400

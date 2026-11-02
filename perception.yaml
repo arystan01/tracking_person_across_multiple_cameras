@@ -1,0 +1,27 @@
+# camera_id -> video file and the UTC time of its first frame
+cameras:
+  cam_1:
+    path: data/videos/people-detection.mp4
+    start: "2026-11-05T05:00:00Z"
+    archive_id: archive_cam_1
+  cam_2:
+    path: data/videos/one-by-one-person-detection.mp4
+    start: "2026-11-05T05:01:00Z"
+    archive_id: archive_cam_2
+
+detector_weights: models/yolo26n.pt      # YOLO26
+tracker: bytetrack.yaml                   # ByteTrack
+reid_model: osnet_ain_x1_0                # OSNet-AIN
+reid_weights: models/osnet_ain_x1_0_msmt17.pt
+model_version: osnet_ain_x1_0_msmt17
+device: auto          # cuda / mps / cpu
+sample_fps: 5
+min_track_frames: 3
+embed_every: 2
+min_embed_conf: 0.4   # crops below this detector confidence are not used for Re-ID
+edge_margin_px: 2     # crops cut by the frame edge are not used
+max_overlap: 0.3      # crops covered by another person more than this are not used
+calib_a: 26.0         # appearance_score = sigmoid(calib_a * cosine + calib_b), fitted on Market-1501
+calib_b: -15.49
+score_floor: 0.1
+calibration_version: osnet-ain-market1501-logit-v1

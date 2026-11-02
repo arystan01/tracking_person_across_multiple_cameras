@@ -1,0 +1,56 @@
+# Include the transforms as a list of elements in row-major order
+# For example for a transform with elements:
+#
+#     | a  b  c |
+# T = | d  e  f |
+#     | g  h  i |
+#
+# The yaml config node will be:
+#
+# T: 
+#   - a
+#   - b
+#   - c
+#   - d
+#   - e
+#   - f
+#   - g
+#   - h
+#   - i
+
+# The transform from wold coordinates to pixel coordinates
+#
+#           |  -9.781818    0.        470.527273|
+# T_ov2px = |   0.          9.785714 1029.5     |
+#           |   0.          0.          1.      |
+#
+# to be entered as below:
+T_ov2px:
+  - -9.781818
+  - 0.000000
+  - 470.527273
+  - 0.000000
+  - 9.785714
+  - 1029.500000
+  - 0.000000
+  - 0.000000
+  - 1.000000
+
+
+# The transform from ground truth coordinates to pixel coordinates
+#
+#           |9.781818 0.       0.      |
+# T_gt2px = |0.       9.785714 0.      |
+#           |0.       0.       1.      |
+#
+# to be entered as below:
+T_gt2px:
+  - 9.781818
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  - 9.785714
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  - 1.000000

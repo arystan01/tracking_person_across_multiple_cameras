@@ -1,0 +1,10 @@
+seed: 42
+p_det: 0.85
+appearance_mean: 0.80
+appearance_noise_std: 0.10
+false_positive_rate: 0.02
+camera_dwell_min_s: 5.0
+camera_dwell_max_s: 30.0
+true_edge_time_scale_min: 0.6
+true_edge_time_scale_max: 1.4
+clock_skew_s: 3.0
