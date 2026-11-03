@@ -9,6 +9,7 @@ from typing import Sequence
 
 from . import (
     ArtifactRef,
+    ArtifactManifest,
     Candidate,
     CaseCommandBody,
     CreateCaseBody,
@@ -31,6 +32,20 @@ from . import (
     Tracklet,
     VideoSegmentRequest,
     VideoSegmentResult,
+    RoutingInitRequest,
+    RoutingInitResponse,
+    RoutingParamsResponse,
+    RoutingStepRequest,
+    RoutingStepResponse,
+    SiteVersionResponse,
+    WorkerClaimRequest,
+    WorkerClaimResponse,
+    WorkerHeartbeatRequest,
+    WorkerHeartbeatResponse,
+    WorkerTaskAck,
+    WorkerTaskEnvelope,
+    WorkerTaskFailureRequest,
+    WorkerTaskResultRequest,
 )
 
 
@@ -38,6 +53,7 @@ PUBLIC_MODELS = {
     model.__name__: model
     for model in (
         ArtifactRef,
+        ArtifactManifest,
         Candidate,
         CaseCommandBody,
         CreateCaseBody,
@@ -60,6 +76,20 @@ PUBLIC_MODELS = {
         Tracklet,
         VideoSegmentRequest,
         VideoSegmentResult,
+        RoutingInitRequest,
+        RoutingInitResponse,
+        RoutingParamsResponse,
+        RoutingStepRequest,
+        RoutingStepResponse,
+        SiteVersionResponse,
+        WorkerClaimRequest,
+        WorkerClaimResponse,
+        WorkerHeartbeatRequest,
+        WorkerHeartbeatResponse,
+        WorkerTaskAck,
+        WorkerTaskEnvelope,
+        WorkerTaskFailureRequest,
+        WorkerTaskResultRequest,
     )
 }
 

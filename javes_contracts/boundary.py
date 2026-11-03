@@ -121,7 +121,7 @@ class TargetGalleryCommand(ContractModel):
     source: Literal["reference", "confirmed_tracklet"]
     image_ref: ArtifactRef | None = None
     tracklet_id: str | None = None
-    model_version: str = "fake-reid-v1"
+    model_version: str = "osnet_ain_x1_0_msmt17"
 
     @model_validator(mode="after")
     def _source_payload(self) -> TargetGalleryCommand:
