@@ -360,6 +360,7 @@ class InMemoryRepository:
         now: datetime,
         lease_expires_at: datetime,
         limit: int,
+        topics: set[str] | None = None,
     ) -> list[OutboxRecord]:
         if limit < 1:
             return []
@@ -369,6 +370,7 @@ class InMemoryRepository:
                     item
                     for item in self._outbox.values()
                     if item.state == OutboxState.PENDING and item.available_at <= now
+                    and (topics is None or item.topic in topics)
                 ),
                 key=lambda item: (item.available_at, item.created_at, item.message_id),
             )[:limit]

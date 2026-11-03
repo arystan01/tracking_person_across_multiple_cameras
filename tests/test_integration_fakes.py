@@ -204,8 +204,8 @@ def test_fake_retention_close_delete_and_legal_hold():
         occurred_at=BASE,
     )
     result = worker.process(close)
-    assert result.deleted_resource_ids == ["crop", "review-hold"]
-    assert result.preserved_resource_ids == ["legal", "route"]
+    assert result.deleted_resource_ids == []
+    assert result.preserved_resource_ids == ["crop", "legal", "review-hold", "route"]
     assert worker.process(close) == result
 
     deleted = worker.process(
@@ -216,7 +216,7 @@ def test_fake_retention_close_delete_and_legal_hold():
             occurred_at=BASE + timedelta(minutes=1),
         )
     )
-    assert deleted.deleted_resource_ids == ["route"]
+    assert deleted.deleted_resource_ids == ["crop", "review-hold", "route"]
     assert deleted.preserved_resource_ids == ["legal"]
     worker.register(
         RetentionResource(
@@ -314,7 +314,7 @@ def test_full_fake_contract_scenario():
     assert scenario["probe_result"]["status"] == "DONE"
     assert scenario["clip_record"]["state"] == "CONFIRMED"
     assert scenario["clip_export"]["status"] == "READY"
-    assert scenario["retention_result"]["deleted_resource_ids"] == ["crop-001"]
+    assert scenario["retention_result"]["deleted_resource_ids"] == []
     decisions = [
         request["json"]["decision"]
         for request in scenario["dashboard_requests"]

@@ -34,6 +34,7 @@ from .ports import (
     LiveFeedPort,
     PerceptionPort,
     RetentionPort,
+    RoutingPort,
     SiteConfigPort,
 )
 from .persistence import InMemoryRepository
@@ -64,6 +65,7 @@ def assemble_system(
     clip: ClipPort,
     retention: RetentionPort,
     clock: Clock,
+    routing: RoutingPort | None = None,
     ids: IdGenerator | None = None,
     retention_ttl_s: float = DEFAULT_RETENTION_TTL_S,
 ) -> ApplicationSystem:
@@ -72,7 +74,7 @@ def assemble_system(
         repository=repository,
         artifacts=artifacts,
         sites=sites,
-        routing=LocalRoutingAdapter(),
+        routing=routing or LocalRoutingAdapter(),
         perception=perception,
         clip=clip,
         retention=retention,

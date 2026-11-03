@@ -4,6 +4,7 @@ from .case_manager import (
     CaseManager,
 )
 from .metrics import MetricsService
+from .worker_tasks import LeaseError, WorkerTaskService
 from .auth_service import (
     Actor,
     AuthenticationError,
@@ -22,4 +23,6 @@ __all__ = [
     "DEFAULT_RETENTION_TTL_S",
     "LoginResult",
     "MetricsService",
+    "LeaseError",
+    "WorkerTaskService",
 ]

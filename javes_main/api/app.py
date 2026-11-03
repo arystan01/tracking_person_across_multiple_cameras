@@ -13,6 +13,13 @@ from javes_contracts import (
     LiveFeedUpdate,
     ProbeResult,
     ReviewDecisionBody,
+    WorkerClaimRequest,
+    WorkerClaimResponse,
+    WorkerHeartbeatRequest,
+    WorkerHeartbeatResponse,
+    WorkerTaskAck,
+    WorkerTaskFailureRequest,
+    WorkerTaskResultRequest,
 )
 from javes_main.application import (
     Actor,
@@ -21,6 +28,8 @@ from javes_main.application import (
     AuthService,
     CaseManager,
     MetricsService,
+    LeaseError,
+    WorkerTaskService,
 )
 from javes_main.domain import CaseLifecycle, CaseSummary, CaseView
 from javes_main.persistence import RevisionConflict
@@ -57,22 +66,49 @@ def create_app(
     scheduler: SchedulerRunner | None = None,
     run_fake_jobs_inline: bool = False,
     worker_token: str | None = None,
+    worker_tokens: dict[str, str] | None = None,
+    worker_lease_secret: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="JAVES-AI Controls", version="1.0.0-alpha")
     current_actor = BearerAuthenticator(auth)
     metrics = MetricsService(manager.repository, manager.clock)
+    configured_worker_tokens = dict(worker_tokens or {})
+    if worker_token is not None:
+        for component in ("perception", "clip", "retention"):
+            configured_worker_tokens.setdefault(component, worker_token)
+    task_service = WorkerTaskService(
+        repository=manager.repository,
+        manager=manager,
+        clock=manager.clock,
+        lease_secret=(
+            worker_lease_secret
+            or worker_token
+            or "development-only-worker-lease-secret"
+        ),
+    )
     if run_fake_jobs_inline and scheduler is None:
         raise ValueError("run_fake_jobs_inline requires a SchedulerRunner")
 
     def require_worker(
-        x_worker_token: str | None, authorization: str | None
+        component: str,
+        x_worker_token: str | None,
+        authorization: str | None,
+        *,
+        allow_service_actor: bool = False,
     ) -> None:
+        component_token = configured_worker_tokens.get(component)
+        bearer_token = None
+        if authorization and authorization.lower().startswith("bearer "):
+            bearer_token = authorization[7:].strip()
         authenticated = (
-            worker_token is not None
-            and x_worker_token is not None
-            and secrets.compare_digest(x_worker_token, worker_token)
+            component_token is not None
+            and any(
+                candidate is not None
+                and secrets.compare_digest(candidate, component_token)
+                for candidate in (x_worker_token, bearer_token)
+            )
         )
-        if not authenticated and authorization:
+        if not authenticated and authorization and allow_service_actor:
             try:
                 service_actor = auth.authenticate_token(
                     BearerAuthenticator.token_from_header(authorization)
@@ -120,6 +156,10 @@ def create_app(
     @app.exception_handler(RevisionConflict)
     async def revision_error_handler(_, exc: RevisionConflict):
         return problem(409, "Revision Conflict", str(exc), "revision-conflict")
+
+    @app.exception_handler(LeaseError)
+    async def lease_error_handler(_, exc: LeaseError):
+        return problem(409, "Invalid Worker Lease", str(exc), "worker-lease")
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_, exc: ValueError):
@@ -467,7 +507,12 @@ def create_app(
         x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> CaseView:
-        require_worker(x_worker_token, authorization)
+        require_worker(
+            "perception",
+            x_worker_token,
+            authorization,
+            allow_service_actor=True,
+        )
         view = manager.submit_probe_result(job_id, result)
         if run_fake_jobs_inline:
             assert scheduler is not None
@@ -483,12 +528,67 @@ def create_app(
         x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> CaseView:
-        require_worker(x_worker_token, authorization)
+        require_worker("perception", x_worker_token, authorization)
         if update.case_id != case_id:
             raise HTTPException(
                 status_code=422,
                 detail="live update case_id does not match path",
             )
         return manager.submit_live_feed(update)
+
+    @app.post(
+        "/internal/v1/workers/{component}/tasks/claim",
+        response_model=WorkerClaimResponse,
+    )
+    async def claim_worker_tasks(
+        component: str,
+        body: WorkerClaimRequest,
+        x_worker_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ) -> WorkerClaimResponse:
+        require_worker(component, x_worker_token, authorization)
+        return task_service.claim(component, body)
+
+    @app.post(
+        "/internal/v1/workers/{component}/tasks/{task_id}/heartbeat",
+        response_model=WorkerHeartbeatResponse,
+    )
+    async def heartbeat_worker_task(
+        component: str,
+        task_id: str,
+        body: WorkerHeartbeatRequest,
+        x_worker_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ) -> WorkerHeartbeatResponse:
+        require_worker(component, x_worker_token, authorization)
+        return task_service.heartbeat(component, task_id, body)
+
+    @app.post(
+        "/internal/v1/workers/{component}/tasks/{task_id}/result",
+        response_model=WorkerTaskAck,
+    )
+    async def complete_worker_task(
+        component: str,
+        task_id: str,
+        body: WorkerTaskResultRequest,
+        x_worker_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ) -> WorkerTaskAck:
+        require_worker(component, x_worker_token, authorization)
+        return task_service.complete(component, task_id, body)
+
+    @app.post(
+        "/internal/v1/workers/{component}/tasks/{task_id}/failure",
+        response_model=WorkerTaskAck,
+    )
+    async def fail_worker_task(
+        component: str,
+        task_id: str,
+        body: WorkerTaskFailureRequest,
+        x_worker_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ) -> WorkerTaskAck:
+        require_worker(component, x_worker_token, authorization)
+        return task_service.fail(component, task_id, body)
 
     return app

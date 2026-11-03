@@ -20,11 +20,11 @@ def _tombstone(command: RetentionCommand) -> str:
 class FakeRetentionWorker:
     """Applies an explicit safe default policy without touching real files.
 
-    CLOSE_CASE removes EPHEMERAL and REVIEW_HOLD resources. DELETE_CASE removes
-    all non-audit resources except legal holds. TTL_EXPIRED removes due (or
-    case-TTL inherited) resources except legal holds. The returned tombstone
-    represents the deletion audit event and is not itself a retained case
-    payload.
+    CLOSE_CASE records the retention anchor without deleting case data.
+    DELETE_CASE removes all non-audit resources except legal holds.
+    TTL_EXPIRED removes due (or case-TTL inherited) resources except legal
+    holds. The returned tombstone represents the deletion audit event and is
+    not itself a retained case payload.
     """
 
     def __init__(self, resources: list[RetentionResource] | None = None) -> None:
@@ -56,13 +56,6 @@ class FakeRetentionWorker:
             resource.case_id in self.deleted_cases | self.expired_cases
             and not resource.legal_hold
             and resource.retention_class != RetentionClass.AUDIT
-        ):
-            value.deleted = True
-        elif (
-            resource.case_id in self.closed_cases
-            and resource.retention_class
-            in {RetentionClass.EPHEMERAL, RetentionClass.REVIEW_HOLD}
-            and not resource.legal_hold
         ):
             value.deleted = True
         self.resources[resource.resource_id] = value
@@ -97,12 +90,7 @@ class FakeRetentionWorker:
                 not resource.legal_hold
                 and resource.retention_class != RetentionClass.AUDIT
             ):
-                if command.action == "CLOSE_CASE":
-                    should_delete = resource.retention_class in {
-                        RetentionClass.EPHEMERAL,
-                        RetentionClass.REVIEW_HOLD,
-                    }
-                elif command.action == "DELETE_CASE":
+                if command.action == "DELETE_CASE":
                     should_delete = True
                 elif command.action == "TTL_EXPIRED":
                     should_delete = (

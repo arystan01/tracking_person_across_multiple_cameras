@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from javes_contracts import (
     Anchors,
+    ArtifactManifest,
     ArtifactRef,
     CaseCommandBody,
     CaseInfo,
@@ -194,11 +195,52 @@ class CaseManager:
             return ArtifactRef(uri=value)
         if value.startswith("/"):
             return ArtifactRef(uri=f"file://{value}")
-        # A bare Perception path belongs to the Perception storage namespace,
-        # not automatically to Main's local ArtifactStore. The explicit scheme makes
-        # missing cleanup adapters fail closed instead of falsely reporting a
-        # container-local file as absent from another store.
-        return ArtifactRef(uri=f"perception:{value}")
+        # Component workers share the private ArtifactStore mount.  Relative
+        # locators are therefore canonical object keys, not component-specific
+        # URI schemes that Retention cannot resolve.
+        return ArtifactRef(object_key=value)
+
+    def register_worker_artifacts(
+        self,
+        case_id: str,
+        task_id: str,
+        manifests: list[ArtifactManifest],
+    ) -> None:
+        """Verify and register worker-owned files for policy deletion."""
+
+        self.repository.get(case_id)
+        prefix = f"cases/{case_id}/"
+        with self.repository.transaction():
+            for manifest in manifests:
+                if not manifest.object_key.startswith(prefix):
+                    raise ValueError("worker artifact object_key is outside its case")
+                data, mime_type = self.artifacts.get(manifest.object_key)
+                if len(data) != manifest.size_bytes:
+                    raise ValueError("worker artifact size does not match manifest")
+                if hashlib.sha256(data).hexdigest() != manifest.sha256:
+                    raise ValueError("worker artifact checksum does not match manifest")
+                if manifest.mime_type is not None and mime_type != manifest.mime_type:
+                    raise ValueError("worker artifact MIME type does not match manifest")
+                record_id = self.ids.new(
+                    "artifact", case_id, task_id, manifest.object_key, manifest.sha256
+                )
+                self._record_case_data(
+                    case_id,
+                    CaseDataKind.ARTIFACT,
+                    record_id,
+                    manifest.model_dump(mode="json"),
+                )
+                self._enqueue_retention_resource(
+                    RetentionResource(
+                        resource_id=self.ids.new(
+                            "resource", case_id, manifest.object_key
+                        ),
+                        case_id=case_id,
+                        kind=manifest.kind.upper(),
+                        retention_class=manifest.policy_class(),
+                        artifact_ref=ArtifactRef(object_key=manifest.object_key),
+                    )
+                )
 
     def _enqueue_retention_resource(self, resource: RetentionResource) -> None:
         self._enqueue(
@@ -284,7 +326,17 @@ class CaseManager:
             last_known_zone=body.last_known.zone_id,
             last_known_time=body.last_known.time,
         )
-        state = self.routing.initialise(case_info, graph, params)
+        state = self.routing.initialise(
+            case_info,
+            graph,
+            params,
+            Anchors(
+                last_known_camera=body.last_known.camera_id,
+                last_known_zone=body.last_known.zone_id,
+                last_known_time=body.last_known.time,
+            ),
+            now,
+        )
         case = CaseRecord(
             request=body,
             params_version=params.version,
@@ -325,7 +377,7 @@ class CaseManager:
                         ),
                         case_id=body.case_id,
                         kind="REFERENCE_IMAGE",
-                        retention_class=RetentionClass.EPHEMERAL,
+                        retention_class=RetentionClass.CASE_RESULT,
                         artifact_ref=body.reference_image_ref,
                     )
                 )
@@ -382,7 +434,7 @@ class CaseManager:
                             ),
                             case_id=case_id,
                             kind="TRACKLET_CROP",
-                            retention_class=RetentionClass.EPHEMERAL,
+                            retention_class=RetentionClass.CASE_RESULT,
                             artifact_ref=self._artifact_ref_from_path(path),
                         )
                     )
@@ -397,7 +449,7 @@ class CaseManager:
                             ),
                             case_id=case_id,
                             kind="TRACKLET_EMBEDDING",
-                            retention_class=RetentionClass.EPHEMERAL,
+                            retention_class=RetentionClass.CASE_RESULT,
                             artifact_ref=self._artifact_ref_from_path(
                                 tracklet.embedding_path
                             ),
@@ -444,14 +496,19 @@ class CaseManager:
             )
             svg_bytes = rendered.svg.encode("utf-8")
             self.artifacts.put(key, svg_bytes, rendered.mime_type)
+            manifest = ArtifactManifest(
+                object_key=key,
+                kind="route_svg",
+                size_bytes=len(svg_bytes),
+                sha256=hashlib.sha256(svg_bytes).hexdigest(),
+                created_at=now,
+                retention_class="case_14d",
+                mime_type=rendered.mime_type,
+            )
             route_artifacts.append(
                 {
                     "artifact_id": self.ids.new("artifact", key),
-                    "object_key": key,
-                    "kind": "ROUTE_SVG",
-                    "mime_type": rendered.mime_type,
-                    "size": len(svg_bytes),
-                    "checksum": hashlib.sha256(svg_bytes).hexdigest(),
+                    "manifest": manifest.model_dump(mode="json"),
                     "floor_id": rendered.floor_id,
                     "width": rendered.width,
                     "height": rendered.height,
@@ -501,6 +558,7 @@ class CaseManager:
         automatic_retention_command: RetentionCommand | None = None
         if step.done and case.lifecycle == CaseLifecycle.SEARCHING:
             case.lifecycle = CaseLifecycle.CLOSED
+            case.live_feed = None
             case.closed_at = now
             case.retention_due_at = now + timedelta(seconds=self.retention_ttl_s)
             case.next_heartbeat_at = None
@@ -653,7 +711,11 @@ class CaseManager:
                     case_id=case.request.case_id,
                     target_gallery_ref=case.gallery_ref,
                     probe=probe,
-                    deadline=now + timedelta(seconds=self.job_deadline_s),
+                    deadline=(
+                        None
+                        if probe.t_to is None
+                        else now + timedelta(seconds=self.job_deadline_s)
+                    ),
                 ),
                 created_at=now,
                 updated_at=now,
@@ -953,7 +1015,11 @@ class CaseManager:
                     case_id=update.case_id,
                     kind="LIVE_BUFFER",
                     retention_class=RetentionClass.EPHEMERAL,
-                    artifact_ref=ArtifactRef(uri=f"live:{update.stream_ref}"),
+                    artifact_ref=(
+                        ArtifactRef(object_key=update.stream_ref)
+                        if not urlparse(update.stream_ref).scheme
+                        else ArtifactRef(uri=update.stream_ref)
+                    ),
                     expires_at=update.expires_at,
                 )
             )
@@ -1038,6 +1104,25 @@ class CaseManager:
                 f"decision:{body.decision_id}",
                 anchors=anchors,
             )
+            if body.decision == "CONFIRM":
+                gallery_command = TargetGalleryCommand(
+                    command_id=self.ids.new(
+                        "gallery_cmd", case_id, "confirmed", body.tracklet_id
+                    ),
+                    case_id=case_id,
+                    source="confirmed_tracklet",
+                    tracklet_id=body.tracklet_id,
+                    model_version=(
+                        case.gallery_model_version
+                        or "osnet_ain_x1_0_msmt17"
+                    ),
+                )
+                self._enqueue(
+                    case_id,
+                    OutboxTopic.TARGET_GALLERY,
+                    f"target-gallery:{gallery_command.command_id}",
+                    {"command": gallery_command.model_dump(mode="json")},
+                )
             clip_id = case.candidate_to_clip.get(body.candidate_id)
             if clip_id is not None:
                 command = ClipStateCommand(
@@ -1316,30 +1401,6 @@ class CaseManager:
             scheduled += 1
         return scheduled
 
-    def _redact_closed_case(self, case: CaseRecord, *, now: datetime) -> None:
-        """Remove search-only material after CLOSE_CASE succeeds."""
-
-        case.request.reference_image_ref = ArtifactRef(object_key="__deleted__")
-        case.routing_state = None
-        case.gallery_ref = None
-        case.tracklets = {}
-        case.candidates = {}
-        case.pending_confirm_tracklet_ids = []
-        case.pending_reject_tracklet_ids = []
-        case.live_feed = None
-        case.clips = {
-            clip_id: clip
-            for clip_id, clip in case.clips.items()
-            if clip.state == ClipLifecycleState.CONFIRMED
-        }
-        confirmed_ids = set(case.clips)
-        case.candidate_to_clip = {
-            candidate_id: clip_id
-            for candidate_id, clip_id in case.candidate_to_clip.items()
-            if clip_id in confirmed_ids
-        }
-        case.updated_at = now
-
     def _redact_deleted_case(self, case: CaseRecord, *, now: datetime) -> None:
         """Remove case content; append-only audit events remain untouched."""
 
@@ -1354,6 +1415,7 @@ class CaseManager:
         case.routing_state = None
         case.latest_route = None
         case.gallery_ref = None
+        case.gallery_model_version = None
         case.tracklets = {}
         case.candidates = {}
         case.clips = {}
@@ -1384,10 +1446,16 @@ class CaseManager:
                 gallery.command_id != command.command_id
                 or gallery.case_id != command.case_id
                 or gallery.case_id != message.case_id
+                or gallery.model_version != command.model_version
             ):
                 raise ValueError("target-gallery result does not match its command")
             case = self.repository.get(message.case_id)
-            if case.lifecycle != CaseLifecycle.PREPARING:
+            allowed = (
+                {CaseLifecycle.PREPARING}
+                if command.source == "reference"
+                else {CaseLifecycle.SEARCHING, CaseLifecycle.CLOSED}
+            )
+            if case.lifecycle not in allowed:
                 self._event(
                     message.case_id,
                     "TARGET_GALLERY_IGNORED",
@@ -1396,25 +1464,32 @@ class CaseManager:
                 return
             expected = case.revision
             case.gallery_ref = gallery.gallery_ref
-            case.lifecycle = CaseLifecycle.SEARCHING
+            case.gallery_model_version = gallery.model_version
+            if command.source == "reference":
+                case.lifecycle = CaseLifecycle.SEARCHING
             case.updated_at = self.clock.now()
             self.repository.save(case, expected)
-            self._enqueue_retention_resource(
-                RetentionResource(
-                    resource_id=self.ids.new(
-                        "resource", message.case_id, "target-gallery"
-                    ),
-                    case_id=message.case_id,
-                    kind="TARGET_GALLERY",
-                    retention_class=RetentionClass.EPHEMERAL,
-                    artifact_ref=ArtifactRef(uri=f"gallery:{gallery.gallery_ref}"),
+            if gallery.gallery_ref.startswith(f"cases/{message.case_id}/"):
+                self._enqueue_retention_resource(
+                    RetentionResource(
+                        resource_id=self.ids.new(
+                            "resource",
+                            message.case_id,
+                            "target-gallery",
+                            gallery.gallery_ref,
+                        ),
+                        case_id=message.case_id,
+                        kind="TARGET_GALLERY",
+                        retention_class=RetentionClass.CASE_RESULT,
+                        artifact_ref=ArtifactRef(object_key=gallery.gallery_ref),
+                    )
                 )
-            )
-            self._enqueue_routing(
-                message.case_id,
-                "GALLERY_READY",
-                f"gallery-ready:{gallery.command_id}",
-            )
+            if command.source == "reference":
+                self._enqueue_routing(
+                    message.case_id,
+                    "GALLERY_READY",
+                    f"gallery-ready:{gallery.command_id}",
+                )
             self._event(
                 message.case_id,
                 "TARGET_GALLERY_READY",
@@ -1688,12 +1763,6 @@ class CaseManager:
                     else "CASE_TTL_DELETED"
                 )
             elif retention.action == "CLOSE_CASE":
-                self._redact_closed_case(case, now=now)
-                self.repository.save(case, expected)
-                self.repository.purge_search_content(
-                    message.case_id,
-                    preserve_outbox_message_id=message.message_id,
-                )
                 event_type = "RETENTION_APPLIED"
             else:
                 event_type = "RETENTION_APPLIED"

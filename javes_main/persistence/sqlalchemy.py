@@ -672,6 +672,7 @@ class SqlAlchemyRepository:
         now: datetime,
         lease_expires_at: datetime,
         limit: int,
+        topics: set[str] | None = None,
     ) -> list[OutboxRecord]:
         if limit < 1:
             return []
@@ -684,6 +685,10 @@ class SqlAlchemyRepository:
             .order_by(OutboxRow.available_at, OutboxRow.created_at, OutboxRow.message_id)
             .limit(limit)
         )
+        if topics is not None:
+            if not topics:
+                return []
+            candidates = candidates.where(OutboxRow.topic.in_(sorted(topics)))
         if self.engine.dialect.name == "postgresql":
             candidates = candidates.with_for_update(skip_locked=True)
         claimed: list[OutboxRecord] = []

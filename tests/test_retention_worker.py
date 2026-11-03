@@ -68,7 +68,7 @@ def worker(
     return RetentionWorker(repository, router, clock=lambda: BASE)
 
 
-def test_close_delete_policy_physically_removes_bytes_and_keeps_audit(tmp_path):
+def test_close_retains_until_delete_and_keeps_audit(tmp_path):
     store = InMemoryArtifactStore()
     repo = SQLiteRetentionRepository(tmp_path / "retention.db")
     retention = worker(repo, store)
@@ -91,18 +91,22 @@ def test_close_delete_policy_physically_removes_bytes_and_keeps_audit(tmp_path):
         retention.register(item)
 
     closed = retention.process(command("close-1", "CLOSE_CASE"))
-    assert closed.deleted_resource_ids == ["crop", "hold"]
-    assert closed.preserved_resource_ids == ["audit", "confirmed", "legal", "route"]
-    assert store.keys() == ["clip.mp4", "legal.mp4", "route.svg"]
+    assert closed.deleted_resource_ids == []
+    assert closed.preserved_resource_ids == [
+        "audit", "confirmed", "crop", "hold", "legal", "route"
+    ]
+    assert store.keys() == [
+        "clip.mp4", "crop.jpg", "hold.mp4", "legal.mp4", "route.svg"
+    ]
 
     deleted = retention.process(command("delete-1", "DELETE_CASE", at=BASE + timedelta(seconds=1)))
-    assert deleted.deleted_resource_ids == ["confirmed", "route"]
+    assert deleted.deleted_resource_ids == ["confirmed", "crop", "hold", "route"]
     assert deleted.preserved_resource_ids == ["audit", "legal"]
     assert store.keys() == ["legal.mp4"]
     tombstone = retention.get_tombstone(deleted.audit_tombstone_id)
     assert tombstone is not None
     assert tombstone["policy_version"] == "retention-policy.v1"
-    assert tombstone["deleted_count"] == 2
+    assert tombstone["deleted_count"] == 4
     stored_command = repo.get_command("delete-1")
     assert stored_command is not None
     assert stored_command.command.actor_id == "operator-1"
@@ -168,7 +172,7 @@ def test_already_missing_object_is_a_proven_idempotent_delete(tmp_path):
     store = InMemoryArtifactStore()
     retention = worker(SQLiteRetentionRepository(tmp_path / "retention.db"), store)
     retention.register(resource("missing", RetentionClass.EPHEMERAL, key="absent"))
-    result = retention.process(command("close-missing", "CLOSE_CASE"))
+    result = retention.process(command("ttl-missing", "TTL_EXPIRED"))
     assert result.deleted_resource_ids == ["missing"]
     stored = retention.get_resource("missing")
     assert stored is not None
@@ -220,7 +224,7 @@ def test_partial_failure_is_durable_and_resumes_after_restart(tmp_path):
     first.register(resource("a", RetentionClass.EPHEMERAL, key="a"))
     first.register(resource("b", RetentionClass.EPHEMERAL, key="b"))
     with pytest.raises(RetentionDeletionError, match="resource 'b'"):
-        first.process(command("close-1", "CLOSE_CASE"))
+        first.process(command("ttl-1", "TTL_EXPIRED"))
     assert first.get_resource("a").state == "DELETED"  # type: ignore[union-attr]
     assert first.get_resource("b").state == "DELETE_FAILED"  # type: ignore[union-attr]
     repo.close()
@@ -233,10 +237,10 @@ def test_partial_failure_is_durable_and_resumes_after_restart(tmp_path):
         ),
         clock=lambda: BASE + timedelta(seconds=1),
     )
-    result = restarted.process(command("close-1", "CLOSE_CASE"))
+    result = restarted.process(command("ttl-1", "TTL_EXPIRED"))
     assert result.deleted_resource_ids == ["a", "b"]
     assert calls == ["a", "b", "b"]
-    assert restarted.process(command("close-1", "CLOSE_CASE")) == result
+    assert restarted.process(command("ttl-1", "TTL_EXPIRED")) == result
 
 
 def test_unknown_storage_scheme_fails_closed_until_backend_is_attached(tmp_path):
@@ -251,14 +255,14 @@ def test_unknown_storage_scheme_fails_closed_until_backend_is_attached(tmp_path)
         )
     )
     with pytest.raises(RetentionDeletionError, match="uri:gallery"):
-        retention.process(command("close-gallery", "CLOSE_CASE"))
+        retention.process(command("ttl-gallery", "TTL_EXPIRED"))
     assert retention.get_resource("gallery").state == "DELETE_FAILED"  # type: ignore[union-attr]
 
     router.add_backend(
         "uri:gallery",
         CallbackDeletionBackend(lambda _: True, name="perception-gallery"),
     )
-    result = retention.process(command("close-gallery", "CLOSE_CASE"))
+    result = retention.process(command("ttl-gallery", "TTL_EXPIRED"))
     assert result.deleted_resource_ids == ["gallery"]
 
 
@@ -293,7 +297,7 @@ def test_duplicate_command_across_two_worker_instances_is_safe(tmp_path):
     first = worker(SQLiteRetentionRepository(database), store)
     second = worker(SQLiteRetentionRepository(database), store)
     first.register(resource("shared", RetentionClass.EPHEMERAL, key="shared"))
-    close = command("cross-process-close", "CLOSE_CASE")
+    close = command("cross-process-ttl", "TTL_EXPIRED")
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda item: item.process(close), [first, second]))
     assert results[0] == results[1]
@@ -353,7 +357,7 @@ def test_local_factory_deletes_live_buffer_and_artifact_files(tmp_path):
             artifact_ref=ArtifactRef(uri="live:case/camera/frame"),
         )
     )
-    result = retention.process(command("close-local", "CLOSE_CASE"))
+    result = retention.process(command("ttl-local", "TTL_EXPIRED"))
     assert result.deleted_resource_ids == ["crop", "live"]
     assert artifacts.keys() == []
     with pytest.raises(KeyError):
@@ -427,20 +431,20 @@ def test_real_retention_plugs_into_main_and_deletes_route_bytes(tmp_path):
     )
     app.outbox_dispatcher.drain()
     closed = app.repository.get("case-1")
-    assert closed.tracklets == {}
-    assert closed.candidates == {}
+    assert closed.tracklets
+    assert closed.candidates
     assert list(closed.clips.values())[0].state == "CONFIRMED"
     sanitized_jobs = app.repository.list_jobs("case-1")
     assert sanitized_jobs
     assert all(
-        job.payload.target_gallery_ref == "__deleted__"
-        and job.payload.probe.camera == "__deleted__"
+        job.payload.target_gallery_ref != "__deleted__"
+        and job.payload.probe.camera != "__deleted__"
         for job in sanitized_jobs
     )
     sanitized_results = app.repository.list_probe_results("case-1")
     assert sanitized_results
-    assert all(
-        not record.result.tracklets and not record.result.candidates
+    assert any(
+        record.result.tracklets or record.result.candidates
         for record in sanitized_results
     )
     temporary_kinds = {
@@ -451,7 +455,7 @@ def test_real_retention_plugs_into_main_and_deletes_route_bytes(tmp_path):
         "CANDIDATE",
     }
     assert all(
-        record.payload == {"redacted": True}
+        record.payload != {"redacted": True}
         for record in app.repository.list_case_data("case-1")
         if record.kind.value in temporary_kinds
     )
@@ -459,10 +463,11 @@ def test_real_retention_plugs_into_main_and_deletes_route_bytes(tmp_path):
         event.payload != {"redacted": True}
         for event in app.repository.list_events("case-1")
     )
-    assert len(gallery_deletes) == 1
-    assert gallery_deletes[0].startswith("gallery:")
+    # Legacy fake galleries have no bytes. Production Perception galleries use
+    # shared-store object_key manifests and never synthetic gallery: URIs.
+    assert gallery_deletes == []
     assert all(key in app.artifacts.keys() for key in latest_route_keys)
-    assert all(key not in app.artifacts.keys() for key in superseded_route_keys)
+    assert all(key in app.artifacts.keys() for key in superseded_route_keys)
 
     app.manager.command(
         "case-1",

@@ -95,6 +95,7 @@ class CaseRepository(Protocol):
         now: datetime,
         lease_expires_at: datetime,
         limit: int,
+        topics: set[str] | None = None,
     ) -> list[OutboxRecord]: ...
     def reclaim_expired_outbox(self, *, now: datetime) -> list[OutboxRecord]: ...
     def add_probe_result(self, record: ProbeResultRecord) -> bool: ...
@@ -148,7 +149,14 @@ class SiteConfigPort(Protocol):
 
 
 class RoutingPort(Protocol):
-    def initialise(self, case, graph: SiteGraph, params: RoutingParams) -> SearchState: ...
+    def initialise(
+        self,
+        case,
+        graph: SiteGraph,
+        params: RoutingParams,
+        anchors: Anchors,
+        now: datetime,
+    ) -> SearchState: ...
     def advance(
         self,
         state: SearchState,

@@ -291,6 +291,7 @@ class CaseRecord(DomainModel):
     routing_state: SearchState | None = None
     latest_route: StoredRoute | None = None
     gallery_ref: str | None = None
+    gallery_model_version: str | None = None
     pending_confirm_tracklet_ids: list[str] = Field(default_factory=list)
     pending_reject_tracklet_ids: list[str] = Field(default_factory=list)
     tracklets: dict[str, dict[str, Any]] = Field(default_factory=dict)

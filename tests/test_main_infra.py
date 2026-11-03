@@ -324,13 +324,13 @@ def test_reject_before_clip_cut_finishes_is_applied_after_hold_arrives():
     app.routing_dispatcher.drain()
     app.outbox_dispatcher.drain()
     released = app.manager.get_view("case-1")
-    # Routing finished the search, so CLOSE_CASE cleanup removes the released
-    # temporary clip immediately after the delayed cut/state sequence settles.
+    # The released clip is removed from the active Dashboard view after the
+    # delayed cut/state sequence settles; its retention bytes remain until TTL.
     assert released.clips == []
     assert app.repository.get("case-1").pending_reject_tracklet_ids == []
 
 
-def test_review_hold_is_removed_when_case_closes():
+def test_review_hold_is_retained_until_case_ttl():
     app = system()
     app.manager.create_case(create_body(), idempotency_key="post-close-review-create")
     app.scheduler.run_case_once("case-1")
@@ -356,8 +356,7 @@ def test_review_hold_is_removed_when_case_closes():
     )
     app.routing_dispatcher.drain()
     app.outbox_dispatcher.drain()
-    assert app.retention_worker.resources[retention_resource_id].deleted is True
-    assert app.manager.get_view("case-1").clips == []
+    assert app.retention_worker.resources[retention_resource_id].deleted is False
 
 
 def test_repository_optimistic_revision_check():
@@ -519,7 +518,7 @@ def test_sql_process_restart_preserves_case_auth_audit_and_svg(tmp_path):
     )
 
 
-def test_sql_close_redacts_search_payloads_but_keeps_operational_metrics(tmp_path):
+def test_sql_close_retains_search_payloads_and_operational_metrics(tmp_path):
     repository = SqlAlchemyRepository.from_url(
         f"sqlite:///{tmp_path / 'close-redaction.sqlite'}"
     )
@@ -564,12 +563,12 @@ def test_sql_close_redacts_search_payloads_but_keeps_operational_metrics(tmp_pat
     app.outbox_dispatcher.drain()
 
     assert all(
-        job.payload.target_gallery_ref == "__deleted__"
-        and job.payload.probe.camera == "__deleted__"
+        job.payload.target_gallery_ref != "__deleted__"
+        and job.payload.probe.camera != "__deleted__"
         for job in repository.list_jobs("case-1")
     )
-    assert all(
-        not record.result.tracklets and not record.result.candidates
+    assert any(
+        record.result.tracklets or record.result.candidates
         for record in repository.list_probe_results("case-1")
     )
     metrics = MetricsService(repository, app.clock).snapshot()

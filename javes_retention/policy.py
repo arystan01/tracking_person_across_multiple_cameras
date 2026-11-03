@@ -22,11 +22,6 @@ class RetentionPolicy:
     """
 
     version: str = "retention-policy.v1"
-    close_delete_classes: frozenset[RetentionClass] = field(
-        default_factory=lambda: frozenset(
-            {RetentionClass.EPHEMERAL, RetentionClass.REVIEW_HOLD}
-        )
-    )
     always_preserve_classes: frozenset[RetentionClass] = field(
         default_factory=lambda: frozenset({RetentionClass.AUDIT})
     )
@@ -41,7 +36,7 @@ class RetentionPolicy:
         if resource.retention_class in self.always_preserve_classes:
             return False
         if command.action == "CLOSE_CASE":
-            return resource.retention_class in self.close_delete_classes
+            return False
         if command.action == "DELETE_CASE":
             return True
         if command.action == "TTL_EXPIRED":
@@ -66,7 +61,7 @@ class RetentionPolicy:
             return False
         if deleted_or_expired:
             return True
-        return closed and resource.retention_class in self.close_delete_classes
+        return False
 
     @staticmethod
     def allows_class_transition(
