@@ -97,12 +97,12 @@ Still open for a later contract revision:
   see `docs/perception.md`). On the NVIDIA 12-camera warehouse strangers have
   median cosine 0.64 vs 0.46 on Market, so the calibration must be fitted per
   site; ranking is still correct. `p_det` is not measured yet.
-- **Gallery model_version**: Case Manager sends `TargetGalleryCommand` with the
-  default `model_version="fake-reid-v1"`; the worker echoes it because the
-  acceptance check requires equality. Case Manager should send
-  `osnet_ain_x1_0_msmt17`.
-- **OPEN probes**: every update re-processes `[t_from, now]` so tracklet ids stay
-  stable. Fine for short live windows, expensive for long ones; needs a per
-  camera/chunk cache. LiveFeed (contract 14) is not produced yet.
-- **Video source**: `LocalVideoArchive` reads mp4 files from `perception.yaml`
-  (camera -> file + UTC start). The real CCTV archive adapter is still open.
+- **Gallery model_version (resolved)**: Main uses
+  `osnet_ain_x1_0_msmt17` by default and persists the actual version returned
+  by Perception for confirmed-tracklet gallery updates.
+- **OPEN probes (resolved for integration)**: the worker persists an exact
+  processed-until checkpoint and resumes only new archive time after restart;
+  LiveFeed publishes the current crop/object key plus bbox metadata.
+- **Video source**: `HttpVideoArchive` implements the versioned read-only
+  segment contract. The deployment owner must still configure the concrete
+  CCTV endpoint/credentials and confirm its source URI semantics.
