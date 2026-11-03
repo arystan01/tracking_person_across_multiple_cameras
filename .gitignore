@@ -24,6 +24,19 @@ artifacts/
 deliverables/
 .~lock.*#
 
+# Local project instructions, working plans, and generated review material
+/AGENTS.md
+/QUESTIONS.md
+/PROPOSALS.md
+/docs/roadmap.md
+/docs/reference/round2.md
+/JAVES-AI Architecture.md
+/DocsPresentations/Reports/
+/bench/
+/docs/archive/
+/docs/reference/team-comments/
+/docs/demo_search.mp4
+
 # Editors and operating systems
 .idea/
 .vscode/

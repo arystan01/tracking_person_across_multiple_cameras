@@ -99,8 +99,9 @@ python -m javes_perception.eval_reid --data tmp/datasets/Market-1501-v15.09.15 \
 
 ## Проверка на складе NVIDIA (несколько камер)
 
-Демо-видео: [`demo_search.mp4`](demo_search.mp4). Фото цели берётся с одной
-камеры, Perception находит этого человека на всех четырёх (зелёная рамка).
+Локальное demo-видео генерируется следующей командой и не хранится в Git.
+Фото цели берётся с одной камеры, Perception находит этого человека на всех
+четырёх (зелёная рамка).
 
 ```bash
 python -m javes_perception.demo_video --query-camera Warehouse_Synthetic_Cam002 --query-time 20

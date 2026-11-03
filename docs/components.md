@@ -533,7 +533,6 @@ live expiry, keyboard/accessibility, CSP/XSS, slow/offline/API error states.
 8. После observation window зафиксировать contract v1 либо выпустить новую
    совместимую version.
 
-Готовность конкретного компонента определяется checklist в
-[`roadmap.md`](roadmap.md), а не фактом успешного
-ответа на один happy-path запрос.
+Готовность конкретного компонента определяется его contract и acceptance
+checklist выше, а не фактом успешного ответа на один happy-path запрос.
 

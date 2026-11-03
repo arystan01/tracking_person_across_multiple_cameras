@@ -34,7 +34,6 @@ Archive не входит в JAVES-AI: его read-only ссылки потре�
    процессы, миграции, секреты, выпуск и откат.
 6. [`testing.md`](testing.md) — тестовая пирамида,
    покрытие требований и contract-acceptance procedure.
-7. [`roadmap.md`](roadmap.md) — путь до полного продукта.
 
 ## Где что находится
 
@@ -54,15 +53,12 @@ Archive не входит в JAVES-AI: его read-only ссылки потре�
 | `javes_fakes/` | legacy contract doubles только для тестов |
 | `tests/` | unit, integration, API, persistence и contract tests |
 | `examples/` | канонические JSON/YAML примеры |
-| `bench/` | multi-seed benchmark и честный анализ результатов |
 | `docs/architecture.md` | фактическая архитектура всего реализованного кода |
 | `docs/components.md` | устройство и I/O оставшихся real components |
 | `docs/contracts.md` | краткие межкомпонентные wire-контракты |
-| `docs/testing.md` | текущие и будущие acceptance tests |
+| `docs/testing.md` | текущие acceptance tests |
 | `docs/deployment.md` | production deployment и Site Config publishing |
-| `docs/roadmap.md` | product roadmap и Definition of Done |
-| `docs/reference/` | review ROUND2 и исходные комментарии команды |
-| `docs/archive/` | завершённые планы и старые checklists; не текущая спецификация |
+| `docs/reference/` | дополнительные действующие handoff и verification документы |
 
 ## Нормативность документов
 
@@ -71,15 +67,12 @@ Archive не входит в JAVES-AI: его read-only ссылки потре�
 1. [`JAVES-AI.pdf`](../JAVES-AI.pdf);
 2. опубликованные модели `javes_contracts` и их JSON Schema;
 3. `architecture.md`, `contracts.md`, `components.md`;
-4. [`JAVES-AI Architecture.md`](../JAVES-AI%20Architecture.md) — исходный
-   технический замысел для деталей, отсутствующих в PDF;
-5. остальные исторические планы и заметки.
+4. остальные действующие документы из этого каталога.
 
 Новый публичный контракт не добавляется только через Markdown: сначала меняется
 версионированная модель в `javes_contracts`, генерируется Schema, добавляются
 acceptance-тесты, затем обновляются документы. Общие контракты не меняются
-односторонне: нерешённое решение сначала фиксируется в
-[`QUESTIONS.md`](../QUESTIONS.md) или [`PROPOSALS.md`](../PROPOSALS.md).
+односторонне и требуют согласования владельцев компонентов.
 
 ## Специализированные документы
 
@@ -92,11 +85,6 @@ acceptance-тесты, затем обновляются документы. О�
   модель аккаунтов без signup.
 - [`reference/fakes.md`](reference/fakes.md) — свойства test doubles.
 - [`reference/demo.md`](reference/demo.md) — сценарии Routing demo.
-- [`reference/round2.md`](reference/round2.md) — review и идеи второго этапа.
-- [`archive/`](archive/) — завершённые планы, сохранённые только для истории.
-- [`../QUESTIONS.md`](../QUESTIONS.md) и [`../PROPOSALS.md`](../PROPOSALS.md) —
-  открытые межкомандные решения.
-- [`../bench/RESULTS.md`](../bench/RESULTS.md) — benchmark и ограничения.
 
 ## Машиночитаемые источники
 

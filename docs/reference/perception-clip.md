@@ -517,6 +517,5 @@ Until then, Main Infra should use fake adapters that emit exactly these payloads
 Worker-specific fields belong behind adapters rather than leaking into Routing,
 CaseView, or database consumers.
 
-The checked-in implementations and their limitations are documented in
-[`fakes.md`](fakes.md); the historical infrastructure build order is in
-[`../archive/main-infra-controls-plan.md`](../archive/main-infra-controls-plan.md).
+The checked-in test implementations and their limitations are documented in
+[`fakes.md`](fakes.md).

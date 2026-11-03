@@ -24,8 +24,6 @@ Run `python -m pytest -q` from the repository root.
 
 The SVG test parses every output as XML, checks byte determinism, multiple floors, exact map paths, vertical markers, raster data URIs, abstract fallback, and absence of scripts/external image links.
 
-Production-hardening items from `../reference/round2.md`—overlapping-camera groups, replay-based undo, manual witnesses, richer elevator semantics, empirical calibration, security/retention review, and annotated-data shadow runs—remain explicitly outside this PDF-MVP.
-
 ## Main Infra and Controls verification
 
 | Area | Status | Evidence |
