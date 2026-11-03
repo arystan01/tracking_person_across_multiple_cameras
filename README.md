@@ -1,23 +1,249 @@
 # JAVES-AI
 
-The repository contains the Routing worker, Main Infra/Controls integration MVP,
-shared worker contracts/fakes and the durable Retention core. Routing turns
-Perception tracklets into competing routes and standalone SVG maps; Dashboard
-only displays those SVGs.
+JAVES-AI searches for a missing person across CCTV footage. Main Infra owns
+case state and audit; Perception produces tracklets; Routing decides which
+cameras and time windows are physically plausible and produces route SVGs.
+All production component boundaries are versioned HTTP APIs.
 
-The repository also contains an integration MVP of Main Infra/Controls and a
-durable Retention worker core. Perception has a first real worker
-(`javes_perception/`, YOLO26 + ByteTrack + OSNet, see below). Clip, Site Config
-and browser Dashboard are **not** implemented here yet; deterministic fakes
-exercise their current contracts. The CCTV Video Archive is an external read-only dependency
-used by Perception/Clip, not a JAVES-AI component owned or deleted by Retention.
-JAVES-AI uses a private filesystem-backed `FileArtifactStore`; no separate cloud
-storage is planned. Retention deletes final case content 14 calendar days after
-close, while complete append-only security audit events are kept permanently.
-Start with [`docs/README.md`](docs/README.md) for the repository map,
-source-of-truth order and the complete documentation index.
+## Dashboard owner: connect and test
 
-The core is pure and deterministic:
+The Dashboard talks only to the Main/Controls API. It must never read SQLite,
+the artifact directory, CCTV Archive, Perception, or Routing directly.
+
+1. Authenticate with `POST /v1/auth/login`. There is no public signup.
+2. Create and inspect cases with `/v1/cases` and `/v1/cases/{case_id}/view`.
+3. Submit operator decisions and close/export/delete commands with an
+   `idempotency-key` header.
+4. Render `rendered_route_maps[].url` as an image. Routing owns the route
+   geometry and SVG; Dashboard only selects a floor and displays it.
+5. Display `mode`, `estimate`, alternatives, candidates, clips, progress,
+   unobserved windows, and errors exactly as returned by Controls.
+6. Fetch the authorised current JPEG from `/v1/cases/{case_id}/live`; do not
+   expose the internal `object_key` to the browser.
+
+Local API verification:
+
+```bash
+python -m pip install -e '.[test,infra]'
+python -m pytest -q tests/test_controls_api.py tests/test_api_first_transport.py
+```
+
+Example login and case read:
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"root","password":"replace-me"}'
+
+curl -sS http://127.0.0.1:8080/v1/cases/CASE_ID/view \
+  -H "authorization: Bearer $ACCESS_TOKEN"
+```
+
+The browser must treat returned SVG as an image resource, not inject it as
+application HTML. Loading, 401/403, conflict, stale live frame, unavailable
+Clip, retry, and offline states are part of the Dashboard acceptance suite.
+
+## Clip worker owner: connect and test
+
+Clip is a pull worker. It receives no direct Python calls from Main and must
+not import `javes_main` internals.
+
+1. Claim tasks with
+   `POST /internal/v1/workers/clip/tasks/claim` using the Clip service bearer
+   token and a stable `worker_id`.
+2. Process `CLIP_CUT`, `CLIP_STATE`, and `CLIP_EXPORT` payloads using the public
+   models in `javes_contracts`.
+3. Read source footage from the external read-only CCTV Archive API. Never ask
+   Main or Retention to delete an `archive_id`.
+4. Write output atomically below `cases/{case_id}/...` in the shared private
+   artifact filesystem.
+5. Return a `ClipRecord` or `ExportClipsResult` plus an
+   `artifact-manifest.v1` containing the exact `object_key`, byte size, SHA-256,
+   MIME type, creation time, and retention class.
+6. Heartbeat long tasks before the lease expires. Treat delivery as
+   at-least-once and persist the task fingerprint/result before callback.
+7. POST the result to
+   `/internal/v1/workers/clip/tasks/{task_id}/result`; report retryable or
+   terminal failure to the sibling `/failure` endpoint.
+
+Until the media implementation is installed, `javes-clip-worker` explicitly
+marks tasks `CLIP_WORKER_UNAVAILABLE`; it never returns successful fake clips.
+
+Contract verification:
+
+```bash
+python -m pytest -q tests/test_adapter_acceptance.py \
+  tests/test_api_first_transport.py
+```
+
+## Runtime topology
+
+```text
+Dashboard ──HTTP──> Main/Controls API ──HTTP──> Site Config API
+                           │              └──HTTP──> Routing API
+                           │                              │
+                           │                              └──HTTP──> Site Config API
+                           │
+                           ├──pull/lease HTTP──> Perception worker ──read-only──> CCTV Archive
+                           ├──pull/lease HTTP──> Clip worker       ──read-only──> CCTV Archive
+                           └──pull/lease HTTP──> Retention worker
+
+Main, Perception, Clip and Retention share one private artifact filesystem.
+```
+
+Main owns case state, durable Perception jobs, transactional outbox messages,
+Routing triggers, optimistic case revisions, idempotency records, and permanent
+append-only security audit. Routing remains pure below its HTTP shell. Site
+Config exposes only exact immutable versions; `latest` is not an API concept.
+
+There is no cloud object store. Binary component results are exchanged as
+`object_key` manifests, not uploaded in API bodies. Case-owned content is
+retained for 14 calendar days after close; complete security audit is kept
+indefinitely. CCTV Archive is external and read-only.
+
+## Internal APIs
+
+Main worker transport:
+
+```text
+POST /internal/v1/workers/{perception|clip|retention}/tasks/claim
+POST /internal/v1/workers/{component}/tasks/{task_id}/heartbeat
+POST /internal/v1/workers/{component}/tasks/{task_id}/result
+POST /internal/v1/workers/{component}/tasks/{task_id}/failure
+POST /internal/v1/cases/{case_id}/live
+```
+
+Routing:
+
+```text
+POST /internal/v1/routing/init
+POST /internal/v1/routing/step
+```
+
+Site Config:
+
+```text
+GET /internal/v1/sites/{site_id}/versions/{version}
+GET /internal/v1/sites/{site_id}/versions/{version}/assets/{asset_id}
+GET /internal/v1/routing-params/{version}
+```
+
+Every worker task has a signed, attempt-scoped lease token. A heartbeat returns
+a replacement token and invalidates the old one. Duplicate callbacks with the
+same content are accepted; the same task ID with different content is rejected.
+Each component has its own bearer token.
+
+## Install and tests
+
+Python 3.11+:
+
+```bash
+python -m pip install -e '.[test,infra]'
+python -m pytest -q -m 'not real_cv'
+```
+
+The normal suite uses deterministic doubles only where isolation is the point.
+The opt-in real-CV smoke test uses the tracked videos and actual YOLO/OSNet
+weights—no fake detector or embedder:
+
+```bash
+python -m pip install -e '.[test,infra,perception]'
+JAVES_RUN_REAL_CV=1 python -m pytest -q tests/test_perception_real_smoke.py
+```
+
+Run the inspectable API-first E2E (real NVIDIA video -> real Perception ->
+Main worker API -> Routing API -> Controls SVG) with:
+
+```bash
+JAVES_RUN_REAL_CV=1 python -m pytest -q -s tests/test_real_cv_e2e.py
+```
+
+Open `artifacts/real-cv-e2e/index.html` or
+`artifacts/real-cv-e2e/route.svg` afterwards. The standalone SVG embeds the
+tracked NVIDIA warehouse map. `case-view.json`, `probe-results.json`, and
+`report.json` are saved beside it; `LATEST.txt` points to the immutable run
+directory. Set `JAVES_REAL_CV_E2E_OUT` to publish these files elsewhere.
+
+CI keeps fast contract/unit tests and the real-CV job separate. The real-CV job
+is available through manual workflow dispatch because model execution is much
+heavier than the normal test suite.
+
+## Configuration and start order
+
+Site Config uses this filesystem layout:
+
+```text
+SITE_CONFIG_ROOT/
+  sites/{site_id}/{version}/site.yaml
+  sites/{site_id}/{version}/...map assets...
+  routing_params/{version}.yaml
+```
+
+Start the services in dependency order:
+
+```bash
+javes-site-config-api --root "$SITE_CONFIG_ROOT" --token "$SITE_TOKEN"
+javes-routing-api --site-config-url http://127.0.0.1:8082 \
+  --site-config-token "$SITE_TOKEN" --token "$ROUTING_TOKEN"
+
+export JAVES_DATABASE_URL=sqlite:///javes-main.sqlite
+export JAVES_ARTIFACT_ROOT=/srv/javes/artifacts
+export JAVES_SITE_CONFIG_URL=http://127.0.0.1:8082
+export JAVES_SITE_CONFIG_TOKEN="$SITE_TOKEN"
+export JAVES_ROUTING_URL=http://127.0.0.1:8081
+export JAVES_ROUTING_TOKEN="$ROUTING_TOKEN"
+export JAVES_ROUTING_PARAMS_VERSION=1
+export JAVES_PERCEPTION_WORKER_TOKEN="$PERCEPTION_TOKEN"
+export JAVES_CLIP_WORKER_TOKEN="$CLIP_TOKEN"
+export JAVES_RETENTION_WORKER_TOKEN="$RETENTION_TOKEN"
+export JAVES_WORKER_LEASE_SECRET="$LEASE_SECRET"
+
+javes-main-migrate --database-url "$JAVES_DATABASE_URL" upgrade
+javes-main-api
+javes-main-scheduler
+
+javes-perception-worker --main-url http://127.0.0.1:8080 \
+  --token "$PERCEPTION_TOKEN" --worker-id perception-1 \
+  --config perception.yaml --artifact-root "$JAVES_ARTIFACT_ROOT" \
+  --state-db perception-state.sqlite \
+  --archive-url "$CCTV_ARCHIVE_URL" --archive-token "$CCTV_ARCHIVE_TOKEN"
+
+javes-retention-worker --main-url http://127.0.0.1:8080 \
+  --token "$RETENTION_TOKEN" --worker-id retention-1 \
+  --artifact-root "$JAVES_ARTIFACT_ROOT" --state-db retention-state.sqlite
+
+javes-clip-worker --main-url http://127.0.0.1:8080 \
+  --token "$CLIP_TOKEN" --worker-id clip-unavailable-1
+```
+
+Run API and scheduler as separate processes against the same migrated database.
+Do not use `build_in_memory_system`, `javes_fakes`, or local Routing adapters in
+a production composition.
+
+## Perception
+
+`javes_perception` is the real YOLO26 + ByteTrack + OSNet-AIN implementation.
+The HTTP worker persists completed task fingerprints/results, target-gallery
+commands, and OPEN probe checkpoints in SQLite. After restart it re-delivers a
+stored result and resumes OPEN processing at the last processed timestamp
+instead of scanning from the original start.
+
+Confirmed tracklets are sent back as durable `GALLERY_BUILD` tasks. Gallery,
+crop, embedding and live JPEG files use stable case-scoped object keys and are
+registered with Retention through manifests. The configured model version is
+`osnet_ain_x1_0_msmt17`, not a fake placeholder.
+
+The standalone local diagnostic command remains available:
+
+```bash
+javes-perception-probe --config perception.yaml --reference target.jpg \
+  --camera cam_1 --from 2026-11-05T05:00:00Z \
+  --to 2026-11-05T05:00:10Z --out perception_out
+```
+
+## Routing ownership
+
+The algorithm under `routing/` remains deterministic and pure:
 
 ```python
 state = init_state(case, site_graph, params)
@@ -25,118 +251,22 @@ result = step(state, probe_results, site_graph, anchors, params, now)
 maps = render_route_maps(result, site_graph, floor_assets)
 ```
 
-`step()` and `render_route_maps()` do no file, DB, network, clock, GPU, or random I/O. Times must be timezone-aware and are normalized to UTC. `SearchState` is JSON-serializable and opaque outside Routing.
+The Routing HTTP shell fetches the exact pinned site/params versions, invokes
+the pure core, and returns `StepResult` plus SVG. Main stores the result only
+through its existing case-revision CAS. A stale response is rejected and the
+durable Routing trigger is retried.
 
-## Install and test
+## Repository map
 
-Python 3.11–3.13 is supported.
+- `javes_main/`: Controls API, IAM, cases, durable jobs/outbox/triggers and scheduler.
+- `javes_contracts/`: public business and HTTP transport contracts.
+- `javes_routing_api/`: stateless Routing service shell.
+- `javes_site_config/`: immutable filesystem-backed Site Config service.
+- `javes_perception/`: real CV worker and durable HTTP runtime.
+- `javes_retention/`: durable inventory, deletion journal and HTTP runtime.
+- `javes_clip/`: Clip transport boundary and explicit unavailable runner.
+- `routing/`: pure Routing algorithm, renderer and simulator.
+- `tests/`: unit, contract, HTTP, persistence, restart and integration tests.
 
-```bash
-python -m pip install -e '.[test,infra]'
-python -m pytest -q
-python -m routing.demo --scenario normal --out demo_out
-javes-main-demo
-javes-main-migrate --database-url sqlite:///javes-main.sqlite upgrade
-javes-main-bootstrap-root --database-url sqlite:///javes-main.sqlite --username root
-javes-contract-schemas --out schemas
-javes-retention-inspect retention.sqlite
-```
-
-Open `demo_out/index.html`. It switches between SVGs already generated by Routing; its JavaScript does not calculate route geometry.
-
-## Perception (YOLO26 + ByteTrack + OSNet)
-
-`javes_perception/` is the real Perception worker. It implements `PerceptionPort`
-(`update_gallery`, `execute`, `cancel`) and can replace `FakePerceptionAdapter` in
-`assemble_system(perception=PerceptionWorker.from_config("perception.yaml", artifacts))`.
-
-```bash
-python -m pip install -e '.[test,infra,perception]'
-# weights go to models/: yolo26n.pt (auto-downloaded by ultralytics) and
-# osnet_ain_x1_0_msmt17.pt (details: docs/perception.md):
-gdown "https://drive.google.com/uc?id=1SigwBE6mPdqiJMqhuIY4aqC7--5CsMal" -O models/osnet_ain_x1_0_msmt17.pt
-javes-perception-probe --config perception.yaml --reference target.jpg \
-  --camera cam_1 --from 2026-11-05T05:00:00Z --to 2026-11-05T05:00:50Z --out perception_out
-```
-
-`perception.yaml` maps each camera to a video file and its UTC start time. The
-probe writes `result.json`, `tracklets.json`, `candidates.json` and crops.
-
-## Worker cadence
-
-The Case Manager calls `step()`:
-
-1. after any terminal or streaming `ProbeResult`;
-2. every `heartbeat_s` with `probe_results=[]`;
-3. after an operator confirm/reject/close action.
-
-A pending probe is not reissued on heartbeat. `FAILED` and `TIMEOUT` are retried through `max_retries`; exhausted or unavailable windows appear in `estimate.unobserved_windows`. `DONE` with no target tracklet is evidence and contributes only for the covered arrival probability mass.
-
-OPEN probes serialize `t_to` as `"OPEN"`. Streaming updates keep a stable `tracklet_id`; `ProbeResult.stream_closed=true` explicitly ends the subscription.
-
-## Rendering ownership
-
-`render_route_maps(step_result, graph, floor_assets)` returns one self-contained `image/svg+xml` payload per floor. Raster plans are embedded as data URIs. The best route is solid where exact `map_path` geometry exists; approximate edges, alternative routes, vertical transitions, `LONG_GAP`, `UNKNOWN`, and `GATE_OVERRIDE` are dashed or marked. If no floor plan exists, Routing creates an abstract graph SVG.
-
-The Case Manager may store the SVG and expose a URL. The Dashboard only displays it, switches floors, and refreshes on `route_revision`.
-
-## Simulator and benchmark
-
-```bash
-python -m routing.demo --scenario late --seed 7 --out demo_out
-python -m routing.demo --scenario reentry --out demo_out
-python -m routing.demo --scenario outage --outage cam_2 --out demo_out
-python -m routing.demo --no-st
-python -m routing.sim.bench --scenario ring8_chord --variant clean --seeds 200 --out bench/results.csv
-python -m routing.sim.bench --scenario ring8_chord --variant mismatch --seeds 200 --out bench/mismatch.csv
-```
-
-The CSV reports found/not-found, rounds, smart camera-minutes, and the explicit batch camera-minute baseline for each seed. Simulator knobs are separate from production Routing parameters in `sim_params.yaml`.
-
-The checked-in 200-seed results and their honest failure analysis are in `bench/RESULTS.md`.
-
-## Configuration and contracts
-
-- [`docs/README.md`](docs/README.md): documentation and repository index.
-- [`docs/architecture.md`](docs/architecture.md): implemented
-  code, runtime flows, state machines and current limitations.
-- [`docs/components.md`](docs/components.md):
-  exact requirements for components still represented by fakes.
-- [`docs/deployment.md`](docs/deployment.md): production
-  topology, configuration, migrations, security, release and rollback.
-- [`docs/testing.md`](docs/testing.md): current tests and
-  reusable real-adapter acceptance matrices.
-- [`docs/roadmap.md`](docs/roadmap.md): staged path from
-  integration MVP to full product DoD.
-- `params.yaml`: every Routing tuning parameter.
-- `examples/`: canonical JSON payloads.
-- `QUESTIONS.md`: assumptions and unresolved shared-contract decisions.
-- `PROPOSALS.md`: shared changes that require team agreement.
-
-The canonical wire names are `camera_id`, `tracklet_id`, `t_start`, `t_end`, and `appearance_score`. Legacy Python names remain accepted as validation aliases, while serialization emits canonical names. Camera clock offsets are metadata only: Perception/ingestion applies them upstream and Routing never applies them again.
-
-The repository currently validates the complete internal flow against
-deterministic fake Perception, Clip, Site Config and Dashboard requests, plus a
-fake of the external read-only CCTV source. Retention additionally has durable
-SQLite inventory/command journals,
-physical local deletion, legal holds, retry/resume and deletion tombstones in
-`javes_retention/`. Product-owned Perception/gallery storage handlers must still
-be attached explicitly; external CCTV `archive_id` references are read-only.
-
-For infrastructure contract testing, run `python -m javes_fakes.demo` and
-`python -m pytest -q tests/test_integration_fakes.py`. These fakes perform no
-video, model, database, queue, retention, or ffmpeg work.
-
-The infrastructure-ready internal implementation lives in `javes_main/`. It
-includes a framework-independent Case Manager, replaceable ports, in-memory and
-SQLAlchemy repositories, Alembic migrations, durable job leases/outbox/Routing
-triggers, atomic artifact storage, internal IAM, a FastAPI Controls surface,
-audit/metrics, and restart/concurrency tests. `javes-main-demo` exercises login,
-case creation, fake Perception, Routing/SVG, review, Clip/export and
-Retention/delete through HTTP.
-
-There is no public account signup. The first ROOT account is created with
-`javes-main-bootstrap-root`; ROOT creates pre-authorised users through Main
-Infra. Dashboard submits login/password and renders only controls allowed by
-the authenticated role. MFA is deliberately deferred to a later security
-hardening phase rather than being simulated here.
+The legacy `javes_fakes` package is retained temporarily for existing unit
+fixtures. It is not used by `build_api_first_system` or any production command.
