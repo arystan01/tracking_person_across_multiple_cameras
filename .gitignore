@@ -20,6 +20,9 @@ venv/
 demo_out/
 schemas/
 artifacts/
+.presentation_work/
+deliverables/
+.~lock.*#
 
 # Editors and operating systems
 .idea/
