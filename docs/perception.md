@@ -5,9 +5,9 @@ Perception — «глаза» системы. Он получает пробу �
 где на кадре и насколько каждый похож на цель. Куда человек пошёл дальше, решает
 Routing; Perception про граф здания ничего не знает.
 
-Код: `javes_perception/`. Интерфейс — `PerceptionPort` из
-`javes_main/ports/interfaces.py` (`update_gallery`, `execute`, `cancel`), поэтому
-воркер подставляется вместо `FakePerceptionAdapter` без изменений в Case Manager.
+Код: `javes_perception/`. Production worker забирает `GALLERY_BUILD`, `PROBE`
+и `PERCEPTION_CANCEL` через Main HTTP pull/lease API. Локальный `PerceptionPort`
+сохранён только для core/unit tests.
 
 ## Конвейер
 
@@ -44,8 +44,9 @@ ProbeJob -> видео окна (5 кадров/с) -> YOLO26 (люди) -> Byte
   истёк deadline → `TIMEOUT`, битое видео или сбой модели → `FAILED`
   (`DECODE_FAILED`, `MODEL_FAILED`, `GALLERY_UNAVAILABLE`). Пустой `DONE` —
   нормальный ответ «никого похожего нет».
-- OPEN-проба (live): обрабатывается `[t_from, now]`, люди в кадре в конце окна
-  помечаются `open: true`; `cancel` закрывает поток (`stream_closed: true`).
+- OPEN-проба (live): обрабатывает только интервал после durable checkpoint,
+  люди в кадре в конце окна помечаются `open: true`; `cancel` закрывает поток
+  (`stream_closed: true`).
 
 Артефакты пишутся в `ArtifactStore` внутри кейса, их удаляет Retention:
 
@@ -56,8 +57,8 @@ cases/{case_id}/perception/embeddings/{tracklet}.npy  вектор трека
 cases/{case_id}/perception/crops/{tracklet}.jpg       лучший кроп (миниатюра)
 ```
 
-Галерея и векторы переживают перезапуск воркера: после рестарта они читаются из
-хранилища.
+Галерея и векторы переживают перезапуск воркера. SQLite state дополнительно
+хранит fingerprints/results заданий, gallery commands и OPEN checkpoints.
 
 ## Точность
 
@@ -159,13 +160,8 @@ javes-perception-probe --config perception.yaml --reference target.jpg \
 CUDA → Apple MPS → CPU. На Apple M5 50 секунд видео обрабатываются примерно за
 6 секунд.
 
-Подключение в систему:
-
-```python
-from javes_perception import PerceptionWorker
-perception = PerceptionWorker.from_config("perception.yaml", artifacts)
-system = assemble_system(..., perception=perception, ...)
-```
+Подключение в систему: `javes-perception-worker --main-url ... --token ...
+--worker-id ... --config perception.yaml --artifact-root ... --state-db ...`.
 
 ## Ограничения
 
@@ -173,6 +169,6 @@ system = assemble_system(..., perception=perception, ...)
   её нужно перепроверить: та же команда `eval_reid` на размеченных кропах.
 - `p_det` (как часто Perception пропускает человека) ещё не измерен.
 - Видео читается из mp4-файлов; адаптер к настоящему архиву камер не написан.
-- Live-кадры с рамкой (контракт 14, LiveFeed) пока не выдаются.
-- OPEN-проба каждый раз пересчитывает окно с начала; для длинного live нужен кэш.
+- Worker публикует текущий JPEG/crop и bbox через LiveFeed endpoint; отдельный
+  MJPEG/HLS encoder пока не реализован.
 - Лицензия Ultralytics — AGPL-3.0 (для учебного проекта не мешает).

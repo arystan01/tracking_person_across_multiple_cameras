@@ -2,12 +2,11 @@
 
 ## 1. Честный статус
 
-Репозиторий можно устанавливать wheel-ом, мигрировать SQLite/PostgreSQL,
-запускать tests и полный fake HTTP demo. Durable Retention core и local storage
-deletion реализованы, но систему пока нельзя объявить production deployment:
-отсутствуют production adapters/transport для Perception, Clip и Site Config,
-удаление из product-owned Perception/Clip storage, а также готовый process
-factory, manifests и monitoring integration. Внешний CCTV Video Archive не
+Репозиторий содержит API-first process assembly, HTTP pull/lease transport,
+Routing/Site Config APIs, real Perception и durable Retention workers. Систему
+пока нельзя объявить production deployment: отсутствуют настоящий Clip,
+production adapter внешнего CCTV Archive, TLS/manifests, monitoring,
+backup/restore и browser Dashboard. Внешний CCTV Video Archive не
 является deployment unit JAVES-AI и не управляется Retention.
 
 ```bash
@@ -28,19 +27,18 @@ TLS ingress
   └── Main API replicas
         ├── PostgreSQL (system of record)
         ├── private persistent filesystem (JAVES artifact directory)
-        ├── Scheduler replicas (jobs, Routing triggers, outbox)
-        ├── Site Config client/service
-        ├── Perception command/callback transport
-        ├── Clip command/result transport
-        └── Retention command/result transport
+        ├── Main Scheduler replicas (Routing triggers/TTL)
+        ├── Routing API ──> Site Config API
+        └── worker claim/heartbeat/result API
+
+Perception / Clip / Retention workers ──HTTP pull/lease──> Main API
 
 Perception + Clip ──> Video Archive
 All services ──> central logs/metrics/traces/secrets
 ```
 
-В малом пилоте Main API и Scheduler могут быть двумя процессами одного image.
-Routing остаётся библиотекой внутри scheduler. GPU Perception и media Clip
-развёртываются отдельно. Отдельного cloud/object storage нет. Один deployment
+Main API и Scheduler являются двумя процессами одного image. Routing API,
+Site Config API, GPU Perception и media Clip развёртываются отдельно. Отдельного cloud/object storage нет. Один deployment
 использует постоянный `JAVES_ARTIFACT_ROOT`; при нескольких Main replicas этот
 каталог должен быть одним и тем же mounted/shared filesystem для всех replicas.
 SQLite подходит только локальному single-process режиму.
@@ -65,24 +63,20 @@ SQLite подходит только локальному single-process реж�
 reference images, secrets и временные artifacts. `.gitignore` уже исключает
 обычные generated paths; container ignore должен повторять эту policy.
 
-## 4. Production assembly, который ещё нужно добавить
+## 4. Production assembly
 
-Нужен composition root, например `javes_main/production.py`, который:
+`javes_main/production.py`:
 
 1. читает `MainSettings.from_env()` и отдельные typed настройки worker URLs,
    TLS, persistent artifact root и Site Config;
 2. создаёт SQLAlchemy engine/repository;
 3. создаёт `FileArtifactStore` из `JAVES_ARTIFACT_ROOT` и LiveFeedPort;
-4. создаёт HTTP/queue adapters, реализующие `PerceptionPort`, `ClipPort`,
-   `SiteConfigPort`, и собирает `RetentionWorker` с backend для каждого реально
-   используемого storage locator;
-5. вызывает `assemble_system(...)`;
-6. создаёт FastAPI через `create_app(...)`;
-7. не включает `run_fake_jobs_inline`;
-8. предоставляет отдельный scheduler entrypoint и graceful shutdown.
+4. создаёт HTTP Routing/Site Config adapters и fail-closed remote worker ports;
+5. создаёт FastAPI через `create_app(...)` с отдельными worker tokens;
+6. не включает `run_fake_jobs_inline` и не импортирует `javes_fakes`;
+7. предоставляет отдельный `javes-main-scheduler` entrypoint.
 
-До появления этих adapters нельзя маскировать fake как production через env
-flag. При старте production profile должен fail closed, если хотя бы один
+При старте production composition fail closed, если хотя бы один
 обязательный endpoint/secret/storage отсутствует.
 
 ## 5. Конфигурация
@@ -93,7 +87,13 @@ flag. При старте production profile должен fail closed, если 
 |---|---|
 | `JAVES_DATABASE_URL` | SQLAlchemy URL; production — PostgreSQL |
 | `JAVES_ARTIFACT_ROOT` | постоянный private каталог `FileArtifactStore` во всех окружениях |
-| `JAVES_WORKER_TOKEN` | shared callback token только до перехода на mTLS/service identity |
+| `JAVES_PERCEPTION_WORKER_TOKEN` | отдельный bearer token Perception |
+| `JAVES_CLIP_WORKER_TOKEN` | отдельный bearer token Clip |
+| `JAVES_RETENTION_WORKER_TOKEN` | отдельный bearer token Retention |
+| `JAVES_WORKER_LEASE_SECRET` | HMAC secret attempt-scoped leases |
+| `JAVES_ROUTING_URL` / `JAVES_ROUTING_TOKEN` | Routing API identity |
+| `JAVES_SITE_CONFIG_URL` / `JAVES_SITE_CONFIG_TOKEN` | Site Config API identity |
+| `JAVES_ROUTING_PARAMS_VERSION` | exact immutable params version for new cases |
 | `JAVES_SCHEDULER_POLL_S` | период bounded scheduler loop |
 | `JAVES_JOB_LEASE_S` | lease Perception job |
 | `JAVES_OUTBOX_LEASE_S` | lease outbox delivery |
@@ -106,10 +106,6 @@ JAVES_ENV=production
 JAVES_PUBLIC_BASE_URL
 JAVES_ALLOWED_ORIGINS
 JAVES_TRUSTED_PROXY_CIDRS
-JAVES_SITE_CONFIG_URL / credential
-JAVES_PERCEPTION_URL|queue / credential
-JAVES_CLIP_URL|queue / credential
-JAVES_RETENTION_URL|queue / credential
 JAVES_OTEL_ENDPOINT
 JAVES_LOG_LEVEL
 ```

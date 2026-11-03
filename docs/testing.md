@@ -23,7 +23,10 @@ python -m pytest -q
 | `tests/test_mvp_contracts.py` | canonical aliases, aware UTC, start anchors, retries, OPEN, LONG_GAP, branching, SVG safety/determinism |
 | `tests/test_contract_package.py` | deterministic JSON Schema и version rejection |
 | `tests/test_adapter_acceptance.py` | reusable cross-message checks against fake implementations |
-| `tests/test_perception_worker.py` | real Perception worker на подставных моделях: ранжирование, стабильные ID, DONE-empty, partial coverage, ошибки, OPEN/cancel, галерея после рестарта |
+| `tests/test_perception_worker.py` | Perception core на deterministic injected detector/embedder: ранжирование, OPEN checkpoint и restart |
+| `tests/test_perception_real_smoke.py` | opt-in tracked video + настоящие YOLO/OSNet, без fake detector/embedder |
+| `tests/test_real_cv_e2e.py` | opt-in NVIDIA video -> YOLO/ByteTrack/OSNet -> Main HTTP -> Routing HTTP -> inspectable warehouse SVG |
+| `tests/test_api_first_transport.py` | worker auth/lease/idempotency, Site Config API, Routing API и полный Controls→worker→Routing→Dashboard flow |
 | `tests/test_integration_fakes.py` | Perception/Clip/Retention/Archive/Dashboard fake semantics |
 | `tests/test_auth.py` | root bootstrap, users, passwords, roles, lockout/session behavior |
 | `tests/test_main_infra.py` | Case Manager happy path, decisions, close/export/delete, artifacts/audit |

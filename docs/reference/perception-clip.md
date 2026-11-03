@@ -92,7 +92,7 @@ Main Infra may wrap the request in a job envelope:
   "job_id": "j_88",
   "case_id": "c_17",
   "kind": "PROBE",
-  "target_gallery_ref": "gallery:c_17:v3",
+  "target_gallery_ref": "cases/c_17/perception/gallery/gallery_id.npy",
   "probe": {}
 }
 ```

@@ -3,7 +3,7 @@
 All timestamps are ISO-8601 with an offset and are normalized to UTC. Bounding boxes are `[x, y, width, height]`. Every `camera_id` must exist in the pinned `SiteGraph`. On the wire, an open window is `"t_to": "OPEN"`.
 
 The detailed normative expectations, lifecycle semantics, concrete payloads,
-and handoff checklists for the still-unconnected Perception and Clip workers are
+and handoff checklists for the HTTP-connected Perception and currently unavailable Clip worker are
 in [`reference/perception-clip.md`](reference/perception-clip.md). That document is provisional until both
 worker owners confirm it with real payloads; Main Infra should integrate worker
 implementations through versioned adapters rather than silently changing these
@@ -34,13 +34,15 @@ It must atomically persist the returned state only if its expected revision stil
 
 `operator_closed=true` closes the active Routing search. SAVE/export and DELETE/retention are separate Case Manager commands and must not be translated into `operator_closed` implicitly.
 
-After `step()`, it calls:
+The Routing API shell calls:
 
 ```python
 rendered = render_route_maps(step_result, pinned_site_graph, floor_assets)
 ```
 
-Routing returns `StepResult` plus a `RenderedRouteBundle`. API may save SVGs and replace inline payloads with URLs, but must not recompute geometry.
+Routing returns `StepResult` plus a `RenderedRouteBundle` through
+`POST /internal/v1/routing/step`. Main saves SVGs and exposes authorised URLs;
+Dashboard must not recompute geometry.
 
 ## Routing → Perception
 
@@ -145,9 +147,9 @@ deleted. Clip consumes a stable `clip_ref`/archive reference, returns a stable
 artifact reference, and merges an explicit ordered list of confirmed clip IDs.
 Case close, export/save, release, and delete are separate commands.
 
-`CLOSE_CASE` removes `EPHEMERAL` and `REVIEW_HOLD`; confirmed evidence, case
-results and the complete append-only audit remain. `DELETE_CASE` removes every
-non-held, non-audit resource. `TTL_EXPIRED` is emitted at the case retention deadline;
+`CLOSE_CASE` records the retention anchor and does not delete case-owned data.
+`DELETE_CASE` removes every non-held, non-audit resource. `TTL_EXPIRED` is
+emitted at the case retention deadline and removes the same due case data;
 `expires_at=null` inherits that deadline, while an explicit future expiry is
 handled by the Retention maintenance sweep. A `RetentionResult` is final proof,
 not merely queue acknowledgement.

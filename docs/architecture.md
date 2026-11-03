@@ -18,37 +18,35 @@ production-инфраструктуру.
 - in-memory и SQLAlchemy persistence, Alembic migrations;
 - durable jobs, Routing triggers и transactional outbox;
 - artifact abstraction и локальное атомарное файловое хранилище;
-- fake Perception, Clip, Retention, внешний CCTV Archive, Site Config и
-  Dashboard requests, плюс отдельный real Retention core и real Perception
-  worker (`javes_perception/`: YOLO26 + ByteTrack + OSNet);
+- общий authenticated HTTP pull/lease transport над jobs/outbox;
+- отдельный stateless Routing API и HTTP adapter Main Infra;
+- immutable filesystem-backed Site Config API и HTTP clients;
+- real Retention worker process и real Perception worker process
+  (`javes_perception/`: YOLO26 + ByteTrack + OSNet) с durable SQLite state;
+- explicit unavailable Clip worker вместо успешной fake production обработки;
+- legacy fake stack только для изолированных тестов;
 - unit, integration, HTTP, persistence, restart, concurrency и acceptance tests.
 
 Не реализованы как production-компоненты:
 
-- настоящее чтение CCTV и Re-ID в Perception;
+- adapter Perception/Clip к production API внешнего CCTV Archive (локальный
+  видеодекодер и настоящий Re-ID уже реализованы);
 - ffmpeg/media pipeline в Clip;
 - интеграционные handlers удаления из Perception/Clip storage (локальный
   `FileArtifactStore` и durable Retention core уже реализованы);
 - адаптеры Perception/Clip к существующей внешней CCTV-системе;
-- versioned Site Config service и UI публикации конфигураций;
+- UI/atomic publish workflow Site Config (read-only exact-version API готов);
 - браузерный Dashboard;
-- production process assembly, broker transport, постоянный файловый volume,
-  observability, backup/restore, TLS и deployment manifests.
+- observability, backup/restore, TLS и deployment manifests.
 
-## 2. Почему это модульный монолит
+## 2. API-first deployment
 
-Сейчас orchestration, API, persistence и локальный Routing находятся в одном
-Python deployment unit, но зависят от `Protocol`-портов. Это сохраняет
-транзакционную целостность кейса и ускоряет изменение ещё не замороженных
-контрактов. Perception, Clip, Retention и Site Config остаются заменяемыми
-границами; доступ к внешнему CCTV Archive инкапсулирован внутри Perception/Clip.
-После измерения нагрузки конкретный adapter можно вынести в отдельный сервис без
-переписывания доменной логики.
-
-Микросервисы сейчас добавили бы distributed transactions, broker semantics,
-service discovery и наблюдаемость до того, как известна реальная нагрузка. Это
-не запрет на последующее разделение: outbox, immutable commands, stable IDs и
-versioned DTO уже создают необходимый шов.
+Production composition запускает Main API, Main scheduler, Routing API, Site
+Config API, Perception worker и Retention worker отдельными процессами. Main
+остаётся system of record; workers получают at-least-once задания через HTTP
+pull/lease поверх существующих jobs/outbox. Routing вызывается синхронно через
+HTTP, но его ядро остаётся чистым. Локальные adapters и `javes_fakes` не
+импортируются production composition root.
 
 ## 3. Структура репозитория
 
@@ -68,10 +66,12 @@ versioned DTO уже создают необходимый шов.
 | `javes_main/domain/` | lifecycle/status models без HTTP/DB кода |
 | `javes_main/application/` | Case Manager, IAM, metrics и CLI bootstrap root |
 | `javes_main/ports/` | Protocol-порты persistence/workers/storage/config/clock |
-| `javes_main/adapters/` | локальный Routing, fake workers, memory/file storage, in-memory Site Config |
+| `javes_main/adapters/` | HTTP Routing, local test adapters и memory/file storage |
 | `javes_main/persistence/` | memory repo, SQLAlchemy repo, Alembic migrations |
-| `javes_main/scheduler/` | job polling, Routing trigger leases, outbox delivery |
-| `javes_main/api/` | FastAPI Controls и worker callback endpoints |
+| `javes_main/scheduler/` | Routing trigger leases и legacy test dispatchers |
+| `javes_main/api/` | FastAPI Controls, worker claim/heartbeat/result/failure и live endpoints |
+| `javes_routing_api/` | stateless HTTP shell, который возвращает StepResult + SVG |
+| `javes_site_config/` | exact-version graph/assets/params API |
 | `javes_retention/` | policy, durable inventory/journal, deletion routing/backends и worker |
 | `javes_fakes/` | детерминированные contract doubles; не production реализация |
 | `tests/` | executable specification текущего поведения |
@@ -82,9 +82,8 @@ versioned DTO уже создают необходимый шов.
 ```text
 Dashboard ──HTTPS──> Controls API ──> Case Manager ──> Repository/Postgres
                           │                 │                 │
-                          │                 ├── durable jobs ─┼──> Perception
-                          │                 ├── triggers ─────┼──> Routing local
-                          │                 └── outbox ───────┼──> Clip/Retention
+                          │                 ├── durable jobs/outbox <──HTTP pull── Perception/Clip/Retention
+                          │                 └── triggers ─────┼──HTTP──> Routing API ──HTTP──> Site Config
                           │
                           ├── private SVG/artifact response <── Artifact Store
                           └── private live proxy <────────────── Perception stream
@@ -115,8 +114,8 @@ Dashboard никогда не вызывает worker напрямую. Routing 
 ### 5.2 Поисковый round
 
 1. Routing dispatcher арендует trigger.
-2. Case Manager вне длинной DB-транзакции вызывает локальный чистый Routing с
-   pinned state/graph/params, новыми results/anchors и явным `now`.
+2. Case Manager вне длинной DB-транзакции вызывает Routing API с pinned
+   state/site/params versions, новыми results/anchors и явным `now`.
 3. Routing возвращает новое состояние, probes, hypotheses, estimate, mode,
    done/stop reason и готовые SVG.
 4. Case Manager CAS-сохраняет кейс по `expected_revision`, создаёт jobs для
@@ -127,9 +126,9 @@ Dashboard никогда не вызывает worker напрямую. Routing 
 
 ### 5.3 Perception job
 
-1. Scheduler арендует `PENDING` job, выставляя owner и lease deadline.
-2. Adapter отправляет `PerceptionProbeJob` реальному или fake worker.
-3. Worker возвращает `ProbeResult` через внутренний callback.
+1. Perception worker забирает `PENDING` job через authenticated claim endpoint.
+2. Main выдаёт attempt-scoped lease; heartbeat продлевает её новым token.
+3. Worker возвращает `ProbeResult` через result endpoint.
 4. Main Infra хранит неизменённый raw result для аудита, но в Routing передаёт
    sanitised evidence: только совпадающие case/probe/camera, уникальные tracklets
    и candidates, ссылающиеся на tracklet того же результата.

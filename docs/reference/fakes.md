@@ -98,7 +98,7 @@ Implementation: `javes_fakes/retention.py`.
 
 `FakeRetentionWorker` registers resource metadata and processes:
 
-- `CLOSE_CASE`: delete `EPHEMERAL` and unconfirmed `REVIEW_HOLD` resources;
+- `CLOSE_CASE`: record the retention anchor without deleting case resources;
 - `DELETE_CASE`: delete every non-audit, non-legal-hold resource;
 - `TTL_EXPIRED`: delete due or case-TTL-inherited, non-held resources.
 
@@ -108,7 +108,7 @@ permanent audit boundary, while real physical deletion is tested in
 `javes_retention/`. Re-registering the same resource ID for the same case
 updates its retention class, which models HOLD becoming CONFIRMED or
 RELEASED. A delete/TTL tombstone also removes any non-held/non-audit resource
-registered late; `EPHEMERAL` and `REVIEW_HOLD` registered after `CLOSE_CASE`
+registered late; resources registered after `DELETE_CASE` or `TTL_EXPIRED`
 are immediately eligible for cleanup.
 
 ## Fake Video Archive

@@ -1,9 +1,10 @@
 # JAVES-AI: карта документации
 
-Статус этого репозитория: Routing, тестовый Main Infra/Controls, durable core
-Retention и Perception worker (YOLO26 + ByteTrack + OSNet, см.
-[`perception.md`](perception.md)) реализованы; Clip, Site Config и
-пользовательский Dashboard пока заменены детерминированными fake-адаптерами. Внешний CCTV Video
+Статус этого репозитория: Routing, Main Infra/Controls, durable Retention,
+реальный Perception worker (YOLO26 + ByteTrack + OSNet), API-first transport,
+отдельные Routing API и read-only Site Config API реализованы. Настоящий Clip
+и пользовательский Dashboard остаются внешними deliverables; fake-адаптеры
+используются только старыми unit/integration fixtures. Внешний CCTV Video
 Archive не входит в JAVES-AI: его read-only ссылки потребляют Perception/Clip.
 Срок хранения данных кейса утверждён как 14 календарных дней; deployment не готов.
 
@@ -13,8 +14,8 @@ Archive не входит в JAVES-AI: его read-only ссылки потре�
   удаляется и не регистрируется в JAVES-AI Retention;
 - отдельного cloud/object storage нет; `object_key` — относительный путь внутри
   private `FileArtifactStore`, заданного через `JAVES_ARTIFACT_ROOT`;
-- временные search-данные удаляются при close, final route/confirmed clips/export
-  удаляются через 14 календарных дней после close;
+- `CLOSE_CASE` только фиксирует retention anchor; case-owned данные удаляются
+  через 14 календарных дней либо раньше по явному `DELETE_CASE`;
 - полный append-only security audit `actor/time/action/details` хранится
   бессрочно и не затирается при DELETE/TTL.
 
@@ -46,7 +47,11 @@ Archive не входит в JAVES-AI: его read-only ссылки потре�
 | `perception.yaml` | камеры Perception (видеофайл + UTC старт) и пороги |
 | `docs/perception.md` | как устроен Perception, точность и запуск |
 | `javes_contracts/` | публичные модели, JSON Schema и acceptance checks |
-| `javes_fakes/` | временные contract doubles внешних компонентов |
+| `javes_routing_api/` | stateless HTTP shell над чистым Routing |
+| `javes_site_config/` | immutable filesystem-backed Site Config API |
+| `javes_workers/` | общий HTTP pull/lease client |
+| `javes_clip/` | Clip contract boundary и explicit unavailable runner |
+| `javes_fakes/` | legacy contract doubles только для тестов |
 | `tests/` | unit, integration, API, persistence и contract tests |
 | `examples/` | канонические JSON/YAML примеры |
 | `bench/` | multi-seed benchmark и честный анализ результатов |

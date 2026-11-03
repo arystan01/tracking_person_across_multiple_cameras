@@ -19,6 +19,12 @@ CCTV-системой. Все внешние payloads импортируются
 - before-enable gate: JSON Schema + `javes_contracts.acceptance` + component
   contract tests + staging shadow run.
 
+Production transport для Perception, Clip и Retention — authenticated HTTP
+pull/lease: `claim`, `heartbeat`, `result`, `failure` под
+`/internal/v1/workers/{component}/tasks`. Routing использует отдельные
+синхронные `/internal/v1/routing/init|step`; Site Config — exact-version GET
+API. Локальные Python ports сохранены только как test seams.
+
 ## 1. Perception worker
 
 Реализация: `javes_perception/` (YOLO26 + ByteTrack + OSNet). Как она устроена,
@@ -256,7 +262,7 @@ resource ID, case, kind, optional artifact ref, class, TTL и legal hold:
 
 ### 3.3 Команды и результат
 
-- `CLOSE_CASE`: удаляет только классы, которые policy считает временными;
+- `CLOSE_CASE`: фиксирует close marker, но не удаляет данные до 14-day TTL;
 - `TTL_EXPIRED`: удаляет только истёкшие и не held ресурсы;
 - `DELETE_CASE`: удаляет всё case-scoped, кроме legal hold и бессрочного
   append-only audit/tombstone.
@@ -275,8 +281,8 @@ command, ID conflict, permanent complete audit and deletion proof.
 Production-shaped core находится в `javes_retention/` и напрямую реализует
 существующий `RetentionPort`:
 
-- `RetentionPolicy` удаляет `EPHEMERAL` и `REVIEW_HOLD` на `CLOSE_CASE`, все
-  non-audit/non-held ресурсы на `DELETE_CASE`, due/inherited ресурсы на
+- `RetentionPolicy` ничего не удаляет на `CLOSE_CASE`, удаляет все
+  non-audit/non-held ресурсы на `DELETE_CASE` и due/inherited ресурсы на
   `TTL_EXPIRED`; `AUDIT` и legal hold сохраняются;
 - `SQLiteRetentionRepository` хранит inventory, case tombstones, command
   snapshot и per-resource attempts/proofs; полный append-only журнал действий
@@ -290,7 +296,8 @@ Production-shaped core находится в `javes_retention/` и напрям�
   ресурса считаются replicas и должны завершиться все;
 - есть безопасные backends для Main ArtifactStore и allow-listed `file://`, а
   также callback boundary для Perception/gallery и live storage;
-- late registration после CLOSE/DELETE/TTL немедленно применяет tombstone;
+- late registration после DELETE/TTL немедленно применяет tombstone; close
+  marker сам по себе не удаляет поздний ресурс;
   снятие legal hold после DELETE также запускает cleanup;
 - после final receipt resource inventory заменяет удалённые artifact paths на
   SHA-256 locators; Retention command и Main audit навсегда сохраняют actor,
@@ -298,10 +305,11 @@ Production-shaped core находится в `javes_retention/` и напрям�
 - Main Infra регистрирует reference image, gallery metadata, tracklet/candidate
   metadata, crops/embeddings, live buffers, route SVG, clips и exports;
 - новая route/export revision переводит предыдущую в `EPHEMERAL`, поэтому
-  после CLOSE сохраняются именно последние route/export, а не все промежуточные;
-- после подтверждённого CLOSE Main очищает search-only payloads и HOLD clips,
-  но сохраняет confirmed clips/final route/audit; после DELETE/TTL content
-  redacted, а lifecycle становится `DELETED`;
+  policy отличает текущие результаты от промежуточных; обе категории остаются
+  до case TTL и удаляются на `TTL_EXPIRED`;
+- после подтверждённого CLOSE Main сохраняет case payloads до retention
+  deadline; после DELETE/TTL content redacted, а lifecycle становится
+  `DELETED`;
 - case TTL зафиксирован в 14 календарных дней от close и настраивается через
   `CaseManager(retention_ttl_s=...)`; scheduler выдаёт ровно один durable
   `TTL_EXPIRED`. `sweep_expired()` добирает explicit future TTLs после case
