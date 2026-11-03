@@ -9,6 +9,7 @@ from javes_contracts import ArtifactRef, PerceptionProbeJob, TargetGalleryComman
 from javes_contracts.acceptance import check_gallery_result, check_probe_result
 from javes_main.adapters.artifacts import InMemoryArtifactStore
 from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
+from javes_perception.state import PerceptionStateStore
 from javes_perception.video import DecodeError, VideoWindow
 from routing.contracts import ProbeRequest, ProbeStatus
 
@@ -222,3 +223,59 @@ def test_open_probe_before_its_start_is_done_empty():
     result = worker.execute(probe, T0 + timedelta(seconds=5))
     check_probe_result(probe, result)
     assert result.status == ProbeStatus.DONE and result.processed_duration_s == 0.0
+
+
+def test_open_checkpoint_and_gallery_command_survive_process_restart(tmp_path):
+    state = PerceptionStateStore(tmp_path / "perception-state.sqlite")
+    settings = PerceptionSettings(
+        cameras={"cam_1": CameraSource(path="unused.mp4", start=T0)},
+        min_crop_height=10,
+        score_floor=0.1,
+    )
+    artifacts = InMemoryArtifactStore()
+    first_worker = PerceptionWorker(
+        settings,
+        artifacts,
+        detector=FakeDetector(),
+        embedder=fake_embedder,
+        archive=FakeArchive(),
+        state_store=state,
+    )
+    ref = add_reference(first_worker, artifacts)
+    open_job = job(ref, t_to=None)
+    first = first_worker.execute(open_job, T0 + timedelta(seconds=7))
+    assert first.status == ProbeStatus.DONE
+    assert state.checkpoint(open_job.job_id) == T0 + timedelta(seconds=7)
+    state.close()
+
+    restarted_state = PerceptionStateStore(tmp_path / "perception-state.sqlite")
+    restarted = PerceptionWorker(
+        settings,
+        artifacts,
+        detector=FakeDetector(),
+        embedder=fake_embedder,
+        archive=FakeArchive(),
+        state_store=restarted_state,
+    )
+    second = restarted.execute(open_job, T0 + timedelta(seconds=15))
+    assert second.status == ProbeStatus.DONE
+    assert second.processed_duration_s >= first.processed_duration_s
+    check_probe_result(open_job, second, previous=first)
+    assert restarted.update_gallery(
+        TargetGalleryCommand(
+            command_id="g1",
+            case_id="c1",
+            source="reference",
+            image_ref=ArtifactRef(object_key="cases/c1/reference.png"),
+        )
+    ).gallery_ref == ref
+    with pytest.raises(ValueError):
+        restarted.update_gallery(
+            TargetGalleryCommand(
+                command_id="g1",
+                case_id="c1",
+                source="confirmed_tracklet",
+                tracklet_id="different",
+            )
+        )
+    restarted_state.close()

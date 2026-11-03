@@ -21,6 +21,7 @@ class VideoWindow:
     t_to: datetime
     requested_s: float
     archive_id: str
+    source_uri: str | None = None
 
 
 class LocalVideoArchive:

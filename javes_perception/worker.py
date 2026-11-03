@@ -71,12 +71,14 @@ class PerceptionWorker:
         detector=None,
         embedder=None,
         archive=None,
+        state_store=None,
     ) -> None:
         self.settings = settings
         self.artifacts = artifacts
         self._detector = detector
         self._embedder = embedder
         self.archive = archive or LocalVideoArchive(settings.cameras)
+        self.state_store = state_store
         self._galleries: dict[str, np.ndarray] = {}
         self._gallery_sources: dict[str, dict[str, np.ndarray]] = {}
         self._gallery_commands: dict[str, tuple[str, TargetGalleryResult]] = {}
@@ -123,6 +125,12 @@ class PerceptionWorker:
 
     def update_gallery(self, command: TargetGalleryCommand) -> TargetGalleryResult:
         fingerprint = command.model_dump_json()
+        if self.state_store is not None:
+            durable = self.state_store.gallery_result(command.command_id)
+            if durable is not None:
+                if durable[0] != fingerprint:
+                    raise ValueError("same gallery command_id used with different payload")
+                return durable[1].model_copy(deep=True)
         previous = self._gallery_commands.get(command.command_id)
         if previous is not None:
             if previous[0] != fingerprint:
@@ -145,10 +153,11 @@ class PerceptionWorker:
             key = f"cases/{command.case_id}/perception/gallery/sources/{len(sources) - 1:04d}.npz"
             self.artifacts.put(key, buffer.getvalue(), "application/x-npz")
         names = sorted(sources)
-        gallery_ref = _stable_id("gallery", command.case_id, command.model_version, *names)
+        gallery_id = _stable_id("gallery", command.case_id, command.model_version, *names)
         matrix = np.stack([sources[name] for name in names])
+        gallery_ref = self._gallery_key(command.case_id, gallery_id)
         self._galleries[gallery_ref] = matrix
-        self._put(self._gallery_key(command.case_id, gallery_ref), _to_npy(matrix), "application/x-npy")
+        self._put(gallery_ref, _to_npy(matrix), "application/x-npy")
         result = TargetGalleryResult(
             command_id=command.command_id,
             case_id=command.case_id,
@@ -157,6 +166,8 @@ class PerceptionWorker:
             model_version=command.model_version,
         )
         self._gallery_commands[command.command_id] = (fingerprint, result)
+        if self.state_store is not None:
+            self.state_store.save_gallery_result(command.command_id, fingerprint, result)
         return result.model_copy(deep=True)
 
     def _load_sources(self, case_id: str) -> dict[str, np.ndarray]:
@@ -193,7 +204,8 @@ class PerceptionWorker:
         ref = job.target_gallery_ref
         if ref not in self._galleries:
             try:
-                data, _ = self.artifacts.get(self._gallery_key(job.case_id, ref))
+                key = ref if ref.startswith("cases/") else self._gallery_key(job.case_id, ref)
+                data, _ = self.artifacts.get(key)
             except KeyError:
                 return None
             self._galleries[ref] = _from_npy(data)
@@ -218,6 +230,11 @@ class PerceptionWorker:
 
     def _process(self, job: PerceptionProbeJob, now: datetime, close: bool) -> ProbeResult:
         probe = job.probe
+        previous_open = (
+            self.state_store.open_result(job.job_id)
+            if probe.t_to is None and self.state_store is not None
+            else None
+        )
         if probe.probe_id in self._closed:
             return self._closed[probe.probe_id].model_copy(deep=True)
         if job.deadline is not None and now > job.deadline:
@@ -229,7 +246,17 @@ class PerceptionWorker:
             return self._empty(probe.probe_id, ProbeStatus.UNAVAILABLE, "CAMERA_UNKNOWN", close)
 
         end = probe.t_to or now
-        if probe.t_to is None and end <= probe.t_from:
+        start = probe.t_from
+        if probe.t_to is None and self.state_store is not None:
+            start = self.state_store.checkpoint(job.job_id) or start
+        if probe.t_to is None and end <= start:
+            if previous_open is not None:
+                result = previous_open.model_copy(
+                    update={"stream_closed": close}, deep=True
+                )
+                if close:
+                    self._closed[probe.probe_id] = result
+                return result
             return ProbeResult(
                 probe_id=probe.probe_id,
                 status=ProbeStatus.DONE,
@@ -239,7 +266,7 @@ class PerceptionWorker:
                 stream_closed=close,
             )
         try:
-            window = self.archive.window(probe.camera, probe.t_from, end)
+            window = self.archive.window(probe.camera, start, end)
         except DecodeError:
             window = None
         if window is None:
@@ -255,6 +282,39 @@ class PerceptionWorker:
             return self._empty(probe.probe_id, ProbeStatus.FAILED, "DECODE_FAILED", close)
 
         result = self._build_result(job, window, tracks, timestamps, gallery, close)
+        if probe.t_to is None and self.state_store is not None and result.status == ProbeStatus.DONE:
+            if previous_open is not None:
+                old_tracklets = {item.id: item for item in previous_open.tracklets}
+                old_candidates = {
+                    item.id or f"tracklet:{item.tracklet_id}": item
+                    for item in previous_open.candidates
+                }
+                for item in result.tracklets:
+                    old_tracklets[item.id] = item
+                for item in result.candidates:
+                    old_candidates[item.id or f"tracklet:{item.tracklet_id}"] = item
+                result = result.model_copy(
+                    update={
+                        "tracklets": sorted(
+                            old_tracklets.values(), key=lambda item: item.id
+                        ),
+                        "candidates": sorted(
+                            old_candidates.values(),
+                            key=lambda item: (item.id or "", item.tracklet_id),
+                        ),
+                        "processed_duration_s": (
+                            (previous_open.processed_duration_s or 0.0)
+                            + (result.processed_duration_s or 0.0)
+                        ),
+                        "n_tracklets_total": (
+                            (previous_open.n_tracklets_total or 0)
+                            + (result.n_tracklets_total or 0)
+                        ),
+                    },
+                    deep=True,
+                )
+            self.state_store.save_checkpoint(job.job_id, window.t_to)
+            self.state_store.save_open_result(job.job_id, result)
         if close:
             self._closed[probe.probe_id] = result
         return result

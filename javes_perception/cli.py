@@ -11,7 +11,6 @@ from javes_main.adapters.artifacts import FileArtifactStore
 from routing.contracts import ProbeRequest
 
 from .config import load_settings
-from .worker import PerceptionWorker
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -24,6 +23,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--case", default="case_local")
     parser.add_argument("--out", default="perception_out")
     args = parser.parse_args(argv)
+
+    from .worker import PerceptionWorker
 
     out = Path(args.out)
     artifacts = FileArtifactStore(out / "artifacts")
