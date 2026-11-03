@@ -1,0 +1,34 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e '.[test,infra]'
+      - run: python -m pytest -q -m 'not real_cv'
+
+  real-cv:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e '.[test,infra,perception]'
+      - run: JAVES_RUN_REAL_CV=1 python -m pytest -q -m real_cv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-cv-e2e-output
+          path: artifacts/real-cv-e2e/
+          if-no-files-found: warn
