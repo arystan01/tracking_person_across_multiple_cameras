@@ -6,12 +6,16 @@ import math
 from html import escape
 
 from javes_contracts import (
+    GroundPosition,
     Hypothesis,
-    ProbeStatus,
+    PositionState,
     RenderedFloorMap,
     RenderedRouteBundle,
+    RouteLayer,
+    RoutePresentation,
     SiteGraph,
     StepResult,
+    StopReason,
 )
 
 
@@ -31,6 +35,85 @@ def _best(result: StepResult) -> Hypothesis | None:
     eligible = [item for item in result.hypotheses if not item.requires_confirmation]
     pool = eligible or result.hypotheses
     return min(pool, key=lambda item: (-item.score, item.id)) if pool else None
+
+
+def _last_observation(
+    hypothesis: Hypothesis | None,
+) -> tuple[GroundPosition | None, list[str], bool, bool]:
+    if hypothesis is None:
+        return None, [], False, False
+    segments = [item for item in hypothesis.observed_segments if item.points]
+    if segments:
+        segment = max(segments, key=lambda item: item.points[-1].timestamp)
+        point = max(segment.points, key=lambda item: item.timestamp)
+        latest_time = max(
+            (visit.t_out for visit in hypothesis.visits),
+            default=point.timestamp,
+        )
+        latest_visits = [
+            visit for visit in hypothesis.visits if visit.t_out == latest_time
+        ]
+        return (
+            point,
+            list(segment.camera_ids or point.source_camera_ids),
+            any(visit.clipped_out for visit in latest_visits),
+            any(visit.open for visit in latest_visits),
+        )
+    candidates = [
+        (visit, point)
+        for visit in hypothesis.visits
+        for point in visit.projected_trajectory
+    ]
+    if not candidates:
+        return None, [], False, False
+    visit, point = max(
+        candidates,
+        key=lambda item: (item[1].timestamp, item[0].camera),
+    )
+    return (
+        GroundPosition(
+            timestamp=point.timestamp,
+            x=point.x,
+            y=point.y,
+            floor_id=point.floor_id,
+            error_m=point.calibration_error_m,
+            confidence=point.confidence,
+            source_camera_ids=[visit.camera],
+            source_tracklet_ids=list(visit.tracklet_ids),
+        ),
+        [visit.camera],
+        visit.clipped_out,
+        visit.open,
+    )
+
+
+def _presentation(
+    result: StepResult,
+    best: Hypothesis | None,
+) -> RoutePresentation:
+    point, cameras, visible_at_end, open_observation = _last_observation(best)
+    has_search_area = bool(
+        result.estimate and result.estimate.reachable_segments
+    )
+    if point is None:
+        state = PositionState.UNKNOWN
+    elif open_observation:
+        state = PositionState.OBSERVED
+    elif has_search_area:
+        state = PositionState.LOST
+    else:
+        state = PositionState.LAST_SEEN
+    return RoutePresentation(
+        position_state=state,
+        last_confirmed_position=point,
+        source_camera_ids=cameras,
+        visible_at_interval_end=visible_at_end,
+        search_area_as_of=(
+            result.estimate.calculated_at
+            if has_search_area and result.estimate is not None
+            else None
+        ),
+    )
 
 
 def _layout(
@@ -147,8 +230,8 @@ def _route_elements(
     dashed: bool,
 ) -> list[str]:
     elements: list[str] = []
-    colour = "#f59e0b" if dashed else "#ef4444"
-    width = "4" if dashed else "7"
+    colour = "#d97706"
+    width = "3" if dashed else "5"
     for index in range(1, len(hypothesis.visits)):
         previous, current = hypothesis.visits[index - 1], hypothesis.visits[index]
         transition = hypothesis.transitions[index - 1] if index - 1 < len(hypothesis.transitions) else None
@@ -166,16 +249,8 @@ def _route_elements(
                     ",".join(transition.edge_ids) or transition.geometry.source,
                 )
             ]
-        transition_gap = bool(
-            transition
-            and (
-                transition.kind in {"BLIND", "OUTSIDE", "UNKNOWN", "GAP", "VERTICAL"}
-                or set(transition.flags) & {"LONG_GAP", "GATE_OVERRIDE", "UNKNOWN"}
-            )
-        )
         for points, approximate, edge_label in pieces:
-            segment_dashed = dashed or approximate or transition_gap
-            dash = ' stroke-dasharray="10 7"' if segment_dashed else ""
+            dash = ' stroke-dasharray="10 7"'
             if len(points) >= 2:
                 elements.append(
                     f'<polyline data-role="{role}" data-edge="{escape(edge_label)}" '
@@ -288,17 +363,140 @@ def _reachable_elements(
         points = segment.points if segment.floor_id == floor_id else []
         if len(points) < 2:
             continue
-        opacity = min(0.18 + segment.probability * 0.62, 0.8)
         elements.append(
             f'<polyline data-role="reachable-area" data-edge="{escape(segment.edge_id)}" '
-            f'data-probability="{segment.probability:.6f}" '
             f'data-progress="{segment.progress:.6f}" '
             f'data-approximate="{str(segment.approximate).lower()}" '
             f'points="{" ".join(_point(item) for item in points)}" fill="none" '
-            f'stroke="#7c3aed" stroke-opacity="{opacity:.3f}" stroke-width="15" '
+            'stroke="#7c3aed" stroke-opacity="0.32" stroke-width="18" '
             'stroke-linecap="round" stroke-linejoin="round"/>'
         )
     return elements
+
+
+def _relevant_cameras(
+    result: StepResult,
+    best: Hypothesis | None,
+) -> dict[str, str]:
+    states: dict[str, str] = {}
+    if best is not None:
+        for visit in best.visits:
+            states[visit.camera] = "evidence"
+    for visit in result.state.pending_review_visits:
+        states.setdefault(visit.camera, "review")
+    for probe in [*result.state.pending_probes, *result.probes]:
+        states.setdefault(probe.camera, "active-probe")
+    return states
+
+
+def _camera_element(
+    camera: str,
+    state: str,
+    point: tuple[float, float],
+) -> str:
+    x, y = point
+    state_label = {
+        "evidence": "video evidence",
+        "active-probe": "being checked",
+        "review": "candidate review",
+    }.get(state, "search camera")
+    return (
+        f'<g data-role="camera" data-state="{escape(state)}">'
+        f'<rect x="{x - 9:.2f}" y="{y - 6:.2f}" width="15" height="12" rx="2" '
+        'fill="#475569" stroke="#fff" stroke-width="2"/>'
+        f'<path d="M {x + 6:.2f} {y - 4:.2f} L {x + 12:.2f} {y - 7:.2f} '
+        f'L {x + 12:.2f} {y + 7:.2f} L {x + 6:.2f} {y + 4:.2f} Z" '
+        'fill="#475569" stroke="#fff" stroke-width="1.5"/>'
+        f'<circle cx="{x - 2:.2f}" cy="{y:.2f}" r="2.5" fill="#cbd5e1"/>'
+        f'<text class="label" x="{x + 16:.2f}" y="{y - 10:.2f}">'
+        f'{escape(camera)} · {escape(state_label)}</text>'
+        '</g>'
+    )
+
+
+def _last_position_element(point: GroundPosition) -> str:
+    timestamp = point.timestamp.isoformat().replace("+00:00", "Z")
+    return (
+        '<g data-role="last-confirmed-position">'
+        f'<circle cx="{point.x:.2f}" cy="{point.y:.2f}" r="12" fill="#fff" '
+        'stroke="#111827" stroke-width="3"/>'
+        f'<circle cx="{point.x:.2f}" cy="{point.y - 4:.2f}" r="3.2" fill="#111827"/>'
+        f'<path d="M {point.x:.2f} {point.y:.2f} L {point.x:.2f} {point.y + 7:.2f} '
+        f'M {point.x - 5:.2f} {point.y + 2:.2f} L {point.x + 5:.2f} {point.y + 2:.2f}" '
+        'stroke="#111827" stroke-width="2.5" stroke-linecap="round"/>'
+        f'<text class="label" x="{point.x + 17:.2f}" y="{point.y + 20:.2f}">'
+        f'Last confirmed position · {escape(timestamp)}</text></g>'
+    )
+
+
+def _status_text(
+    result: StepResult,
+    presentation: RoutePresentation,
+) -> str:
+    point = presentation.last_confirmed_position
+    if point is None:
+        text = "No confirmed position"
+    else:
+        timestamp = point.timestamp.isoformat().replace("+00:00", "Z")
+        if presentation.position_state == PositionState.OBSERVED:
+            text = f"Currently visible · last confirmed {timestamp}"
+        elif presentation.position_state == PositionState.LOST:
+            text = f"Not seen since {timestamp}"
+            if presentation.search_area_as_of is not None:
+                calculated = presentation.search_area_as_of.isoformat().replace(
+                    "+00:00", "Z"
+                )
+                text += f" · possible area as of {calculated}"
+        else:
+            text = f"Last confirmed {timestamp}"
+            if presentation.visible_at_interval_end:
+                text += " · visible at end of checked clip"
+    if result.done:
+        text += (
+            " · search stopped at maximum gap"
+            if result.stop_reason == StopReason.MAX_GAP
+            else " · search closed"
+        )
+    return text
+
+
+def _status_element(text: str) -> str:
+    return (
+        '<g data-role="route-status" transform="translate(18 24)">'
+        '<rect x="-8" y="-18" width="950" height="36" rx="6" '
+        'fill="#fff" fill-opacity="0.90"/>'
+        f'<text class="label" x="0" y="6">{escape(text)}</text></g>'
+    )
+
+
+def _legend_element(layers: list[RouteLayer]) -> str:
+    rows: list[str] = []
+    y = 0
+    for layer in layers:
+        if layer == RouteLayer.OBSERVED:
+            sample = f'<line x1="0" y1="{y}" x2="34" y2="{y}" stroke="#0891b2" stroke-width="6"/>'
+            label = "Seen on video"
+        elif layer == RouteLayer.INFERRED:
+            sample = f'<line x1="0" y1="{y}" x2="34" y2="{y}" stroke="#d97706" stroke-width="5" stroke-dasharray="10 7"/>'
+            label = "Estimated between sightings"
+        elif layer == RouteLayer.SEARCH_AREA:
+            sample = f'<line x1="0" y1="{y}" x2="34" y2="{y}" stroke="#7c3aed" stroke-width="14" stroke-opacity="0.32"/>'
+            label = "Possible area after last sighting"
+        elif layer == RouteLayer.LAST_POSITION:
+            sample = f'<circle cx="17" cy="{y}" r="7" fill="#fff" stroke="#111827" stroke-width="3"/>'
+            label = "Last confirmed position"
+        else:
+            sample = f'<rect x="8" y="{y - 6}" width="16" height="12" rx="2" fill="#475569"/>'
+            label = "Camera involved in this search"
+        rows.append(sample + f'<text x="44" y="{y + 5}">{label}</text>')
+        y += 24
+    height = max(y + 4, 28)
+    return (
+        '<g data-role="legend" transform="translate(18 82)">'
+        f'<rect x="-8" y="-18" width="340" height="{height}" rx="6" '
+        'fill="#fff" fill-opacity="0.86"/>'
+        f'{"".join(rows)}</g>'
+    )
 
 
 def render_route_maps(
@@ -308,6 +506,7 @@ def render_route_maps(
 ) -> RenderedRouteBundle:
     """Return standalone SVGs; never reads files and never mutates its inputs."""
     best = _best(step_result)
+    presentation = _presentation(step_result, best)
     if graph.map and graph.map.floors:
         floors = [(floor.id, floor.size_px[0], floor.size_px[1], floor.image) for floor in graph.map.floors]
     else:
@@ -318,12 +517,8 @@ def render_route_maps(
         floors = [(floor, 1200, 800, None) for floor in explicit] or [("ABSTRACT", 1200, 800, None)]
 
     maps: list[RenderedFloorMap] = []
-    found = {visit.camera for hypothesis in step_result.hypotheses for visit in hypothesis.visits}
-    checked_empty = {
-        window.camera for window in step_result.state.probed_windows
-        if window.status == ProbeStatus.DONE and not window.found
-    }
-    current = best.visits[-1].camera if best and best.visits else None
+    relevant_cameras = _relevant_cameras(step_result, best)
+    shown_layers: set[RouteLayer] = set()
 
     for floor_id, width, height, image_path in sorted(floors):
         positions = _layout(graph, floor_id, width, height)
@@ -345,69 +540,94 @@ def render_route_maps(
                 f'x="0" y="0" width="{width}" height="{height}" preserveAspectRatio="none"/>'
             )
 
-        content.extend(
-            _reachable_elements(step_result, graph, floor_id, positions)
+        reachable_elements = _reachable_elements(
+            step_result, graph, floor_id, positions
         )
+        if reachable_elements:
+            shown_layers.add(RouteLayer.SEARCH_AREA)
+            content.extend(reachable_elements)
 
+        floor_has_inferred = False
+        observed_elements: list[str] = []
+        inferred_elements: list[str] = []
         alternatives = sorted(
             (item for item in step_result.hypotheses if best is None or item.id != best.id),
             key=lambda item: (-item.score, item.id),
         )
         for hypothesis in alternatives:
-            content.extend(
-                _route_elements(
-                    hypothesis,
-                    graph,
-                    floor_id,
-                    positions,
-                    "alternative-path",
-                    True,
-                )
+            alternative_elements = _route_elements(
+                hypothesis,
+                graph,
+                floor_id,
+                positions,
+                "alternative-path",
+                True,
             )
+            if alternative_elements:
+                floor_has_inferred = True
+                shown_layers.add(RouteLayer.INFERRED)
+                content.extend(alternative_elements)
         if best:
-            content.append('<g data-role="best-route">')
-            content.extend(
-                _route_elements(
-                    best,
-                    graph,
-                    floor_id,
-                    positions,
-                    "inferred-path",
-                    False,
-                )
+            inferred_elements = _route_elements(
+                best,
+                graph,
+                floor_id,
+                positions,
+                "inferred-path",
+                False,
             )
-            content.extend(_observed_elements(best, floor_id))
+            observed_elements = _observed_elements(best, floor_id)
+            content.append('<g data-role="best-route">')
+            if inferred_elements:
+                floor_has_inferred = True
+                shown_layers.add(RouteLayer.INFERRED)
+                content.extend(inferred_elements)
+            if observed_elements:
+                shown_layers.add(RouteLayer.OBSERVED)
+                content.extend(observed_elements)
             content.append('</g>')
 
-        for zone in step_result.estimate.zones if step_result.estimate else []:
-            point = positions.get(zone.zone)
-            if point:
-                x, y = point
-                content.append(
-                    f'<g data-role="estimate"><circle cx="{x:.2f}" cy="{y:.2f}" r="24" '
-                    f'fill="#8b5cf6" fill-opacity="{min(0.15 + zone.probability * 0.55, 0.7):.3f}"/>'
-                    f'<text x="{x + 28:.2f}" y="{y + 5:.2f}">{zone.probability:.0%}</text></g>'
-                )
-
-        for camera in sorted(graph.cameras):
+        floor_camera_count = 0
+        for camera, camera_state in sorted(relevant_cameras.items()):
             point = positions.get(camera)
             if point is None:
                 continue
-            if camera == current:
-                colour, state_name, radius = "#dc2626", "current", 11
-            elif camera in found:
-                colour, state_name, radius = "#16a34a", "found", 9
-            elif camera in checked_empty:
-                colour, state_name, radius = "#64748b", "checked-empty", 8
-            else:
-                colour, state_name, radius = "#2563eb", "unchecked", 8
-            x, y = point
-            content.append(
-                f'<g data-role="camera" data-state="{state_name}"><circle cx="{x:.2f}" cy="{y:.2f}" '
-                f'r="{radius}" fill="{colour}" stroke="#fff" stroke-width="2"/>'
-                f'<text class="label" x="{x + 13:.2f}" y="{y - 10:.2f}">{escape(camera)}</text></g>'
+            floor_camera_count += 1
+            content.append(_camera_element(camera, camera_state, point))
+        if floor_camera_count:
+            shown_layers.add(RouteLayer.CAMERAS)
+
+        last_position = presentation.last_confirmed_position
+        position_on_floor = bool(
+            last_position and last_position.floor_id == floor_id
+        )
+        if last_position is not None and position_on_floor:
+            shown_layers.add(RouteLayer.LAST_POSITION)
+            content.append(_last_position_element(last_position))
+        relevant_blind_nodes = {
+            node_id
+            for segment in (
+                step_result.estimate.reachable_segments
+                if step_result.estimate is not None
+                else []
             )
-        for node in sorted(graph.blind_nodes, key=lambda item: item.id):
+            for node_id in (segment.source, segment.target)
+        } | {
+            node.node_id
+            for node in (
+                step_result.estimate.reachable_nodes
+                if step_result.estimate is not None
+                else []
+            )
+        }
+        for node in sorted(
+            (
+                item
+                for item in graph.blind_nodes
+                if item.id in relevant_blind_nodes
+            ),
+            key=lambda item: item.id,
+        ):
             point = positions.get(node.id)
             if point:
                 x, y = point
@@ -415,28 +635,42 @@ def render_route_maps(
                     f'<g data-role="blind-node"><rect x="{x - 8:.2f}" y="{y - 8:.2f}" width="16" height="16" '
                     f'fill="#111827"/><text x="{x + 13:.2f}" y="{y + 5:.2f}">{escape(node.id)}</text></g>'
                 )
-        calculated_at = (
-            step_result.estimate.calculated_at.isoformat()
-            if step_result.estimate and step_result.estimate.calculated_at
-            else "unknown"
-        )
-        content.append(
-            '<g data-role="legend" transform="translate(18 24)">'
-            '<rect x="-8" y="-18" width="340" height="92" rx="6" fill="#fff" fill-opacity="0.86"/>'
-            '<line x1="0" y1="0" x2="34" y2="0" stroke="#0891b2" stroke-width="6"/>'
-            '<text x="44" y="5">observed (calibrated)</text>'
-            '<line x1="0" y1="24" x2="34" y2="24" stroke="#ef4444" stroke-width="7"/>'
-            '<text x="44" y="29">inferred / approximate</text>'
-            '<line x1="0" y1="48" x2="34" y2="48" stroke="#7c3aed" stroke-width="12" stroke-opacity="0.5"/>'
-            '<text x="44" y="53">reachable / uncertain</text>'
-            f'<text x="0" y="72">calculated {escape(calculated_at)}</text></g>'
-        )
+        content.append(_status_element(_status_text(step_result, presentation)))
+        floor_layers: list[RouteLayer] = []
+        if observed_elements:
+            floor_layers.append(RouteLayer.OBSERVED)
+        if floor_has_inferred:
+            floor_layers.append(RouteLayer.INFERRED)
+        if reachable_elements:
+            floor_layers.append(RouteLayer.SEARCH_AREA)
+        if position_on_floor:
+            floor_layers.append(RouteLayer.LAST_POSITION)
+        if floor_camera_count:
+            floor_layers.append(RouteLayer.CAMERAS)
+        if floor_layers:
+            content.append(_legend_element(floor_layers))
         content.append('</svg>')
-        if best and best.visits:
-            route_text = " to ".join(visit.camera for visit in best.visits)
-            alt_text = f"Best route on floor {floor_id}: {route_text}"
+        if best and best.observed_segments:
+            observed_cameras = sorted(
+                {
+                    camera
+                    for segment in best.observed_segments
+                    for camera in segment.camera_ids
+                }
+            )
+            sources = ", ".join(observed_cameras) or "calibrated cameras"
+            alt_text = (
+                f"Observed movement on floor {floor_id} from {sources}. "
+                f"{_status_text(step_result, presentation)}."
+            )
+        elif best and best.visits:
+            sources = ", ".join(sorted({visit.camera for visit in best.visits}))
+            alt_text = (
+                f"Search evidence on floor {floor_id} from {sources}. "
+                f"{_status_text(step_result, presentation)}."
+            )
         else:
-            alt_text = f"Route map on floor {floor_id}; no confirmed route"
+            alt_text = f"Search map on floor {floor_id}; no confirmed position"
         maps.append(
             RenderedFloorMap(
                 floor_id=floor_id,
@@ -446,8 +680,12 @@ def render_route_maps(
                 alt_text=alt_text,
             )
         )
+    presentation = presentation.model_copy(
+        update={"shown_layers": sorted(shown_layers, key=lambda item: item.value)}
+    )
     return RenderedRouteBundle(
         route_revision=step_result.state.state_version,
         best_hypothesis_id=best.id if best else None,
+        presentation=presentation,
         maps=maps,
     )
