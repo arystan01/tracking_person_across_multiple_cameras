@@ -16,6 +16,7 @@ from .contracts import (
 )
 from .contracts.params import RoutingParams
 from .expand import _camera_paths, _softmax
+from .frontier import frontier_horizon
 from .update import _scale_edge
 
 
@@ -111,11 +112,34 @@ def check_stop_conditions(
         return True, StopReason.OPERATOR_CLOSED
     if state.camera_minutes_used >= params.camera_minute_budget:
         return True, StopReason.BUDGET_SPENT
-    observed = [visit.t_out for hypothesis in hypotheses for visit in hypothesis.visits]
-    if observed and (now - max(observed)).total_seconds() >= params.max_gap_s:
-        return True, StopReason.MAX_GAP
+    frontier = state.search_frontier
+    frontier_idle = frontier is None or (
+        not frontier.required_probe_ids and not state.pending_probes
+    )
+    if frontier is not None and frontier_idle:
+        gap_horizon = frontier.last_observed_at + timedelta(
+            seconds=params.max_gap_s
+        )
+        if frontier.reached_at >= gap_horizon:
+            return True, StopReason.MAX_GAP
+        if (
+            state.window_end is not None
+            and state.window_end < gap_horizon
+            and frontier.reached_at >= state.window_end
+        ):
+            return True, StopReason.ALL_ENDED
     if hypotheses and all(item.status == HypothesisStatus.ENDED for item in hypotheses):
-        return True, StopReason.ALL_ENDED
+        horizon = frontier_horizon(state, params)
+        available_to = min(horizon, now) if horizon is not None else None
+        if (
+            frontier is None
+            or (
+                frontier_idle
+                and available_to is not None
+                and frontier.reached_at >= available_to
+            )
+        ):
+            return True, StopReason.ALL_ENDED
     return False, None
 
 

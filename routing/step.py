@@ -20,6 +20,15 @@ from .contracts import (
 )
 from .contracts.params import RoutingParams
 from .expand import _probe_id, expand_dormant_watch_probes, expand_hypotheses
+from .frontier import (
+    advance_empty_shell,
+    advance_finished_frontier,
+    clamp_probe_to_shell,
+    initialise_frontier,
+    prepare_historical_shell,
+    register_required_probes,
+    sync_observation_frontier,
+)
 from .predict import (
     check_stop_conditions,
     compute_estimate,
@@ -116,6 +125,7 @@ def init_state(case: CaseInfo, graph: SiteGraph, params: RoutingParams) -> Searc
         window_start=case.window_start,
         window_end=case.window_end,
         hypotheses=hypotheses,
+        search_frontier=initialise_frontier(hypotheses),
         mode=SearchMode.WAITING if hypotheses and hypotheses[0].status == HypothesisStatus.DORMANT else SearchMode.CATCHING_UP,
     )
 
@@ -206,6 +216,8 @@ def step(
     hypotheses, rejected, state = update_hypotheses(
         state, valid_results, graph, anchors, params, now
     )
+    sync_observation_frontier(state, hypotheses)
+    advance_finished_frontier(state)
     retries = [probe for probe in state.pending_probes if probe.probe_id not in previous_pending]
 
     if anchors.review_only:
@@ -261,12 +273,32 @@ def step(
 
     route_probes, ambiguities = expand_hypotheses(state, graph, params, now)
     watch_probes = expand_dormant_watch_probes(state, graph, params, now)
+    historical_active = prepare_historical_shell(state, params, now)
+    clamped_candidates: list[ProbeRequest] = []
+    for probe in route_probes + watch_probes:
+        clamped = clamp_probe_to_shell(probe, state)
+        if clamped is None:
+            continue
+        if clamped.t_from != probe.t_from or clamped.t_to != probe.t_to:
+            clamped = clamped.model_copy(
+                update={
+                    "probe_id": _probe_id(
+                        clamped.camera,
+                        clamped.t_from,
+                        clamped.t_to,
+                        clamped.reason,
+                        clamped.hypothesis_ids,
+                    )
+                }
+            )
+        clamped_candidates.append(clamped)
     candidates = sorted(
-        route_probes + watch_probes,
+        {probe.probe_id: probe for probe in clamped_candidates}.values(),
         key=lambda item: (-item.priority, item.camera, item.t_from, item.probe_id),
     )
     capacity = max(params.K - len(state.pending_probes), 0)
     new_probes = candidates[:capacity]
+    register_required_probes(state, new_probes)
     state.pending_probes.extend(new_probes)
     state.pending_probes.sort(
         key=lambda item: (-item.priority, item.camera, item.t_from, item.probe_id)
@@ -275,7 +307,13 @@ def step(
         retries + new_probes,
         key=lambda item: (-item.priority, item.camera, item.t_from, item.probe_id),
     )
-    state.mode = determine_mode(state, hypotheses, now, graph)
+    if historical_active and not new_probes and not retries:
+        advance_empty_shell(state)
+    state.mode = (
+        SearchMode.CATCHING_UP
+        if historical_active
+        else determine_mode(state, hypotheses, now, graph)
+    )
     return StepResult(
         state=state,
         probes=emitted,
