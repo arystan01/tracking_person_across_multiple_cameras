@@ -8,6 +8,7 @@ can open the exact SVG returned through Controls after the test finishes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import importlib.util
 import json
@@ -137,6 +138,8 @@ def _write_site_registry(run_root: Path, repository_root: Path) -> Path:
         }
         for camera, (zone, map_xy) in camera_positions.items()
     }
+    cameras["Cam001"]["overlap_camera_ids"] = ["Cam003"]
+    cameras["Cam003"]["overlap_camera_ids"] = ["Cam001"]
     site = {
         "site": "nvidia-mtmc-4cam",
         "version": "real-cv-e2e-v1",
@@ -153,35 +156,36 @@ def _write_site_registry(run_root: Path, repository_root: Path) -> Path:
             ]
         },
         "cameras": cameras,
-        "edges": [
-            {
-                "id": "Cam001-Cam003",
-                "from": "Cam001",
-                "to": "Cam003",
-                "t_min": 1,
-                "t_typ": 8,
-                "t_max": 30,
-                "d_m": 12,
-                "map_path": [[570, 540], [545, 640]],
+        # Camera edges are for probe planning only. Cam001 and Cam003 overlap,
+        # so there is deliberately no pedestrian transition between them.
+        "edges": [],
+        "walk_graph": {
+            "nodes": {
+                "route-0": {"floor_id": "warehouse", "map_xy": [645, 505]},
+                "route-1": {"floor_id": "warehouse", "map_xy": [665, 507]},
+                "route-2": {"floor_id": "warehouse", "map_xy": [685, 500]},
+                "route-3": {"floor_id": "warehouse", "map_xy": [710, 490]},
+                "route-4": {"floor_id": "warehouse", "map_xy": [740, 480]},
             },
-            {
-                "id": "Cam003-Cam004",
-                "from": "Cam003",
-                "to": "Cam004",
-                "t_min": 1,
-                "t_typ": 8,
-                "t_max": 30,
-                "d_m": 10,
-                "map_path": [[610, 750], [680, 770]],
-            },
-        ],
+            "edges": [
+                {"id": "route-0-1", "from": "route-0", "to": "route-1", "floor_id": "warehouse"},
+                {"id": "route-1-2", "from": "route-1", "to": "route-2", "floor_id": "warehouse"},
+                {"id": "route-2-3", "from": "route-2", "to": "route-3", "floor_id": "warehouse"},
+                {"id": "route-3-4", "from": "route-3", "to": "route-4", "floor_id": "warehouse"},
+            ],
+        },
         "max_gap_s": 2400,
     }
     (site_dir / "site.yaml").write_text(
         yaml.safe_dump(site, sort_keys=False), encoding="utf-8"
     )
     (params_dir / "real-cv-e2e-params-v1.yaml").write_text(
-        "version: real-cv-e2e-params-v1\nK: 4\nB: 5\n",
+        "version: real-cv-e2e-params-v1\n"
+        "K: 4\nB: 5\n"
+        "anchor_probe_window_s: 5\n"
+        "overlap_time_tolerance_s: 1\n"
+        "overlap_position_tolerance_m: 0.75\n"
+        "max_walk_snap_m: 3\n",
         encoding="utf-8",
     )
     return site_root
@@ -195,7 +199,143 @@ def _reference_jpeg(video: Path) -> bytes:
     ok, frame = capture.read()
     capture.release()
     assert ok, f"cannot read reference frame from {video}"
-    encoded_ok, encoded = cv2.imencode(".jpg", frame)
+    # The target is the woman in a burgundy top and light-blue jeans. A target
+    # crop prevents the gallery builder from choosing an unrelated large bbox.
+    target = frame[720:1000, 260:410]
+    assert target.shape[:2] == (280, 150)
+    encoded_ok, encoded = cv2.imencode(".jpg", target)
+    assert encoded_ok
+    return encoded.tobytes()
+
+
+def _clip_video_window(
+    source: Path,
+    destination: Path,
+    *,
+    start_s: float,
+    duration_s: float,
+) -> None:
+    """Make the fixture behave like an archive returning the exact window."""
+    import cv2
+
+    capture = cv2.VideoCapture(str(source))
+    assert capture.isOpened(), f"cannot open {source}"
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    assert fps > 0 and width > 0 and height > 0
+    first_frame = max(int(round(start_s * fps)), 0)
+    frame_count = max(int(round(duration_s * fps)), 1)
+    capture.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(
+        str(destination),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (width, height),
+    )
+    assert writer.isOpened(), f"cannot create {destination}"
+    try:
+        for _ in range(frame_count):
+            ok, frame = capture.read()
+            if not ok:
+                break
+            writer.write(frame)
+    finally:
+        writer.release()
+        capture.release()
+    assert destination.is_file() and destination.stat().st_size > 0
+
+
+def _verification_jpeg(
+    videos: dict[str, Path],
+    map_path: Path,
+    tracklets,
+    selected_tracklet_ids: set[str],
+    observed_points: list[dict],
+) -> bytes:
+    """Build a human-checkable video/map contact sheet for this exact run."""
+    import cv2
+    import numpy as np
+
+    colours = {"Cam001": (255, 180, 0), "Cam003": (0, 220, 255)}
+    panels = []
+    for camera_id in ("Cam001", "Cam003"):
+        capture = cv2.VideoCapture(str(videos[camera_id]))
+        capture.set(cv2.CAP_PROP_POS_MSEC, 7500)
+        ok, frame = capture.read()
+        capture.release()
+        assert ok
+        camera_points = [
+            (int(round(point.x_px)), int(round(point.y_px)))
+            for tracklet in tracklets
+            if tracklet.camera == camera_id
+            and tracklet.id in selected_tracklet_ids
+            for point in (tracklet.trajectory or [])
+        ]
+        if len(camera_points) >= 2:
+            cv2.polylines(
+                frame,
+                [np.asarray(camera_points, dtype=np.int32)],
+                False,
+                colours[camera_id],
+                8,
+                cv2.LINE_AA,
+            )
+        for point in camera_points:
+            cv2.circle(frame, point, 8, colours[camera_id], -1, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            f"{camera_id}: real target foot-points",
+            (35, 55),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.25,
+            (20, 20, 20),
+            5,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            f"{camera_id}: real target foot-points",
+            (35, 55),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.25,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        panels.append(cv2.resize(frame, (640, 360)))
+
+    floor_map = cv2.imread(str(map_path))
+    assert floor_map is not None
+    map_points = [
+        (int(round(point["x"])), int(round(point["y"])))
+        for point in observed_points
+    ]
+    if len(map_points) >= 2:
+        cv2.polylines(
+            floor_map,
+            [np.asarray(map_points, dtype=np.int32)],
+            False,
+            (255, 190, 0),
+            8,
+            cv2.LINE_AA,
+        )
+    for point in map_points:
+        cv2.circle(floor_map, point, 7, (0, 0, 220), -1, cv2.LINE_AA)
+    cv2.putText(
+        floor_map,
+        "fused observed ground path",
+        (35, 55),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.25,
+        (255, 255, 255),
+        3,
+        cv2.LINE_AA,
+    )
+    panels.append(cv2.resize(floor_map, (640, 360)))
+    contact_sheet = np.concatenate(panels, axis=1)
+    encoded_ok, encoded = cv2.imencode(".jpg", contact_sheet)
     assert encoded_ok
     return encoded.tobytes()
 
@@ -208,6 +348,7 @@ def _publish_inspectable_output(
     case_view: dict,
     probe_results: list[dict],
     report: dict,
+    verification_jpeg: bytes,
 ) -> None:
     output_root.mkdir(parents=True, exist_ok=True)
     files = {
@@ -215,6 +356,7 @@ def _publish_inspectable_output(
         "case-view.json": json.dumps(case_view, indent=2).encode(),
         "probe-results.json": json.dumps(probe_results, indent=2).encode(),
         "report.json": json.dumps(report, indent=2).encode(),
+        "verification.jpg": verification_jpeg,
     }
     for name, data in files.items():
         (run_root / name).write_bytes(data)
@@ -227,6 +369,8 @@ def _publish_inspectable_output(
         "img{max-width:100%;border:1px solid #cbd5e1;background:white}"
         "pre{background:#fff;padding:16px;overflow:auto}</style>"
         "<h1>JAVES real-CV E2E route</h1><img src='route.svg' alt='route'>"
+        "<h2>Video and map verification</h2>"
+        "<img src='verification.jpg' alt='Cam001, Cam003 and fused map path'>"
         f"<h2>Run report</h2><pre>{summary}</pre>"
     )
     (run_root / "index.html").write_text(page, encoding="utf-8")
@@ -278,6 +422,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
     run_root.mkdir(parents=True)
     site_root = _write_site_registry(run_root, repository_root)
     artifact_store = FileArtifactStore(run_root / "artifact-store")
+    base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=30)
 
     videos = {
         "Cam001": repository_root
@@ -292,6 +437,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
     assert all(path.is_file() for path in videos.values())
     assert (repository_root / "models/yolo26n.pt").is_file()
     assert (repository_root / "models/osnet_ain_x1_0_msmt17.pt").is_file()
+    archive_clip_cache: dict[str, Path] = {}
 
     archive_api = FastAPI(title="read-only NVIDIA CCTV fixture")
 
@@ -312,6 +458,23 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
                 requested_to=body.t_to,
                 coverage_ratio=0.0,
             )
+        start_s = max((body.t_from - base).total_seconds(), 0.0)
+        duration_s = max((body.t_to - body.t_from).total_seconds(), 0.0)
+        clip_key = hashlib.sha256(
+            (
+                f"{body.camera_id}\x1f{start_s:.6f}\x1f{duration_s:.6f}"
+            ).encode()
+        ).hexdigest()[:20]
+        clip_path = archive_clip_cache.get(clip_key)
+        if clip_path is None:
+            clip_path = run_root / "archive-clips" / f"{clip_key}.mp4"
+            _clip_video_window(
+                videos[body.camera_id],
+                clip_path,
+                start_s=start_s,
+                duration_s=duration_s,
+            )
+            archive_clip_cache[clip_key] = clip_path
         return VideoSegmentResult(
             request_id=body.request_id,
             camera_id=body.camera_id,
@@ -321,7 +484,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             covered_from=body.t_from,
             covered_to=body.t_to,
             coverage_ratio=1.0,
-            source_ref=ArtifactRef(uri=videos[body.camera_id].resolve().as_uri()),
+            source_ref=ArtifactRef(uri=clip_path.resolve().as_uri()),
         )
 
     site_registry = FilesystemSiteConfigRegistry(site_root)
@@ -342,7 +505,6 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             "http://routing", "routing-secret", client=routing_http
         )
 
-        base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=30)
         clock = FixedClock(base + timedelta(seconds=16))
         repository = InMemoryRepository()
         ids = ContentIdGenerator()
@@ -402,8 +564,13 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
                 operator_id=root_user.user_id,
                 target_id="nvidia-reference-person",
                 reference_image_ref=ArtifactRef(object_key=reference_key),
-                last_known=LastKnown(camera_id="Cam001", time=base),
-                window=CaseWindow(start=base, end=base + timedelta(seconds=16)),
+                last_known=LastKnown(
+                    camera_id="Cam001", time=base + timedelta(seconds=5)
+                ),
+                window=CaseWindow(
+                    start=base + timedelta(seconds=5),
+                    end=base + timedelta(seconds=16),
+                ),
                 site_id="nvidia-mtmc-4cam",
                 site_version="real-cv-e2e-v1",
             ).model_dump(mode="json"),
@@ -422,8 +589,8 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             json=VideoSegmentRequest(
                 request_id="real-cv-contract-check",
                 camera_id="Cam003",
-                t_from=base,
-                t_to=base + timedelta(seconds=16),
+                t_from=base + timedelta(seconds=5),
+                t_to=base + timedelta(seconds=10),
             ).model_dump(mode="json"),
         )
         assert archive_contract.status_code == 200, archive_contract.text
@@ -466,17 +633,22 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             gallery_dispatch = routing_dispatcher.drain()
             assert gallery_dispatch.completed == 1
             pending_jobs = repository.list_jobs(case_id, states={"PENDING"})
-            assert len(pending_jobs) == 1
-            assert pending_jobs[0].payload.probe.camera == "Cam003"
+            assert len(pending_jobs) == 2
+            assert {
+                job.payload.probe.camera for job in pending_jobs
+            } == {"Cam001", "Cam003"}
+            assert {
+                job.payload.probe.reason for job in pending_jobs
+            } == {"ANCHOR_EVIDENCE"}
 
-            assert runner.run_once(limit=4, lease_seconds=600) == 1
+            assert runner.run_once(limit=4, lease_seconds=600) == 2
             probe_jobs = repository.list_jobs(case_id)
             assert all(job.state == "DONE" for job in probe_jobs), [
                 (job.job_id, job.state, job.attempt, job.last_error)
                 for job in probe_jobs
             ]
             probe_dispatch = routing_dispatcher.drain()
-            assert probe_dispatch.completed == 1
+            assert probe_dispatch.completed == 2
         finally:
             perception_state.close()
 
@@ -507,16 +679,102 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         route_cameras = [
             visit["camera_id"] for visit in view["best_hypothesis"]["visits"]
         ]
-        assert route_cameras[:2] == ["Cam001", "Cam003"]
-        projected_visit = next(
+        assert {"Cam001", "Cam003"}.issubset(route_cameras)
+        projected_visits = [
             visit
             for visit in view["best_hypothesis"]["visits"]
             if visit["projected_trajectory"]
+        ]
+        assert {visit["camera_id"] for visit in projected_visits} == {
+            "Cam001",
+            "Cam003",
+        }
+        overlap_transition = next(
+            transition
+            for transition in view["best_hypothesis"]["transitions"]
+            if transition["kind"] == "OVERLAP"
         )
+        assert overlap_transition["geometry"] is None
+
+        observed_segments = view["best_hypothesis"]["observed_segments"]
+        assert len(observed_segments) == 1
+        observed_segment = observed_segments[0]
+        assert observed_segment["camera_ids"] == ["Cam001", "Cam003"]
+        observed_points = observed_segment["points"]
+        assert len(observed_points) >= 3
+        selected_tracklet_ids = set(observed_segment["tracklet_ids"])
+
+        camera_points = {
+            visit["camera_id"]: visit["projected_trajectory"]
+            for visit in projected_visits
+        }
+        aligned_distances_m = []
+        m_per_px = 0.3048 / ((9.781818 + 9.785714) / 2.0)
+        for left in camera_points["Cam001"]:
+            left_time = datetime.fromisoformat(left["timestamp"])
+            candidates = [
+                right
+                for right in camera_points["Cam003"]
+                if abs(
+                    (
+                        datetime.fromisoformat(right["timestamp"])
+                        - left_time
+                    ).total_seconds()
+                )
+                <= 0.2
+            ]
+            if not candidates:
+                continue
+            right = min(
+                candidates,
+                key=lambda item: abs(
+                    (
+                        datetime.fromisoformat(item["timestamp"])
+                        - left_time
+                    ).total_seconds()
+                ),
+            )
+            aligned_distances_m.append(
+                (
+                    (left["x"] - right["x"]) ** 2
+                    + (left["y"] - right["y"]) ** 2
+                )
+                ** 0.5
+                * m_per_px
+            )
+        assert aligned_distances_m
+        aligned_distances_m.sort()
+        median_alignment_error_m = aligned_distances_m[
+            len(aligned_distances_m) // 2
+        ]
+        assert median_alignment_error_m <= 0.25
+
+        xs = [point["x"] for point in observed_points]
+        ys = [point["y"] for point in observed_points]
+        assert min(xs) >= 645 and max(xs) <= 695
+        assert min(ys) >= 485 and max(ys) <= 525
+        assert xs[-1] - xs[0] >= 8
+        observed_distance_m = sum(
+            (
+                (right["x"] - left["x"]) ** 2
+                + (right["y"] - left["y"]) ** 2
+            )
+            ** 0.5
+            * m_per_px
+            for left, right in zip(observed_points, observed_points[1:])
+        )
+        assert 0.2 <= observed_distance_m <= 3.0
+
         source_tracklet = next(
             tracklet
             for tracklet in real_tracklets
-            if tracklet.id in projected_visit["tracklet_ids"]
+            if tracklet.id in selected_tracklet_ids
+        )
+        projected_visit = next(
+            visit
+            for visit in projected_visits
+            if visit["camera_id"] == source_tracklet.camera
+            and source_tracklet.id in visit["tracklet_ids"]
         )
         source_point = (source_tracklet.trajectory or [])[0]
         import numpy as np
@@ -550,7 +808,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         assert b'data-role="floor-plan"' in route_svg
         assert b'data-role="best-route"' in route_svg
         assert b'data-role="observed-path"' in route_svg
-        assert b'data-role="inferred-path"' in route_svg
+        assert b'data-role="inferred-path"' not in route_svg
         assert b'data-role="legend"' in route_svg
         assert b"Cam001" in route_svg and b"Cam003" in route_svg
 
@@ -571,9 +829,30 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             ),
             "projection_error_px": projection_error_px,
             "allowed_projection_error_px": allowed_projection_error_px,
+            "median_cross_camera_alignment_error_m": median_alignment_error_m,
+            "allowed_cross_camera_alignment_error_m": 0.25,
+            "observed_distance_m": observed_distance_m,
+            "observed_bounds_px": {
+                "x": [min(xs), max(xs)],
+                "y": [min(ys), max(ys)],
+            },
             "positioning_source": "NVIDIA homography + real YOLO foot-points",
+            "target": "woman in burgundy top and light-blue jeans",
+            "source_videos": {
+                camera: str(path.resolve())
+                for camera, path in videos.items()
+                if camera in {"Cam001", "Cam003"}
+            },
+            "source_video_window_s": [5.0, 10.0],
             "run_directory": str(run_root.resolve()),
         }
+        verification_jpeg = _verification_jpeg(
+            videos,
+            repository_root / "data/nvidia_mtmc/mtmc_4cam/map.png",
+            real_tracklets,
+            selected_tracklet_ids,
+            observed_points,
+        )
         _publish_inspectable_output(
             output_root,
             run_root,
@@ -581,5 +860,6 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             case_view=view,
             probe_results=result_payloads,
             report=report,
+            verification_jpeg=verification_jpeg,
         )
         print(f"real-CV E2E output: {output_root}")
