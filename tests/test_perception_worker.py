@@ -9,6 +9,7 @@ from javes_contracts import ArtifactRef, PerceptionProbeJob, TargetGalleryComman
 from javes_contracts.acceptance import check_gallery_result, check_probe_result
 from javes_main.adapters.artifacts import InMemoryArtifactStore
 from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
+from javes_perception.core.worker import trajectory_from_path
 from javes_perception.runtime.state import PerceptionStateStore
 from javes_perception.runtime.video import DecodeError, VideoWindow
 from javes_contracts import ProbeRequest, ProbeStatus
@@ -128,8 +129,31 @@ def test_target_ranks_above_other_person():
     target = result.tracklets[0]
     assert target.t_in == T0 + timedelta(seconds=2)
     assert target.bbox_first == (20.0, 20.0, 60.0, 160.0)
+    assert target.trajectory
+    assert target.trajectory[0].x_px == 50.0
+    assert target.trajectory[0].y_px == 180.0
+    assert target.trajectory[0].confidence == 0.9
     assert target.crop_paths and artifacts.get(target.crop_paths[0])
     assert result.coverage_ratio == pytest.approx(1.0, abs=0.02)
+
+
+def test_trajectory_downsampling_is_deterministic_and_keeps_endpoints():
+    path = [
+        (
+            T0 + timedelta(milliseconds=index * 40),
+            (float(index), 10.0, float(index + 20), 50.0),
+        )
+        for index in range(1000)
+    ]
+    first = trajectory_from_path(path, [0.8] * len(path))
+    second = trajectory_from_path(path, [0.8] * len(path))
+    assert first == second
+    assert len(first) == 256
+    assert first[0].timestamp == path[0][0]
+    assert first[-1].timestamp == path[-1][0]
+    assert [point.timestamp for point in first] == sorted(
+        point.timestamp for point in first
+    )
 
 
 def test_retry_gives_same_ids():
@@ -261,6 +285,22 @@ def test_open_checkpoint_and_gallery_command_survive_process_restart(tmp_path):
     assert second.status == ProbeStatus.DONE
     assert second.processed_duration_s >= first.processed_duration_s
     check_probe_result(open_job, second, previous=first)
+    first_by_id = {tracklet.id: tracklet for tracklet in first.tracklets}
+    extended = [
+        tracklet
+        for tracklet in second.tracklets
+        if tracklet.id in first_by_id
+        and tracklet.trajectory
+        and first_by_id[tracklet.id].trajectory
+        and tracklet.trajectory[-1].timestamp
+        > first_by_id[tracklet.id].trajectory[-1].timestamp
+    ]
+    assert extended
+    for tracklet in extended:
+        timestamps = [point.timestamp for point in tracklet.trajectory or []]
+        assert timestamps == sorted(set(timestamps))
+        previous_points = first_by_id[tracklet.id].trajectory or []
+        assert tracklet.trajectory[: len(previous_points)] == previous_points
     assert restarted.update_gallery(
         TargetGalleryCommand(
             command_id="g1",
