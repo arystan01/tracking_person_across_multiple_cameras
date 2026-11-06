@@ -557,7 +557,9 @@ class Transition(ContractModel):
     edge_ids: list[str] = Field(default_factory=list)
     alternative_edge_paths: list[list[str]] = Field(default_factory=list)
     via_nodes: list[str] = Field(default_factory=list)
-    kind: Literal["EDGE", "BLIND", "OUTSIDE", "UNKNOWN", "VERTICAL", "GAP"] = "EDGE"
+    kind: Literal[
+        "EDGE", "BLIND", "OUTSIDE", "UNKNOWN", "VERTICAL", "GAP", "OVERLAP"
+    ] = "EDGE"
     flags: list[str] = Field(default_factory=list)
     geometry: TransitionGeometry | None = None
 

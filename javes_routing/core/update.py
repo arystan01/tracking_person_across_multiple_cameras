@@ -5,15 +5,17 @@ import hashlib
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from javes_contracts import (
     Anchors,
     Candidate,
     EdgeDef,
+    GroundPosition,
     Hypothesis,
     HypothesisStatus,
+    ObservedSegment,
     ProbeRequest,
     ProbeResult,
     ProbeStatus,
@@ -298,6 +300,11 @@ def gate_visit_details(
 ) -> GateResult:
     if last_visit is None:
         return GateResult(0.0)
+    overlap_gate = _gate_overlapping_observations(
+        last_visit, visit, graph, params
+    )
+    if overlap_gate is not None:
+        return overlap_gate
     dt = (visit.t_in - last_visit.t_out).total_seconds()
     if dt < 0:
         return GateResult(0.0, reject_reason="arrival before previous visit ended", gate_margin_s=dt)
@@ -499,6 +506,263 @@ def gate_visit_details(
         via_nodes=best[2],
         kind=best[3],
     )
+
+
+def _floor_scale(graph: SiteGraph, floor_id: str) -> float | None:
+    if graph.map is None:
+        return None
+    floor = next((item for item in graph.map.floors if item.id == floor_id), None)
+    return floor.m_per_px if floor is not None else None
+
+
+def _declared_overlap(first_camera: str, second_camera: str, graph: SiteGraph) -> bool:
+    if first_camera == second_camera:
+        return False
+    first = graph.cameras.get(first_camera)
+    second = graph.cameras.get(second_camera)
+    return bool(
+        first
+        and second
+        and second_camera in first.overlap_camera_ids
+        and first_camera in second.overlap_camera_ids
+    )
+
+
+def _overlap_point_pairs(
+    first: Visit,
+    second: Visit,
+    tolerance_s: float,
+):
+    pairs = []
+    for left in first.projected_trajectory:
+        candidates = [
+            right
+            for right in second.projected_trajectory
+            if right.floor_id == left.floor_id
+            and abs((right.timestamp - left.timestamp).total_seconds())
+            <= tolerance_s
+        ]
+        if candidates:
+            right = min(
+                candidates,
+                key=lambda item: (
+                    abs((item.timestamp - left.timestamp).total_seconds()),
+                    item.timestamp,
+                    item.x,
+                    item.y,
+                ),
+            )
+            pairs.append((left, right))
+    return pairs
+
+
+def _gate_overlapping_observations(
+    first: Visit,
+    second: Visit,
+    graph: SiteGraph,
+    params: RoutingParams,
+) -> GateResult | None:
+    if not _declared_overlap(first.camera, second.camera, graph):
+        return None
+    tolerance = timedelta(seconds=params.overlap_time_tolerance_s)
+    if second.t_in > first.t_out + tolerance or first.t_in > second.t_out + tolerance:
+        return None
+    pairs = _overlap_point_pairs(
+        first, second, params.overlap_time_tolerance_s
+    )
+    if not pairs:
+        return GateResult(
+            0.0,
+            kind="OVERLAP",
+            reject_reason=(
+                f"overlap cameras {first.camera}/{second.camera} have no "
+                "synchronised calibrated ground points"
+            ),
+        )
+    conflicts = []
+    for left, right in pairs:
+        scale = _floor_scale(graph, left.floor_id)
+        if scale is None:
+            return GateResult(
+                0.0,
+                kind="OVERLAP",
+                reject_reason=f"floor {left.floor_id} has no metric map scale",
+            )
+        distance_m = math.hypot(right.x - left.x, right.y - left.y) * scale
+        allowed_m = (
+            params.overlap_position_tolerance_m
+            + left.calibration_error_m
+            + right.calibration_error_m
+        )
+        if distance_m > allowed_m:
+            conflicts.append((distance_m, allowed_m))
+    if conflicts:
+        worst_distance, worst_allowed = max(conflicts)
+        return GateResult(
+            0.0,
+            kind="OVERLAP",
+            reject_reason=(
+                f"overlap conflict {first.camera}/{second.camera}: "
+                f"{worst_distance:.3f}m > {worst_allowed:.3f}m"
+            ),
+            gate_margin_s=worst_allowed - worst_distance,
+        )
+    return GateResult(0.0, kind="OVERLAP")
+
+
+def _ground_observations(hypothesis: Hypothesis):
+    observations = []
+    for visit in hypothesis.visits:
+        for point in visit.projected_trajectory:
+            observations.append((point, visit.camera, tuple(visit.tracklet_ids)))
+    return sorted(
+        observations,
+        key=lambda item: (
+            item[0].timestamp,
+            item[1],
+            item[0].x,
+            item[0].y,
+            item[2],
+        ),
+    )
+
+
+def _fuse_position_group(group) -> GroundPosition:
+    weights = []
+    for point, _, _ in group:
+        confidence = point.confidence if point.confidence is not None else 1.0
+        weights.append(confidence / max(point.calibration_error_m, 0.05) ** 2)
+    total_weight = sum(weights)
+    timestamp_s = sum(
+        point.timestamp.timestamp() * weight
+        for (point, _, _), weight in zip(group, weights)
+    ) / total_weight
+    return GroundPosition(
+        timestamp=datetime.fromtimestamp(timestamp_s, tz=timezone.utc),
+        x=round(
+            sum(point.x * weight for (point, _, _), weight in zip(group, weights))
+            / total_weight,
+            4,
+        ),
+        y=round(
+            sum(point.y * weight for (point, _, _), weight in zip(group, weights))
+            / total_weight,
+            4,
+        ),
+        floor_id=group[0][0].floor_id,
+        error_m=round(math.sqrt(1.0 / total_weight), 4),
+        confidence=max(
+            (
+                point.confidence
+                for point, _, _ in group
+                if point.confidence is not None
+            ),
+            default=None,
+        ),
+        source_camera_ids=[camera for _, camera, _ in group],
+        source_tracklet_ids=[
+            tracklet_id
+            for _, _, tracklet_ids in group
+            for tracklet_id in tracklet_ids
+        ],
+    )
+
+
+def _sources_connect(
+    left: GroundPosition,
+    right: GroundPosition,
+    graph: SiteGraph,
+) -> bool:
+    return bool(
+        set(left.source_camera_ids) & set(right.source_camera_ids)
+        or any(
+            _declared_overlap(first, second, graph)
+            for first in left.source_camera_ids
+            for second in right.source_camera_ids
+        )
+    )
+
+
+def fuse_observed_segments(
+    hypothesis: Hypothesis,
+    graph: SiteGraph,
+    params: RoutingParams,
+) -> list[ObservedSegment]:
+    """Fuse consistent synchronous cameras into one person trajectory."""
+    remaining = _ground_observations(hypothesis)
+    fused: list[GroundPosition] = []
+    while remaining:
+        anchor = remaining.pop(0)
+        point, camera, _ = anchor
+        group = [anchor]
+        used_indices: list[int] = []
+        used_cameras = {camera}
+        for index, candidate in enumerate(remaining):
+            other, other_camera, _ = candidate
+            if other_camera in used_cameras:
+                continue
+            if other.floor_id != point.floor_id:
+                continue
+            if abs((other.timestamp - point.timestamp).total_seconds()) > params.overlap_time_tolerance_s:
+                continue
+            if not _declared_overlap(camera, other_camera, graph):
+                continue
+            scale = _floor_scale(graph, point.floor_id)
+            if scale is None:
+                continue
+            distance_m = math.hypot(other.x - point.x, other.y - point.y) * scale
+            allowed_m = (
+                params.overlap_position_tolerance_m
+                + point.calibration_error_m
+                + other.calibration_error_m
+            )
+            if distance_m <= allowed_m:
+                group.append(candidate)
+                used_indices.append(index)
+                used_cameras.add(other_camera)
+        for index in reversed(used_indices):
+            remaining.pop(index)
+        fused.append(_fuse_position_group(group))
+
+    segments: list[list[GroundPosition]] = []
+    for point in sorted(fused, key=lambda item: (item.timestamp, item.x, item.y)):
+        if (
+            not segments
+            or point.floor_id != segments[-1][-1].floor_id
+            or (point.timestamp - segments[-1][-1].timestamp).total_seconds()
+            > params.merge_gap_s
+            or not _sources_connect(segments[-1][-1], point, graph)
+        ):
+            segments.append([point])
+        else:
+            segments[-1].append(point)
+    result = []
+    for points in segments:
+        camera_ids = sorted(
+            {camera for point in points for camera in point.source_camera_ids}
+        )
+        tracklet_ids = sorted(
+            {
+                tracklet_id
+                for point in points
+                for tracklet_id in point.source_tracklet_ids
+            }
+        )
+        result.append(
+            ObservedSegment(
+                id=_make_id(
+                    "obs",
+                    points[0].timestamp.isoformat(),
+                    points[-1].timestamp.isoformat(),
+                    ",".join(camera_ids),
+                    ",".join(tracklet_ids),
+                ),
+                points=points,
+                camera_ids=camera_ids,
+                tracklet_ids=tracklet_ids,
+            )
+        )
+    return result
 
 
 def gate_visit_to_hypothesis(
@@ -1038,7 +1302,10 @@ def update_hypotheses(
             update={
                 "score": recompute_hypothesis_score(
                     hypothesis, graph, params, state.probed_windows, now, profile
-                )
+                ),
+                "observed_segments": fuse_observed_segments(
+                    hypothesis, graph, params
+                ),
             }
         )
         for hypothesis in hypotheses

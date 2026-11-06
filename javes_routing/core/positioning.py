@@ -107,6 +107,18 @@ def _observed_segments(
     graph: SiteGraph,
 ) -> list[tuple[float, float, float]]:
     segments: list[tuple[float, float, float]] = []
+    if hypothesis.observed_segments:
+        for observed in hypothesis.observed_segments:
+            for left, right in zip(observed.points, observed.points[1:]):
+                if left.floor_id != right.floor_id:
+                    continue
+                scale = _floor_scale(graph, left.floor_id)
+                duration_s = (right.timestamp - left.timestamp).total_seconds()
+                if scale is None or duration_s <= 0:
+                    continue
+                distance_m = math.hypot(right.x - left.x, right.y - left.y) * scale
+                segments.append((distance_m, duration_s, left.error_m + right.error_m))
+        return segments
     for visit in hypothesis.visits:
         for left, right in zip(
             visit.projected_trajectory, visit.projected_trajectory[1:]
