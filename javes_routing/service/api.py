@@ -78,6 +78,18 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
                 "last_known_time": (
                     body.anchors.last_known_time or body.case.last_known_time
                 ),
+                "last_known_bbox_xywh": (
+                    body.anchors.last_known_bbox_xywh
+                    or body.case.last_known_bbox_xywh
+                ),
+                "last_known_footpoint_px": (
+                    body.anchors.last_known_footpoint_px
+                    or body.case.last_known_footpoint_px
+                ),
+                "last_known_map_position": (
+                    body.anchors.last_known_map_position
+                    or body.case.last_known_map_position
+                ),
             },
             deep=True,
         )

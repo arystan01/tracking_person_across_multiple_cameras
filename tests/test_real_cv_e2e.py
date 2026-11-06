@@ -565,7 +565,9 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
                 target_id="nvidia-reference-person",
                 reference_image_ref=ArtifactRef(object_key=reference_key),
                 last_known=LastKnown(
-                    camera_id="Cam001", time=base + timedelta(seconds=5)
+                    camera_id="Cam001",
+                    time=base + timedelta(seconds=5),
+                    footpoint_px=(337.7, 985.9),
                 ),
                 window=CaseWindow(
                     start=base + timedelta(seconds=5),

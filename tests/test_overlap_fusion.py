@@ -9,11 +9,13 @@ from javes_contracts import (
     Anchors,
     CameraCalibration,
     CameraDef,
+    CaseInfo,
     Candidate,
     Hypothesis,
     HypothesisStatus,
     MapDef,
     MapFloor,
+    MapPosition,
     ProbeRequest,
     ProbeResult,
     ProbeStatus,
@@ -29,6 +31,7 @@ from javes_contracts import (
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.expand import expand_hypotheses
 from javes_routing.core.render import render_route_maps
+from javes_routing.core.step import init_state
 from javes_routing.core.update import (
     fuse_observed_segments,
     gate_visit_details,
@@ -260,3 +263,40 @@ def test_last_known_anchor_probes_source_and_overlap_cameras() -> None:
     assert {probe.reason for probe in probes} == {"ANCHOR_EVIDENCE"}
     assert {probe.t_from for probe in probes} == {T0}
     assert {probe.t_to for probe in probes} == {T0 + timedelta(seconds=5)}
+
+
+def test_last_known_footpoint_is_projected_into_ground_evidence() -> None:
+    graph = _graph()
+    params = RoutingParams()
+    state = init_state(
+        CaseInfo(
+            case_id="case",
+            target_id="target",
+            start_time=T0,
+            last_known_camera="A",
+            last_known_time=T0,
+            last_known_footpoint_px=(101, 100),
+        ),
+        graph,
+        params,
+    )
+    point = state.hypotheses[0].visits[0].projected_trajectory[0]
+    assert (point.x, point.y, point.floor_id) == (101.0, 100.0, "1F")
+    assert not state.hypotheses[0].visits[0].trajectory_approximate
+
+    mapped = init_state(
+        CaseInfo(
+            case_id="mapped",
+            target_id="target",
+            start_time=T0,
+            last_known_camera="A",
+            last_known_time=T0,
+            last_known_map_position=MapPosition(
+                x=120, y=130, floor_id="1F", error_m=0.2
+            ),
+        ),
+        graph,
+        params,
+    )
+    mapped_point = mapped.hypotheses[0].visits[0].projected_trajectory[0]
+    assert (mapped_point.x, mapped_point.y) == (120.0, 130.0)

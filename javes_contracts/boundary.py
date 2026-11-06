@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from .routing import ContractModel, ProbeRequest
+from .routing import ContractModel, MapPosition, ProbeRequest
 
 
 def aware_utc(value: datetime | None) -> datetime | None:
@@ -357,6 +358,9 @@ class LastKnown(ContractModel):
     camera_id: str | None = None
     zone_id: str | None = None
     time: datetime
+    bbox_xywh: tuple[float, float, float, float] | None = None
+    footpoint_px: tuple[float, float] | None = None
+    map_position: MapPosition | None = None
 
     @field_validator("time", mode="after")
     @classmethod
@@ -367,6 +371,20 @@ class LastKnown(ContractModel):
     def _one_location(self) -> LastKnown:
         if bool(self.camera_id) == bool(self.zone_id):
             raise ValueError("last_known requires exactly one camera_id or zone_id")
+        if self.zone_id and (
+            self.bbox_xywh is not None or self.footpoint_px is not None
+        ):
+            raise ValueError("pixel last-known data requires camera_id")
+        for value in [
+            *(self.bbox_xywh or ()),
+            *(self.footpoint_px or ()),
+        ]:
+            if not math.isfinite(value):
+                raise ValueError("last-known pixel coordinates must be finite")
+        if self.bbox_xywh is not None and (
+            self.bbox_xywh[2] <= 0 or self.bbox_xywh[3] <= 0
+        ):
+            raise ValueError("last-known bbox dimensions must be positive")
         return self
 
 
