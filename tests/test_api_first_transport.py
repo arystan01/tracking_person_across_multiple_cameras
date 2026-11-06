@@ -330,7 +330,9 @@ max_gap_s: 2400
 
     repository = InMemoryRepository()
     artifacts = InMemoryArtifactStore()
-    clock = FixedClock(BASE + timedelta(seconds=40))
+    # A historical case must still cross Main -> Routing HTTP -> Perception
+    # instead of being closed immediately by wall-clock max_gap.
+    clock = FixedClock(BASE + timedelta(days=10))
     ids = ContentIdGenerator()
     sites = HttpSiteConfigClient(
         "http://site",
@@ -449,6 +451,7 @@ max_gap_s: 2400
         )
         probe_task = WorkerTaskEnvelope.model_validate(probe_claim.json()["tasks"][0])
         assert probe_task.operation == "PROBE"
+        assert probe_task.payload["probe"]["t_to"] != "OPEN"
         probe_id = probe_task.payload["probe"]["probe_id"]
         tracklet = Tracklet(
             id="pipeline-tracklet",

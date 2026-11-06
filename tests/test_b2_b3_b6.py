@@ -283,8 +283,9 @@ def test_b6_empty_call_triggers_dormant() -> None:
     assert dormant_hyp.status == HypothesisStatus.DORMANT
     assert dormant_hyp.current_node == "OUTSIDE"
 
-    # Mode should change to WAITING
-    assert res.mode == SearchMode.WAITING
+    # Historical time is searched with finite probes before live WAITING.
+    assert res.mode == SearchMode.CATCHING_UP
+    assert res.probes and all(probe.t_to is not None for probe in res.probes)
 
 
 def test_b6_idempotent_same_now() -> None:

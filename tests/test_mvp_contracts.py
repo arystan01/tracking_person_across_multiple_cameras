@@ -23,6 +23,7 @@ from routing.contracts import (
     ProbeResult,
     ProbeStatus,
     ProbedWindow,
+    SearchFrontier,
     SearchMode,
     SiteGraph,
     StepResult,
@@ -376,6 +377,10 @@ def test_stop_priority_operator_then_budget_then_gap() -> None:
     budget = step(state, [], graph, Anchors(), params, T0 + timedelta(seconds=20))
     assert budget.stop_reason.value == "BUDGET_SPENT"
     state.camera_minutes_used = 0
+    state.search_frontier = SearchFrontier(
+        last_observed_at=T0,
+        reached_at=T0 + timedelta(seconds=10),
+    )
     gap = step(state, [], graph, Anchors(), params, T0 + timedelta(seconds=20))
     assert gap.stop_reason.value == "MAX_GAP"
 
@@ -474,10 +479,23 @@ def test_blind_zone_last_known_immediately_opens_border_watch() -> None:
         graph,
         RoutingParams(),
     )
-    result = step(state, [], graph, Anchors(), RoutingParams(), T0 + timedelta(seconds=1))
-    assert result.mode == SearchMode.WAITING
+    now = T0 + timedelta(seconds=1)
+    result = step(state, [], graph, Anchors(), RoutingParams(), now)
+    assert result.mode == SearchMode.CATCHING_UP
     assert {probe.camera for probe in result.probes} == {"A", "B"}
-    assert all(probe.t_to is None for probe in result.probes)
+    assert all(probe.t_to is not None for probe in result.probes)
+
+    live = step(
+        result.state,
+        [ProbeResult(probe_id=probe.probe_id, status="DONE") for probe in result.probes],
+        graph,
+        Anchors(),
+        RoutingParams(),
+        now,
+    )
+    assert live.mode == SearchMode.WAITING
+    assert {probe.camera for probe in live.probes} == {"A", "B"}
+    assert all(probe.t_to is None for probe in live.probes)
 
 
 def test_direct_route_keeps_ring_path_alternative_and_probes_divergence() -> None:

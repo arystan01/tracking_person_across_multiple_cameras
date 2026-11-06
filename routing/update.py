@@ -26,6 +26,7 @@ from .contracts import (
     Visit,
 )
 from .contracts.params import RoutingParams
+from .frontier import record_probe_progress
 from .timemodel import (
     arrival_mass,
     blind_dwell_likelihood,
@@ -646,14 +647,18 @@ def _process_probe_results(
                 and duration >= params.quiet_window_s
             ):
                 miss_coverage *= 0.5
-            if result.status == ProbeStatus.DONE and result.coverage_ratio < params.min_coverage:
-                miss_coverage = 0.0
+            if result.status == ProbeStatus.DONE and result.coverage_ratio < 1.0:
+                low_coverage = result.coverage_ratio < params.min_coverage
+                if low_coverage:
+                    miss_coverage = 0.0
                 state.unobserved_windows.append(
                     {
                         "camera_id": matching.camera,
                         "t_from": matching.t_from.isoformat(),
                         "t_to": "OPEN" if matching.t_to is None else matching.t_to.isoformat(),
-                        "reason": "LOW_COVERAGE",
+                        "reason": (
+                            "LOW_COVERAGE" if low_coverage else "PARTIAL_COVERAGE"
+                        ),
                         "coverage_ratio": result.coverage_ratio,
                     }
                 )
@@ -676,10 +681,12 @@ def _process_probe_results(
                     previous_duration, duration
                 )
 
+            terminal = False
             if result.status in (ProbeStatus.FAILED, ProbeStatus.TIMEOUT):
                 if matching.retry_count < params.max_retries:
                     retry_probes.append(_retry_probe(matching))
                 else:
+                    terminal = True
                     state.unobserved_windows.append(
                         {
                             "camera_id": matching.camera,
@@ -690,6 +697,7 @@ def _process_probe_results(
                     )
                 finished_probe_ids.add(matching.probe_id)
             elif result.status == ProbeStatus.UNAVAILABLE:
+                terminal = True
                 state.unobserved_windows.append(
                     {
                         "camera_id": matching.camera,
@@ -700,7 +708,21 @@ def _process_probe_results(
                 )
                 finished_probe_ids.add(matching.probe_id)
             elif matching.t_to is not None or result.stream_closed:
+                terminal = True
                 finished_probe_ids.add(matching.probe_id)
+            record_probe_progress(
+                state,
+                matching,
+                processed_duration_s=(
+                    duration if result.status == ProbeStatus.DONE else None
+                ),
+                coverage_ratio=(
+                    result.coverage_ratio
+                    if result.status == ProbeStatus.DONE
+                    else 0.0
+                ),
+                terminal=terminal,
+            )
 
         if result.status == ProbeStatus.DONE:
             tracklets.extend(valid_result_tracklets)
