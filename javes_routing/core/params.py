@@ -16,6 +16,7 @@ class RoutingParams(BaseModel):
     new_hyp_floor: float = -20.0
     camera_minute_budget: float = Field(default=500.0, gt=0.0)
     max_speed: float = 2.0  # Deprecated alias
+    max_calibration_error_m: float = Field(default=2.0, ge=0.0)
     gate_speed: float = 4.0
     walk_speed: float = 1.3
     tmax_over_ttyp: float = 2.5

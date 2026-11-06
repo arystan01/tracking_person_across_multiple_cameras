@@ -10,7 +10,13 @@ import numpy as np
 
 from javes_contracts import PerceptionProbeJob, TargetGalleryCommand, TargetGalleryResult
 from javes_contracts.boundary import aware_utc
-from javes_contracts import Candidate, ProbeResult, ProbeStatus, Tracklet
+from javes_contracts import (
+    Candidate,
+    ProbeResult,
+    ProbeStatus,
+    Tracklet,
+    TrajectoryPoint,
+)
 
 from .config import PerceptionSettings
 from .models import normalize
@@ -37,6 +43,123 @@ def _xywh(xyxy: tuple[float, float, float, float]) -> tuple[float, float, float,
     return (round(x1, 1), round(y1, 1), round(x2 - x1, 1), round(y2 - y1, 1))
 
 
+def _downsample_indices(length: int, limit: int = 256) -> list[int]:
+    if limit <= 0 or length <= 0:
+        return []
+    if limit == 1:
+        return [0]
+    if length <= limit:
+        return list(range(length))
+    return [round(index * (length - 1) / (limit - 1)) for index in range(limit)]
+
+
+def trajectory_from_path(
+    path: list[tuple[datetime, tuple[float, float, float, float]]],
+    confidences: list[float | None] | None = None,
+    *,
+    limit: int = 256,
+) -> list[TrajectoryPoint]:
+    """Convert bbox history to deterministic bottom-centre foot points."""
+    confidence_values = confidences or [None] * len(path)
+    points: list[TrajectoryPoint] = []
+    for index in _downsample_indices(len(path), limit):
+        timestamp, (x1, _y1, x2, y2) = path[index]
+        confidence = (
+            confidence_values[index] if index < len(confidence_values) else None
+        )
+        points.append(
+            TrajectoryPoint(
+                timestamp=timestamp,
+                x_px=round((x1 + x2) / 2.0, 3),
+                y_px=round(y2, 3),
+                confidence=confidence,
+            )
+        )
+    return points
+
+
+def _extend_trajectory(
+    previous: list[TrajectoryPoint] | None,
+    incoming: list[TrajectoryPoint] | None,
+    *,
+    limit: int = 256,
+) -> list[TrajectoryPoint] | None:
+    if not previous:
+        return incoming
+    if not incoming:
+        return previous
+    result = list(previous)
+    last_timestamp = result[-1].timestamp
+    new_points = [point for point in incoming if point.timestamp > last_timestamp]
+    available = max(limit - len(result), 0)
+    if not available:
+        return result
+    if len(new_points) > available:
+        indices = (
+            [len(new_points) - 1]
+            if available == 1
+            else _downsample_indices(len(new_points), available)
+        )
+        new_points = [new_points[index] for index in indices]
+    return result + new_points
+
+
+def _open_tracklet_distance(previous: Tracklet, current: Tracklet) -> float | None:
+    if previous.camera != current.camera:
+        return None
+    gap_s = (current.t_in - previous.t_out).total_seconds()
+    if gap_s < 0 or gap_s > 5.0:
+        return None
+    px, py, pw, ph = previous.bbox_last
+    cx, cy, cw, ch = current.bbox_first
+    distance = float(
+        np.hypot((px + pw / 2.0) - (cx + cw / 2.0), (py + ph) - (cy + ch))
+    )
+    return distance if distance <= max(pw, ph, cw, ch) else None
+
+
+def _merge_open_tracklets(
+    previous: list[Tracklet],
+    current: list[Tracklet],
+) -> tuple[list[Tracklet], dict[str, str]]:
+    merged = {item.id: item for item in previous}
+    remapped: dict[str, str] = {}
+    used_previous: set[str] = set()
+    for item in sorted(current, key=lambda value: (value.t_in, value.id)):
+        if item.id in merged:
+            target = merged[item.id]
+            distance = 0.0
+        else:
+            matches = [
+                (distance, candidate)
+                for candidate in previous
+                if candidate.id not in used_previous
+                if (distance := _open_tracklet_distance(candidate, item)) is not None
+            ]
+            if not matches:
+                merged[item.id] = item
+                continue
+            distance, target = min(matches, key=lambda value: (value[0], value[1].id))
+        del distance
+        used_previous.add(target.id)
+        remapped[item.id] = target.id
+        merged[target.id] = target.model_copy(
+            update={
+                "t_out": max(target.t_out, item.t_out),
+                "bbox_last": item.bbox_last,
+                "open": item.open,
+                "clipped_out": item.clipped_out,
+                "crop_paths": sorted(set(target.crop_paths + item.crop_paths)),
+                "embedding_path": item.embedding_path or target.embedding_path,
+                "trajectory": _extend_trajectory(
+                    target.trajectory, item.trajectory
+                ),
+            },
+            deep=True,
+        )
+    return sorted(merged.values(), key=lambda item: item.id), remapped
+
+
 def _crop(frame: np.ndarray, xyxy: tuple[float, float, float, float]) -> np.ndarray | None:
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = xyxy
@@ -60,6 +183,7 @@ class _Track:
     features: list[np.ndarray] = field(default_factory=list)
     weights: list[float] = field(default_factory=list)
     path: list[tuple[datetime, tuple[float, float, float, float]]] = field(default_factory=list)
+    path_confidences: list[float | None] = field(default_factory=list)
 
 
 class PerceptionWorker:
@@ -278,20 +402,39 @@ class PerceptionWorker:
         result = self._build_result(job, window, tracks, timestamps, gallery, close)
         if probe.t_to is None and self.state_store is not None and result.status == ProbeStatus.DONE:
             if previous_open is not None:
-                old_tracklets = {item.id: item for item in previous_open.tracklets}
+                merged_tracklets, remapped = _merge_open_tracklets(
+                    previous_open.tracklets, result.tracklets
+                )
                 old_candidates = {
                     item.id or f"tracklet:{item.tracklet_id}": item
                     for item in previous_open.candidates
                 }
-                for item in result.tracklets:
-                    old_tracklets[item.id] = item
+                previous_candidate_by_tracklet = {
+                    item.tracklet_id: item for item in previous_open.candidates
+                }
                 for item in result.candidates:
-                    old_candidates[item.id or f"tracklet:{item.tracklet_id}"] = item
+                    tracklet_id = remapped.get(item.tracklet_id, item.tracklet_id)
+                    previous_candidate = previous_candidate_by_tracklet.get(
+                        tracklet_id
+                    )
+                    updated = item.model_copy(
+                        update={
+                            "id": (
+                                previous_candidate.id
+                                if previous_candidate is not None
+                                else _stable_id(
+                                    "cand", job.case_id, tracklet_id
+                                )
+                            ),
+                            "tracklet_id": tracklet_id,
+                        }
+                    )
+                    old_candidates[
+                        updated.id or f"tracklet:{updated.tracklet_id}"
+                    ] = updated
                 result = result.model_copy(
                     update={
-                        "tracklets": sorted(
-                            old_tracklets.values(), key=lambda item: item.id
-                        ),
+                        "tracklets": merged_tracklets,
                         "candidates": sorted(
                             old_candidates.values(),
                             key=lambda item: (item.id or "", item.tracklet_id),
@@ -335,6 +478,7 @@ class PerceptionWorker:
                 track.bbox_last = box
                 track.frames += 1
                 track.path.append((ts, xyxy))
+                track.path_confidences.append(float(conf))
                 quality = self._crop_quality(frame, xyxy, conf, boxes[:index] + boxes[index + 1 :])
                 if quality <= 0:
                     continue
@@ -449,6 +593,9 @@ class PerceptionWorker:
                     crop_paths=crop_paths,
                     embedding_path=embedding_key,
                     clip_ref={"archive_id": window.archive_id},
+                    trajectory=trajectory_from_path(
+                        track.path, track.path_confidences
+                    ),
                 )
             )
             candidates.append(

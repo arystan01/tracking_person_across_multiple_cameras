@@ -25,8 +25,9 @@ from javes_contracts import (
     Transition,
     Visit,
 )
-from .params import RoutingParams
 from .frontier import record_probe_progress
+from .params import RoutingParams
+from .positioning import project_trajectory
 from .timemodel import (
     arrival_mass,
     blind_dwell_likelihood,
@@ -225,6 +226,20 @@ def merge_tracklets_to_visits(
                 t_out.isoformat(),
                 ",".join(tracklet_ids),
             )
+            trajectory_by_time = {
+                point.timestamp: point
+                for item in group
+                for point in (item.trajectory or [])
+            }
+            trajectory = [
+                trajectory_by_time[timestamp]
+                for timestamp in sorted(trajectory_by_time)
+            ]
+            projected_trajectory, trajectory_approximate = project_trajectory(
+                graph.cameras[camera],
+                trajectory,
+                max_error_m=params.max_calibration_error_m,
+            )
             visits.append(
                 Visit(
                     id=visit_id,
@@ -239,6 +254,8 @@ def merge_tracklets_to_visits(
                     open=last.open,
                     clipped_in=first.clipped_in,
                     clipped_out=last.clipped_out,
+                    projected_trajectory=projected_trajectory,
+                    trajectory_approximate=trajectory_approximate,
                 )
             )
     return sorted(visits, key=lambda item: (item.t_in, item.t_out, item.camera, item.id))

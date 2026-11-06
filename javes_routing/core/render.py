@@ -161,6 +161,63 @@ def _route_elements(
     return elements
 
 
+def _observed_elements(
+    hypothesis: Hypothesis,
+    floor_id: str,
+) -> list[str]:
+    elements: list[str] = []
+    for visit in hypothesis.visits:
+        points = [
+            point
+            for point in visit.projected_trajectory
+            if point.floor_id == floor_id
+        ]
+        if len(points) >= 2:
+            elements.append(
+                f'<polyline data-role="observed-path" data-camera="{escape(visit.camera)}" '
+                f'data-from="{escape(points[0].timestamp.isoformat())}" '
+                f'data-to="{escape(points[-1].timestamp.isoformat())}" '
+                f'data-approximate="{str(visit.trajectory_approximate).lower()}" '
+                f'points="{" ".join(_point((point.x, point.y)) for point in points)}" '
+                'fill="none" stroke="#0891b2" stroke-width="6" stroke-linecap="round" '
+                'stroke-linejoin="round"/>'
+            )
+        elif points:
+            point = points[0]
+            elements.append(
+                f'<circle data-role="observed-path" data-camera="{escape(visit.camera)}" '
+                f'data-from="{escape(point.timestamp.isoformat())}" '
+                f'data-to="{escape(point.timestamp.isoformat())}" '
+                f'data-approximate="{str(visit.trajectory_approximate).lower()}" '
+                f'cx="{point.x:.2f}" cy="{point.y:.2f}" r="5" fill="#0891b2"/>'
+            )
+    return elements
+
+
+def _reachable_elements(
+    step_result: StepResult,
+    graph: SiteGraph,
+    floor_id: str,
+    positions: dict[str, tuple[float, float]],
+) -> list[str]:
+    if step_result.estimate is None:
+        return []
+    elements: list[str] = []
+    for segment in step_result.estimate.reachable_segments:
+        points = _edge_points(graph, segment.edge_id, floor_id, positions)
+        if len(points) < 2:
+            continue
+        opacity = min(0.18 + segment.probability * 0.62, 0.8)
+        elements.append(
+            f'<polyline data-role="reachable-area" data-edge="{escape(segment.edge_id)}" '
+            f'data-probability="{segment.probability:.6f}" '
+            f'points="{" ".join(_point(item) for item in points)}" fill="none" '
+            f'stroke="#7c3aed" stroke-opacity="{opacity:.3f}" stroke-width="15" '
+            'stroke-linecap="round" stroke-linejoin="round"/>'
+        )
+    return elements
+
+
 def render_route_maps(
     step_result: StepResult,
     graph: SiteGraph,
@@ -205,14 +262,39 @@ def render_route_maps(
                 f'x="0" y="0" width="{width}" height="{height}" preserveAspectRatio="none"/>'
             )
 
+        content.extend(
+            _reachable_elements(step_result, graph, floor_id, positions)
+        )
+
         alternatives = sorted(
             (item for item in step_result.hypotheses if best is None or item.id != best.id),
             key=lambda item: (-item.score, item.id),
         )
         for hypothesis in alternatives:
-            content.extend(_route_elements(hypothesis, graph, floor_id, positions, "alternative-route", True))
+            content.extend(
+                _route_elements(
+                    hypothesis,
+                    graph,
+                    floor_id,
+                    positions,
+                    "alternative-path",
+                    True,
+                )
+            )
         if best:
-            content.extend(_route_elements(best, graph, floor_id, positions, "best-route", False))
+            content.append('<g data-role="best-route">')
+            content.extend(
+                _route_elements(
+                    best,
+                    graph,
+                    floor_id,
+                    positions,
+                    "inferred-path",
+                    False,
+                )
+            )
+            content.extend(_observed_elements(best, floor_id))
+            content.append('</g>')
 
         for zone in step_result.estimate.zones if step_result.estimate else []:
             point = positions.get(zone.zone)
@@ -250,6 +332,22 @@ def render_route_maps(
                     f'<g data-role="blind-node"><rect x="{x - 8:.2f}" y="{y - 8:.2f}" width="16" height="16" '
                     f'fill="#111827"/><text x="{x + 13:.2f}" y="{y + 5:.2f}">{escape(node.id)}</text></g>'
                 )
+        calculated_at = (
+            step_result.estimate.calculated_at.isoformat()
+            if step_result.estimate and step_result.estimate.calculated_at
+            else "unknown"
+        )
+        content.append(
+            '<g data-role="legend" transform="translate(18 24)">'
+            '<rect x="-8" y="-18" width="340" height="92" rx="6" fill="#fff" fill-opacity="0.86"/>'
+            '<line x1="0" y1="0" x2="34" y2="0" stroke="#0891b2" stroke-width="6"/>'
+            '<text x="44" y="5">observed (calibrated)</text>'
+            '<line x1="0" y1="24" x2="34" y2="24" stroke="#ef4444" stroke-width="7"/>'
+            '<text x="44" y="29">inferred / approximate</text>'
+            '<line x1="0" y1="48" x2="34" y2="48" stroke="#7c3aed" stroke-width="12" stroke-opacity="0.5"/>'
+            '<text x="44" y="53">reachable / uncertain</text>'
+            f'<text x="0" y="72">calculated {escape(calculated_at)}</text></g>'
+        )
         content.append('</svg>')
         if best and best.visits:
             route_text = " to ".join(visit.camera for visit in best.visits)

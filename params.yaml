@@ -10,6 +10,7 @@ max_retries: 2
 new_hyp_floor: -20.0
 camera_minute_budget: 500.0
 max_speed: 2.0
+max_calibration_error_m: 2.0
 use_st: true
 amb_priority_bonus: 2.0
 dormant_watch_boost: 1.2

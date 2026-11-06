@@ -238,6 +238,19 @@ def parse_site(
         if len(floor_sizes) != len(map_def.floors):
             raise ValueError("Duplicate floor ID in map")
     for camera in cameras.values():
+        calibration = camera.calibration
+        if calibration is None:
+            continue
+        if calibration.floor_id not in floor_sizes:
+            raise ValueError(
+                f"Camera '{camera.id}' calibration references unknown floor "
+                f"'{calibration.floor_id}'"
+            )
+        if camera.floor is not None and calibration.floor_id != camera.floor:
+            raise ValueError(
+                f"Camera '{camera.id}' calibration floor does not match camera floor"
+            )
+    for camera in cameras.values():
         _validate_point(f"Camera '{camera.id}'", camera.floor, camera.map_xy, floor_sizes)
     for node in blind_nodes:
         _validate_point(f"Blind node '{node.id}'", node.floor, node.map_xy, floor_sizes)

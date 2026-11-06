@@ -163,6 +163,9 @@ async def test_controls_http_fake_end_to_end():
         assert view["case_id"] == "api-case"
         assert view["best_hypothesis"]["visits"][-1]["camera_id"] == "B"
         assert view["clips"][0]["state"] == "HOLD"
+        assert view["estimate"]["speed_range"]["source"] == "FALLBACK"
+        assert view["estimate"]["distance_range"] is not None
+        assert view["estimate"]["calculated_at"] is not None
 
         listed = await client.get(
             "/v1/cases?lifecycle=SEARCHING",
