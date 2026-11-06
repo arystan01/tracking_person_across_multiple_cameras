@@ -363,7 +363,10 @@ class WalkEdgeDef(ContractModel):
     floor_id: str
     map_path: list[tuple[float, float]] = Field(default_factory=list)
     d_m: float | None = Field(default=None, gt=0.0)
-    bidirectional: bool = False
+    bidirectional: bool = Field(
+        default=False,
+        exclude_if=lambda value: value is False,
+    )
 
 
 class WalkGraphDef(ContractModel):

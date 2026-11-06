@@ -114,8 +114,11 @@ def test_case_manager_end_to_end_with_all_fakes():
     assert [visit["camera_id"] for visit in view.best_hypothesis["visits"]] == ["A", "B"]
     assert len(view.rendered_route_maps) == 1
     assert view.rendered_route_maps[0].floor_id == "1F"
+    assert view.route_presentation is not None
+    assert view.estimate["zones_operator_display"] == "TECHNICAL_ONLY"
     svg = app.manager.get_route_svg("case-1", view.route_revision, "1F")
     assert b'data-role="best-route"' in svg
+    assert b'data-role="estimate"' not in svg
     assert len(view.candidates) == 1
     assert len(view.clips) == 1
     assert view.clips[0]["state"] == "HOLD"

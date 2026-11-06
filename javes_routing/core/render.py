@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import math
+from datetime import datetime, timezone
 from html import escape
 
 from javes_contracts import (
@@ -142,6 +143,10 @@ def _layout(
 
 def _point(value: tuple[float, float]) -> str:
     return f"{value[0]:.2f},{value[1]:.2f}"
+
+
+def _time_label(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _edge_points(
@@ -415,7 +420,7 @@ def _camera_element(
 
 
 def _last_position_element(point: GroundPosition) -> str:
-    timestamp = point.timestamp.isoformat().replace("+00:00", "Z")
+    timestamp = _time_label(point.timestamp)
     return (
         '<g data-role="last-confirmed-position">'
         f'<circle cx="{point.x:.2f}" cy="{point.y:.2f}" r="12" fill="#fff" '
@@ -437,15 +442,13 @@ def _status_text(
     if point is None:
         text = "No confirmed position"
     else:
-        timestamp = point.timestamp.isoformat().replace("+00:00", "Z")
+        timestamp = _time_label(point.timestamp)
         if presentation.position_state == PositionState.OBSERVED:
             text = f"Currently visible · last confirmed {timestamp}"
         elif presentation.position_state == PositionState.LOST:
             text = f"Not seen since {timestamp}"
             if presentation.search_area_as_of is not None:
-                calculated = presentation.search_area_as_of.isoformat().replace(
-                    "+00:00", "Z"
-                )
+                calculated = _time_label(presentation.search_area_as_of)
                 text += f" · possible area as of {calculated}"
         else:
             text = f"Last confirmed {timestamp}"

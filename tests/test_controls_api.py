@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -166,6 +167,12 @@ async def test_controls_http_fake_end_to_end():
         assert view["estimate"]["speed_range"]["source"] == "FALLBACK"
         assert view["estimate"]["distance_range"] is not None
         assert view["estimate"]["calculated_at"] is not None
+        assert view["estimate"]["zones_operator_display"] == "TECHNICAL_ONLY"
+        assert view["route_presentation"] is not None
+        assert view["route_presentation"]["position_state"] in {
+            "UNKNOWN",
+            "LAST_SEEN",
+        }
 
         listed = await client.get(
             "/v1/cases?lifecycle=SEARCHING",
@@ -195,6 +202,13 @@ async def test_controls_http_fake_end_to_end():
         assert svg.status_code == 200
         assert svg.headers["content-type"].startswith("image/svg+xml")
         assert 'data-role="best-route"' in svg.text
+        assert 'data-role="estimate"' not in svg.text
+        visible_text = " ".join(
+            text.strip()
+            for text in ET.fromstring(svg.text).itertext()
+            if text and text.strip()
+        )
+        assert "%" not in visible_text
 
         candidate = view["candidates"][0]
         decision = ReviewDecisionBody(
