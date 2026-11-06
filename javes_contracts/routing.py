@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
@@ -32,6 +33,25 @@ class ContractModel(BaseModel):
         serialize_by_alias=True,
         extra="forbid",
     )
+
+
+class TrajectoryPoint(ContractModel):
+    timestamp: datetime
+    x_px: float
+    y_px: float
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _aware_timestamp(cls, value: datetime) -> datetime:
+        return _utc(value)  # type: ignore[return-value]
+
+    @field_validator("x_px", "y_px", mode="after")
+    @classmethod
+    def _finite_pixel(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("trajectory pixels must be finite")
+        return value
 
 
 # Shared contracts (3, 6, 7). Additions remain optional.
@@ -70,6 +90,7 @@ class Tracklet(ContractModel):
     crop_paths: list[str] = Field(default_factory=list)
     embedding_path: str | None = None
     clip_ref: dict[str, Any] | str | None = None
+    trajectory: list[TrajectoryPoint] | None = None
 
     @field_validator("t_in", "t_out", mode="after")
     @classmethod
@@ -80,6 +101,12 @@ class Tracklet(ContractModel):
     def _ordered_times(self) -> Tracklet:
         if self.t_out < self.t_in:
             raise ValueError("tracklet t_end must not be before t_start")
+        if self.trajectory:
+            timestamps = [point.timestamp for point in self.trajectory]
+            if timestamps != sorted(set(timestamps)):
+                raise ValueError(
+                    "tracklet trajectory timestamps must be unique and increasing"
+                )
         return self
 
 
@@ -193,6 +220,36 @@ class RegionDef(ContractModel):
     polygon: list[tuple[float, float]]
 
 
+class CameraCalibration(ContractModel):
+    frame_size_px: tuple[int, int]
+    homography: tuple[
+        tuple[float, float, float],
+        tuple[float, float, float],
+        tuple[float, float, float],
+    ]
+    floor_id: str
+    error_m: float = Field(default=0.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def _valid_calibration(self) -> CameraCalibration:
+        if any(value <= 0 for value in self.frame_size_px):
+            raise ValueError("calibration frame dimensions must be positive")
+        values = [value for row in self.homography for value in row]
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("calibration homography must contain finite values")
+        a, b, c, d, e, f, g, h, i = values
+        determinant = (
+            a * (e * i - f * h)
+            - b * (d * i - f * g)
+            + c * (d * h - e * g)
+        )
+        if abs(determinant) < 1e-12:
+            raise ValueError("calibration homography must be invertible")
+        if not self.floor_id:
+            raise ValueError("calibration floor_id is required")
+        return self
+
+
 class CameraDef(ContractModel):
     id: str
     zone: str = ""
@@ -204,6 +261,7 @@ class CameraDef(ContractModel):
     busy: bool = False
     appearance_floor: float | None = Field(default=None, ge=0.0, le=1.0)
     available_from: datetime | None = None
+    calibration: CameraCalibration | None = None
 
     @field_validator("available_from", mode="after")
     @classmethod
@@ -314,6 +372,27 @@ class SiteGraph(ContractModel):
 
 
 # Routing state and contract 9.
+class ProjectedTrajectoryPoint(ContractModel):
+    timestamp: datetime
+    x: float
+    y: float
+    floor_id: str
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    calibration_error_m: float = Field(default=0.0, ge=0.0)
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _aware_timestamp(cls, value: datetime) -> datetime:
+        return _utc(value)  # type: ignore[return-value]
+
+    @field_validator("x", "y", mode="after")
+    @classmethod
+    def _finite_map_coordinate(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("projected trajectory coordinates must be finite")
+        return value
+
+
 class Visit(ContractModel):
     id: str = Field(validation_alias=AliasChoices("id", "visit_id"), serialization_alias="visit_id")
     camera: str = Field(validation_alias=AliasChoices("camera", "camera_id"), serialization_alias="camera_id")
@@ -330,6 +409,8 @@ class Visit(ContractModel):
     long_gap: bool = False
     source: Literal["PERCEPTION", "LAST_KNOWN", "MANUAL"] = "PERCEPTION"
     flags: list[str] = Field(default_factory=list)
+    projected_trajectory: list[ProjectedTrajectoryPoint] = Field(default_factory=list)
+    trajectory_approximate: bool = True
 
     @field_validator("t_in", "t_out", mode="after")
     @classmethod
@@ -392,6 +473,31 @@ class ZoneEstimate(ContractModel):
     probability: float = Field(ge=0.0, le=1.0)
 
 
+class RangeEstimate(ContractModel):
+    minimum: float = Field(ge=0.0)
+    maximum: float = Field(ge=0.0)
+    unit: Literal["m", "m/s"]
+    source: Literal["OBSERVED", "INFERRED", "FALLBACK", "MIXED"]
+
+    @model_validator(mode="after")
+    def _ordered_range(self) -> RangeEstimate:
+        if self.maximum < self.minimum:
+            raise ValueError("range maximum must not be below minimum")
+        return self
+
+
+class ReachableSegment(ContractModel):
+    edge_id: str
+    source: str
+    target: str
+    probability: float = Field(ge=0.0, le=1.0)
+
+
+class ReachableNode(ContractModel):
+    node_id: str
+    probability: float = Field(ge=0.0, le=1.0)
+
+
 class Estimate(ContractModel):
     zones: list[ZoneEstimate]
     probability_kind: Literal["RELATIVE"] = "RELATIVE"
@@ -399,8 +505,15 @@ class Estimate(ContractModel):
     last_observed_camera: str | None = None
     last_observed_time: datetime | None = None
     unobserved_windows: list[dict[str, Any]] = Field(default_factory=list)
+    speed_range: RangeEstimate | None = None
+    distance_range: RangeEstimate | None = None
+    reachable_segments: list[ReachableSegment] = Field(default_factory=list)
+    reachable_nodes: list[ReachableNode] = Field(default_factory=list)
+    calculated_at: datetime | None = None
 
-    @field_validator("valid_until", "last_observed_time", mode="after")
+    @field_validator(
+        "valid_until", "last_observed_time", "calculated_at", mode="after"
+    )
     @classmethod
     def _aware_estimate_times(cls, value: datetime | None) -> datetime | None:
         return _utc(value)
