@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
-from routing.contracts import Candidate, ProbeResult, ProbeStatus, Tracklet
+from javes_contracts import Candidate, ProbeResult, ProbeStatus, Tracklet
 
 from .contracts import (
     FakeObservation,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import pytest
 
-from routing.contracts import (
+from javes_contracts import (
     Anchors,
     Candidate,
     CaseInfo,

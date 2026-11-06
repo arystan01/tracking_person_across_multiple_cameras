@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .contracts import Anchors, CaseInfo, MapDef, MapFloor
+from javes_contracts import Anchors, CaseInfo, MapDef, MapFloor
 from .contracts.params import RoutingParams
 from .render import render_route_maps
 from .sim.generator import generate_ring_graph

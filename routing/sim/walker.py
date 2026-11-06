@@ -6,7 +6,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from routing.contracts import SiteGraph
+from javes_contracts import SiteGraph
 
 @dataclass
 class GroundTruthVisit:

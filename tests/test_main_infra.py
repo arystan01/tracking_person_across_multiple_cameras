@@ -33,7 +33,7 @@ from javes_main.adapters.system import FixedClock
 from javes_main.domain import CaseLifecycle, JobState, ProbeResultRecord
 from javes_main.persistence import RevisionConflict
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
-from routing.contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
+from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
 from routing.contracts.params import RoutingParams
 
 

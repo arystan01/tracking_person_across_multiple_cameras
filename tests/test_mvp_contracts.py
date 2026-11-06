@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from routing.contracts import (
+from javes_contracts import (
     Anchors,
     CameraDef,
     BlindNodeDef,

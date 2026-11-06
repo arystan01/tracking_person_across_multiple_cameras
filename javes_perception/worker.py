@@ -10,7 +10,7 @@ import numpy as np
 
 from javes_contracts import PerceptionProbeJob, TargetGalleryCommand, TargetGalleryResult
 from javes_contracts.boundary import aware_utc
-from routing.contracts import Candidate, ProbeResult, ProbeStatus, Tracklet
+from javes_contracts import Candidate, ProbeResult, ProbeStatus, Tracklet
 
 from .config import PerceptionSettings
 from .models import normalize

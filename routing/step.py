@@ -5,7 +5,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 
-from .contracts import (
+from javes_contracts import (
     Anchors,
     CaseInfo,
     Hypothesis,
@@ -221,7 +221,7 @@ def step(
     retries = [probe for probe in state.pending_probes if probe.probe_id not in previous_pending]
 
     if anchors.review_only:
-        from .contracts import StopReason
+        from javes_contracts import StopReason
 
         return _finish(
             state,
@@ -245,7 +245,7 @@ def step(
             state.baseline_started = True
             state.pending_probes = probes
         elif not state.pending_probes:
-            from .contracts import StopReason
+            from javes_contracts import StopReason
             return _finish(
                 state, hypotheses, rejected, graph, params, now, StopReason.ALL_ENDED
             )

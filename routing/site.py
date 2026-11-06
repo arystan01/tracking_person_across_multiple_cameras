@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .contracts import (
+from javes_contracts import (
     BlindNodeDef,
     CameraDef,
     EdgeDef,

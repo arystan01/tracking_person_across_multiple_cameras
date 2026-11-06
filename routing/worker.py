@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .contracts import (
+from javes_contracts import (
     Anchors,
     ProbeResult,
     RoutingWorkerResult,

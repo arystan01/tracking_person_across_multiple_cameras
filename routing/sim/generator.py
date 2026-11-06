@@ -1,7 +1,7 @@
 """Generator for test graphs."""
 from __future__ import annotations
 
-from routing.contracts import SiteGraph, CameraDef, EdgeDef, BlindNodeDef, OutsideDef
+from javes_contracts import SiteGraph, CameraDef, EdgeDef, BlindNodeDef, OutsideDef
 
 def generate_ring_graph(
     n_cameras: int,

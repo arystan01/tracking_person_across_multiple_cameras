@@ -29,7 +29,7 @@ from javes_main.adapters.system import FixedClock
 from javes_main.api import create_app
 from javes_main.domain import JobState
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
-from routing.contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
+from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
 from routing.contracts.params import RoutingParams
 
 

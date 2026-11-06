@@ -5,7 +5,7 @@ import hashlib
 import math
 from datetime import datetime, timedelta
 
-from .contracts import (
+from javes_contracts import (
     Ambiguity,
     EdgeDef,
     Hypothesis,

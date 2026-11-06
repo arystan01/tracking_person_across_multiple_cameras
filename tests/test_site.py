@@ -2,7 +2,7 @@ import pytest
 import yaml
 from pathlib import Path
 from routing.site import load_site, parse_site
-from routing.contracts import SiteGraph
+from javes_contracts import SiteGraph
 
 # Helpers to generate valid configs
 def valid_config():

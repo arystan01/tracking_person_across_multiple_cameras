@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable
 
-from .contracts import (
+from javes_contracts import (
     Anchors,
     Candidate,
     EdgeDef,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from javes_fakes.contracts import ArtifactRef, CaseWindow, CreateCaseBody, LastKnown
 from javes_fakes.dashboard import FakeDashboardRequests
-from routing.contracts import ProbeRequest, ProbeResult
+from javes_contracts import ProbeRequest, ProbeResult
 
 
 ROOT = Path(__file__).resolve().parent

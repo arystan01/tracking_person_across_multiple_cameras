@@ -5,7 +5,7 @@ import hashlib
 import random
 from datetime import datetime, timedelta
 
-from routing.contracts import Candidate, ProbeRequest, ProbeResult, ProbeStatus, Tracklet
+from javes_contracts import Candidate, ProbeRequest, ProbeResult, ProbeStatus, Tracklet
 from routing.sim.walker import GroundTruthVisit
 
 

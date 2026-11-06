@@ -1,6 +1,6 @@
 from __future__ import annotations
 import math
-from .contracts import EdgeDef, BlindNodeDef, OutsideDef
+from javes_contracts import EdgeDef, BlindNodeDef, OutsideDef
 
 
 def edge_sigma(t_typ: float, t_max: float) -> float:

@@ -5,7 +5,7 @@ from routing.timemodel import (
     lognormal_pdf, lognormal_peak,
     edge_time_likelihood, blind_dwell_likelihood, outside_dwell_likelihood,
 )
-from routing.contracts import EdgeDef, BlindNodeDef, OutsideDef
+from javes_contracts import EdgeDef, BlindNodeDef, OutsideDef
 
 
 class TestEdgeSigma:

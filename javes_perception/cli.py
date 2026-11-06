@@ -8,7 +8,7 @@ from pathlib import Path
 from javes_contracts import ArtifactRef, PerceptionProbeJob, TargetGalleryCommand
 from javes_contracts.acceptance import check_probe_result
 from javes_main.adapters.artifacts import FileArtifactStore
-from routing.contracts import ProbeRequest
+from javes_contracts import ProbeRequest
 
 from .config import load_settings
 

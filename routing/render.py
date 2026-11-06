@@ -5,7 +5,7 @@ import base64
 import math
 from html import escape
 
-from .contracts import (
+from javes_contracts import (
     Hypothesis,
     ProbeStatus,
     RenderedFloorMap,

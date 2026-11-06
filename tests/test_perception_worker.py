@@ -11,7 +11,7 @@ from javes_main.adapters.artifacts import InMemoryArtifactStore
 from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
 from javes_perception.state import PerceptionStateStore
 from javes_perception.video import DecodeError, VideoWindow
-from routing.contracts import ProbeRequest, ProbeStatus
+from javes_contracts import ProbeRequest, ProbeStatus
 
 T0 = datetime(2026, 11, 5, 5, 0, tzinfo=timezone.utc)
 RED = (0, 0, 255)
