@@ -185,6 +185,7 @@ def step(
         except Exception as exc:  # runtime data is noisy; the site config remains strict
             logger.warning("Skipping invalid ProbeResult: %s", exc)
     state = state.model_copy(deep=True)
+    original_stop_reason = state.stop_reason
     if state.site_version != graph.version:
         raise ValueError(
             f"SearchState site_version={state.site_version!r} does not match graph version={graph.version!r}"
@@ -206,6 +207,19 @@ def step(
         state, valid_results, graph, anchors, params, now
     )
     retries = [probe for probe in state.pending_probes if probe.probe_id not in previous_pending]
+
+    if anchors.review_only:
+        from .contracts import StopReason
+
+        return _finish(
+            state,
+            hypotheses,
+            rejected,
+            graph,
+            params,
+            now,
+            original_stop_reason or StopReason.OPERATOR_CLOSED,
+        )
 
     done, reason = check_stop_conditions(
         state, hypotheses, params, now, operator_closed=anchors.operator_closed
