@@ -436,6 +436,7 @@ class Anchors(ContractModel):
     confirm: list[str] = Field(default_factory=list, validation_alias=AliasChoices("confirm", "confirm_tracklet_ids"))
     reject: list[str] = Field(default_factory=list, validation_alias=AliasChoices("reject", "reject_tracklet_ids"))
     operator_closed: bool = False
+    review_only: bool = False
 
     @model_validator(mode="before")
     @classmethod

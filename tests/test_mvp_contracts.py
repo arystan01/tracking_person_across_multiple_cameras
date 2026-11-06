@@ -188,6 +188,29 @@ def test_long_gap_requires_confirmation() -> None:
     assert len(confirmed.hypotheses) == 1
     assert not confirmed.hypotheses[0].requires_confirmation
 
+    closed_state = candidate.state.model_copy(
+        update={
+            "done": True,
+            "mode": SearchMode.PAST_SUMMARY,
+            "stop_reason": "MAX_GAP",
+        },
+        deep=True,
+    )
+    reviewed_closed = step(
+        closed_state,
+        [],
+        graph,
+        Anchors(confirm_tracklet_ids=["reentry"], review_only=True),
+        params,
+        sighting_time + timedelta(seconds=12),
+    )
+    assert reviewed_closed.done
+    assert reviewed_closed.mode == SearchMode.PAST_SUMMARY
+    assert reviewed_closed.stop_reason.value == "MAX_GAP"
+    assert reviewed_closed.probes == []
+    assert len(reviewed_closed.hypotheses) == 1
+    assert not reviewed_closed.hypotheses[0].requires_confirmation
+
 
 def test_open_upsert_and_explicit_stream_close() -> None:
     graph = generate_ring_graph(3)
