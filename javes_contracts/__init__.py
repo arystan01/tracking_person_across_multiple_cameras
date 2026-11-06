@@ -76,6 +76,9 @@ from .routing import (
     Transition,
     TransitionGeometry,
     Visit,
+    WalkEdgeDef,
+    WalkGraphDef,
+    WalkNodeDef,
     ZoneEstimate,
 )
 from .transport import (
@@ -174,6 +177,9 @@ __all__ = [
     "Transition",
     "TransitionGeometry",
     "Visit",
+    "WalkEdgeDef",
+    "WalkGraphDef",
+    "WalkNodeDef",
     "VideoAvailability",
     "VideoSegmentRequest",
     "VideoSegmentResult",

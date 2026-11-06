@@ -12,6 +12,9 @@ from javes_contracts import (
     OutsideDef,
     RegionDef,
     SiteGraph,
+    WalkEdgeDef,
+    WalkGraphDef,
+    WalkNodeDef,
 )
 from .params import RoutingParams
 
@@ -90,7 +93,7 @@ def parse_site(
     allowed_root = {
         "site", "site_id", "version", "timezone", "cameras", "edges",
         "blind_nodes", "outside", "map", "max_gap_s", "gate_speed",
-        "max_speed", "walk_speed", "tmax_over_ttyp",
+        "max_speed", "walk_speed", "tmax_over_ttyp", "walk_graph",
     }
     unknown_root = sorted(set(raw) - allowed_root)
     if unknown_root:
@@ -251,7 +254,31 @@ def parse_site(
                 f"Camera '{camera.id}' calibration floor does not match camera floor"
             )
     for camera in cameras.values():
+        unknown_overlaps = sorted(set(camera.overlap_camera_ids) - camera_ids)
+        if camera.id in camera.overlap_camera_ids:
+            raise ValueError(f"Camera '{camera.id}' cannot overlap itself")
+        if unknown_overlaps:
+            raise ValueError(
+                f"Camera '{camera.id}' overlaps unknown cameras {unknown_overlaps}"
+            )
+        asymmetric = sorted(
+            other_id
+            for other_id in camera.overlap_camera_ids
+            if camera.id not in cameras[other_id].overlap_camera_ids
+        )
+        if asymmetric:
+            raise ValueError(
+                f"Camera overlap must be symmetric: '{camera.id}' -> {asymmetric}"
+            )
+    for camera in cameras.values():
         _validate_point(f"Camera '{camera.id}'", camera.floor, camera.map_xy, floor_sizes)
+        for index, point in enumerate(camera.coverage_polygon):
+            _validate_point(
+                f"Camera '{camera.id}' coverage_polygon[{index}]",
+                camera.floor,
+                point,
+                floor_sizes,
+            )
     for node in blind_nodes:
         _validate_point(f"Blind node '{node.id}'", node.floor, node.map_xy, floor_sizes)
     for edge in edges:
@@ -270,6 +297,60 @@ def parse_site(
         if edge.map_path and (source_xy is None or target_xy is None):
             logger.warning("Edge '%s' has map_path but one endpoint lacks map_xy", edge.id)
 
+    walk_graph = None
+    if raw.get("walk_graph") is not None:
+        raw_walk_graph = raw["walk_graph"]
+        if not isinstance(raw_walk_graph, dict):
+            raise ValueError("walk_graph must be a mapping")
+        raw_nodes = raw_walk_graph.get("nodes", {})
+        raw_walk_edges = raw_walk_graph.get("edges", [])
+        if not isinstance(raw_nodes, dict) or not raw_nodes:
+            raise ValueError("walk_graph must define at least one node")
+        if not isinstance(raw_walk_edges, list):
+            raise ValueError("walk_graph edges must be a list")
+        walk_nodes = {
+            str(node_id): WalkNodeDef(id=str(node_id), **dict(node_data))
+            for node_id, node_data in raw_nodes.items()
+            if isinstance(node_data, dict)
+        }
+        if len(walk_nodes) != len(raw_nodes):
+            raise ValueError("Every walk_graph node must be a mapping")
+        for node in walk_nodes.values():
+            _validate_point(
+                f"Walk node '{node.id}'",
+                node.floor_id,
+                node.map_xy,
+                floor_sizes,
+            )
+        walk_edges: list[WalkEdgeDef] = []
+        walk_edge_ids: set[str] = set()
+        for item in raw_walk_edges:
+            if not isinstance(item, dict):
+                raise ValueError("Every walk_graph edge must be a mapping")
+            edge = WalkEdgeDef(**dict(item))
+            if edge.id in walk_edge_ids:
+                raise ValueError(f"Duplicate walk edge ID found: {edge.id}")
+            walk_edge_ids.add(edge.id)
+            if edge.source not in walk_nodes or edge.target not in walk_nodes:
+                raise ValueError(
+                    f"Walk edge '{edge.id}' references an unknown walk node"
+                )
+            source = walk_nodes[edge.source]
+            target = walk_nodes[edge.target]
+            if source.floor_id != edge.floor_id or target.floor_id != edge.floor_id:
+                raise ValueError(
+                    f"Walk edge '{edge.id}' endpoints must be on floor '{edge.floor_id}'"
+                )
+            for index, point in enumerate(edge.map_path):
+                _validate_point(
+                    f"Walk edge '{edge.id}' map_path[{index}]",
+                    edge.floor_id,
+                    point,
+                    floor_sizes,
+                )
+            walk_edges.append(edge)
+        walk_graph = WalkGraphDef(nodes=walk_nodes, edges=walk_edges)
+
     return SiteGraph(
         site_id=str(raw.get("site", raw.get("site_id", "site"))),
         version=str(raw.get("version", "1")),
@@ -279,5 +360,6 @@ def parse_site(
         blind_nodes=blind_nodes,
         outside=outside,
         map=map_def,
+        walk_graph=walk_graph,
         max_gap_s=float(raw.get("max_gap_s", params.max_gap_s)),
     )

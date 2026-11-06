@@ -262,11 +262,20 @@ class CameraDef(ContractModel):
     appearance_floor: float | None = Field(default=None, ge=0.0, le=1.0)
     available_from: datetime | None = None
     calibration: CameraCalibration | None = None
+    coverage_polygon: list[tuple[float, float]] = Field(default_factory=list)
+    overlap_camera_ids: list[str] = Field(default_factory=list)
 
     @field_validator("available_from", mode="after")
     @classmethod
     def _aware_available_from(cls, value: datetime | None) -> datetime | None:
         return _utc(value)
+
+    @model_validator(mode="after")
+    def _normalise_spatial_metadata(self) -> CameraDef:
+        if self.coverage_polygon and len(self.coverage_polygon) < 3:
+            raise ValueError("camera coverage_polygon requires at least three points")
+        self.overlap_camera_ids = sorted(set(self.overlap_camera_ids))
+        return self
 
 
 class DwellDef(ContractModel):
@@ -334,6 +343,45 @@ class MapDef(ContractModel):
     floors: list[MapFloor] = Field(default_factory=list)
 
 
+class WalkNodeDef(ContractModel):
+    id: str
+    floor_id: str
+    map_xy: tuple[float, float]
+    kind: Literal["WAYPOINT", "ENTRANCE", "BLIND", "OUTSIDE"] = "WAYPOINT"
+
+
+class WalkEdgeDef(ContractModel):
+    id: str
+    source: str = Field(
+        validation_alias=AliasChoices("source", "from"),
+        serialization_alias="from",
+    )
+    target: str = Field(
+        validation_alias=AliasChoices("target", "to"),
+        serialization_alias="to",
+    )
+    floor_id: str
+    map_path: list[tuple[float, float]] = Field(default_factory=list)
+    d_m: float | None = Field(default=None, gt=0.0)
+
+
+class WalkGraphDef(ContractModel):
+    nodes: dict[str, WalkNodeDef]
+    edges: list[WalkEdgeDef]
+
+    @model_validator(mode="after")
+    def _canonical_node_ids(self) -> WalkGraphDef:
+        for key, node in self.nodes.items():
+            if key != node.id:
+                raise ValueError(
+                    f"walk node key {key!r} does not match node id {node.id!r}"
+                )
+        return self
+
+    def get_edges_from(self, node_id: str) -> list[WalkEdgeDef]:
+        return [edge for edge in self.edges if edge.source == node_id]
+
+
 class SiteGraph(ContractModel):
     site_id: str = Field(
         default="site",
@@ -347,6 +395,7 @@ class SiteGraph(ContractModel):
     blind_nodes: list[BlindNodeDef] = Field(default_factory=list)
     outside: OutsideDef | None = None
     map: MapDef | None = None
+    walk_graph: WalkGraphDef | None = None
     max_gap_s: float = Field(default=2400.0, gt=0.0)
 
     def get_edges_from(self, node: str) -> list[EdgeDef]:
