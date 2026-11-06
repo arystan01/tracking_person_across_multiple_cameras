@@ -72,7 +72,38 @@ def _require_real_cv() -> None:
         pytest.skip(f"missing real-CV dependencies: {', '.join(missing)}")
 
 
+def _nvidia_pixel_to_map_homographies(
+    repository_root: Path,
+) -> dict[str, list[list[float]]]:
+    import numpy as np
+    import yaml
+
+    fixture = repository_root / "data/nvidia_mtmc/mtmc_4cam"
+    transforms = yaml.safe_load((fixture / "transforms.yml").read_text())
+    world_to_map = np.asarray(transforms["T_ov2px"], dtype=float).reshape(3, 3)
+    result: dict[str, list[list[float]]] = {}
+    for index in range(1, 5):
+        camera = f"Cam{index:03d}"
+        raw = yaml.safe_load(
+            (
+                fixture
+                / "camInfo"
+                / f"Warehouse_Synthetic_{camera}.yml"
+            ).read_text()
+        )
+        projection = np.asarray(
+            raw["projectionMatrix_3x4_w2p"], dtype=float
+        ).reshape(3, 4)
+        ground_plane_to_pixel = projection[:, [0, 1, 3]]
+        pixel_to_map = world_to_map @ np.linalg.inv(ground_plane_to_pixel)
+        pixel_to_map /= pixel_to_map[2, 2]
+        result[camera] = pixel_to_map.tolist()
+    return result
+
+
 def _write_site_registry(run_root: Path, repository_root: Path) -> Path:
+    import yaml
+
     site_root = run_root / "site-config"
     site_dir = site_root / "sites" / "nvidia-mtmc-4cam" / "real-cv-e2e-v1"
     params_dir = site_root / "routing_params"
@@ -82,31 +113,72 @@ def _write_site_registry(run_root: Path, repository_root: Path) -> Path:
         repository_root / "data/nvidia_mtmc/mtmc_4cam/map.png",
         site_dir / "map.png",
     )
-    # Camera positions come from NVIDIA's projection matrices and T_ov2px.
+    # NVIDIA provides world-to-camera matrices and a world-to-floor-map
+    # transform. Their composition gives the immutable pixel-to-map
+    # calibration used by Routing for real detector foot-points.
+    homographies = _nvidia_pixel_to_map_homographies(repository_root)
+    camera_positions = {
+        "Cam001": ("warehouse-west", [583.1, 454.2]),
+        "Cam002": ("warehouse-west", [668.2, 506.0]),
+        "Cam003": ("warehouse-south", [520.9, 735.2]),
+        "Cam004": ("warehouse-south", [729.1, 786.3]),
+    }
+    cameras = {
+        camera: {
+            "zone": zone,
+            "floor": "warehouse",
+            "map_xy": map_xy,
+            "calibration": {
+                "frame_size_px": [1920, 1080],
+                "homography": homographies[camera],
+                "floor_id": "warehouse",
+                "error_m": 0.5,
+            },
+        }
+        for camera, (zone, map_xy) in camera_positions.items()
+    }
+    site = {
+        "site": "nvidia-mtmc-4cam",
+        "version": "real-cv-e2e-v1",
+        "timezone": "UTC",
+        "map": {
+            "floors": [
+                {
+                    "id": "warehouse",
+                    "image": "map.png",
+                    "size_px": [1920, 1080],
+                    # T_ov2px is pixels per foot; convert map pixels to metres.
+                    "m_per_px": 0.3048 / ((9.781818 + 9.785714) / 2.0),
+                }
+            ]
+        },
+        "cameras": cameras,
+        "edges": [
+            {
+                "id": "Cam001-Cam003",
+                "from": "Cam001",
+                "to": "Cam003",
+                "t_min": 1,
+                "t_typ": 8,
+                "t_max": 30,
+                "d_m": 12,
+                "map_path": [[570, 540], [545, 640]],
+            },
+            {
+                "id": "Cam003-Cam004",
+                "from": "Cam003",
+                "to": "Cam004",
+                "t_min": 1,
+                "t_typ": 8,
+                "t_max": 30,
+                "d_m": 10,
+                "map_path": [[610, 750], [680, 770]],
+            },
+        ],
+        "max_gap_s": 2400,
+    }
     (site_dir / "site.yaml").write_text(
-        """
-site: nvidia-mtmc-4cam
-version: real-cv-e2e-v1
-timezone: UTC
-map:
-  floors:
-    - {id: warehouse, image: map.png, size_px: [1920, 1080]}
-cameras:
-  Cam001: {zone: warehouse-west, floor: warehouse, map_xy: [583.1, 454.2]}
-  Cam002: {zone: warehouse-west, floor: warehouse, map_xy: [668.2, 506.0]}
-  Cam003: {zone: warehouse-south, floor: warehouse, map_xy: [520.9, 735.2]}
-  Cam004: {zone: warehouse-south, floor: warehouse, map_xy: [729.1, 786.3]}
-edges:
-  - id: Cam001-Cam003
-    from: Cam001
-    to: Cam003
-    t_min: 1
-    t_typ: 8
-    t_max: 30
-    map_path: [[570, 540], [545, 640]]
-max_gap_s: 2400
-""".strip(),
-        encoding="utf-8",
+        yaml.safe_dump(site, sort_keys=False), encoding="utf-8"
     )
     (params_dir / "real-cv-e2e-params-v1.yaml").write_text(
         "version: real-cv-e2e-params-v1\nK: 4\nB: 5\n",
@@ -418,6 +490,12 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             for candidate in result.candidates
         ]
         assert candidate_scores and max(candidate_scores) > 0.8
+        real_tracklets = [
+            tracklet for result in real_results for tracklet in result.tracklets
+        ]
+        assert real_tracklets
+        assert all(tracklet.trajectory for tracklet in real_tracklets)
+        assert all(len(tracklet.trajectory or []) <= 256 for tracklet in real_tracklets)
 
         dashboard = main_http.get(
             f"/v1/cases/{case_id}/view",
@@ -430,6 +508,37 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             visit["camera_id"] for visit in view["best_hypothesis"]["visits"]
         ]
         assert route_cameras[:2] == ["Cam001", "Cam003"]
+        projected_visit = next(
+            visit
+            for visit in view["best_hypothesis"]["visits"]
+            if visit["projected_trajectory"]
+        )
+        source_tracklet = next(
+            tracklet
+            for tracklet in real_tracklets
+            if tracklet.id in projected_visit["tracklet_ids"]
+        )
+        source_point = (source_tracklet.trajectory or [])[0]
+        import numpy as np
+
+        homography = np.asarray(
+            _nvidia_pixel_to_map_homographies(repository_root)[
+                source_tracklet.camera
+            ]
+        )
+        expected = homography @ np.asarray(
+            [source_point.x_px, source_point.y_px, 1.0]
+        )
+        expected /= expected[2]
+        projected_point = projected_visit["projected_trajectory"][0]
+        projection_error_px = float(
+            np.hypot(
+                projected_point["x"] - expected[0],
+                projected_point["y"] - expected[1],
+            )
+        )
+        allowed_projection_error_px = 0.01
+        assert projection_error_px <= allowed_projection_error_px
         assert view["rendered_route_maps"]
         route_map = view["rendered_route_maps"][0]
         route_response = main_http.get(
@@ -440,6 +549,9 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         route_svg = route_response.content
         assert b'data-role="floor-plan"' in route_svg
         assert b'data-role="best-route"' in route_svg
+        assert b'data-role="observed-path"' in route_svg
+        assert b'data-role="inferred-path"' in route_svg
+        assert b'data-role="legend"' in route_svg
         assert b"Cam001" in route_svg and b"Cam003" in route_svg
 
         result_payloads = [
@@ -454,6 +566,12 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             "route_revision": view["route_revision"],
             "route_api_url": route_map["url"],
             "map_source": "data/nvidia_mtmc/mtmc_4cam/map.png",
+            "trajectory_points": sum(
+                len(tracklet.trajectory or []) for tracklet in real_tracklets
+            ),
+            "projection_error_px": projection_error_px,
+            "allowed_projection_error_px": allowed_projection_error_px,
+            "positioning_source": "NVIDIA homography + real YOLO foot-points",
             "run_directory": str(run_root.resolve()),
         }
         _publish_inspectable_output(
