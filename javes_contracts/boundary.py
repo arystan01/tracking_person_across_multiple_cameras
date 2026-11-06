@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from routing.contracts import ContractModel, ProbeRequest
+from .routing import ContractModel, ProbeRequest
 
 
 def aware_utc(value: datetime | None) -> datetime | None:

@@ -6,10 +6,11 @@ the modular-monolith deployment or expose the same two operations over a
 transport later.
 """
 
-from .policy import RetentionPolicy
-from .factory import build_local_retention_worker
-from .repository import SQLiteRetentionRepository
-from .storage import (
+from .core.policy import RetentionPolicy
+from .core.worker import RetentionDeletionError, RetentionWorker
+from .runtime.factory import build_local_retention_worker
+from .runtime.repository import SQLiteRetentionRepository
+from .runtime.storage import (
     ArtifactStoreDeletionBackend,
     CallbackDeletionBackend,
     DeletionPending,
@@ -19,7 +20,6 @@ from .storage import (
     StorageLocator,
     UnsupportedStorageLocator,
 )
-from .worker import RetentionDeletionError, RetentionWorker
 
 __all__ = [
     "ArtifactStoreDeletionBackend",

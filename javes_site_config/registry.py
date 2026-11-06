@@ -10,8 +10,8 @@ from javes_contracts import (
     SiteAssetDescriptor,
     SiteVersionResponse,
 )
-from routing.contracts.params import RoutingParams
-from routing.site import load_site
+from javes_routing.service.config_loader import load_routing_params
+from javes_routing.service.site_loader import load_site
 
 
 def model_checksum(value: object) -> str:
@@ -116,7 +116,7 @@ class FilesystemSiteConfigRegistry:
         path = self._inside(self.root / "routing_params" / f"{version}.yaml")
         if not path.is_file():
             raise KeyError(f"unknown Routing params version {version!r}")
-        params = RoutingParams.from_yaml(path)
+        params = load_routing_params(path)
         if params.version != version:
             raise ValueError("params file identity does not match requested version")
         result = RoutingParamsResponse(

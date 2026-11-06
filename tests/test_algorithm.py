@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from routing.contracts import (
+from javes_contracts import (
     Anchors,
     Candidate,
     CaseInfo,
@@ -20,12 +20,12 @@ from routing.contracts import (
     Tracklet,
     Visit,
 )
-from routing.contracts.params import RoutingParams
-from routing.sim.generator import generate_ring_graph
-from routing.sim.perception import FakePerception
-from routing.sim.walker import GroundTruthVisit, simulate_walk
-from routing.step import init_state, step
-from routing.update import gate_visit_to_hypothesis
+from javes_routing.core.params import RoutingParams
+from javes_routing.core.sim.generator import generate_ring_graph
+from javes_routing.core.sim.perception import FakePerception
+from javes_routing.core.sim.walker import GroundTruthVisit, simulate_walk
+from javes_routing.core.step import init_state, step
+from javes_routing.core.update import gate_visit_to_hypothesis
 
 def test_1_gate():
     graph = generate_ring_graph(4)
@@ -108,7 +108,7 @@ def test_3_empty_probe():
     res = step(state, [pr], graph, Anchors(), params, now)
 
     h_after = res.hypotheses[0]
-    from routing.update import compute_appearance_log_lik
+    from javes_routing.core.update import compute_appearance_log_lik
     expected_base_score = compute_appearance_log_lik(0.9, params.score_clip_min)
     assert h_after.score < expected_base_score
 

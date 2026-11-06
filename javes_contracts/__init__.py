@@ -1,8 +1,8 @@
 """Stable public boundary imports for JAVES-AI components.
 
-Main-Infra-owned DTOs live in :mod:`javes_contracts.boundary`. Routing-owned
-contracts are re-exported from :mod:`routing.contracts`; external adapters
-should import only from this facade instead of concrete fake modules.
+Main-Infra-owned DTOs live in :mod:`javes_contracts.boundary`; Routing DTOs
+live in :mod:`javes_contracts.routing`. Components import this facade rather
+than another component's implementation package.
 """
 
 from .boundary import (
@@ -33,16 +33,28 @@ from .boundary import (
     VideoSegmentRequest,
     VideoSegmentResult,
 )
-from routing.contracts import (
+from .routing import (
     Ambiguity,
     Anchors,
+    BlindNodeDef,
+    CameraDef,
     Candidate,
     CaseInfo,
+    ContractModel,
+    DwellDef,
+    EdgeDef,
     Estimate,
     Hypothesis,
+    HypothesisStatus,
+    MapDef,
+    MapFloor,
+    OutsideDef,
     ProbeRequest,
     ProbeResult,
     ProbeStatus,
+    ProbedWindow,
+    RegionDef,
+    RejectedCandidate,
     RenderedFloorMap,
     RenderedRouteBundle,
     RoutingWorkerResult,
@@ -50,8 +62,12 @@ from routing.contracts import (
     SearchMode,
     SearchState,
     SiteGraph,
+    StopReason,
     StepResult,
     Tracklet,
+    Transition,
+    Visit,
+    ZoneEstimate,
 )
 from .transport import (
     ArtifactManifest,
@@ -78,9 +94,11 @@ __all__ = [
     "CONTRACTS_VERSION",
     "Ambiguity",
     "Anchors",
+    "BlindNodeDef",
     "ArtifactRef",
     "ArtifactManifest",
     "Candidate",
+    "CameraDef",
     "CaseCommandBody",
     "CaseInfo",
     "CaseWindow",
@@ -88,20 +106,30 @@ __all__ = [
     "ClipProcessingStatus",
     "ClipRecord",
     "ClipStateCommand",
+    "ContractModel",
     "CreateCaseBody",
     "CutClipCommand",
+    "DwellDef",
+    "EdgeDef",
     "Estimate",
     "ExportClipsCommand",
     "ExportClipsResult",
     "FakeHttpRequest",
     "FakeObservation",
     "Hypothesis",
+    "HypothesisStatus",
     "LastKnown",
     "LiveFeedUpdate",
+    "MapDef",
+    "MapFloor",
+    "OutsideDef",
     "PerceptionProbeJob",
     "ProbeRequest",
     "ProbeResult",
     "ProbeStatus",
+    "ProbedWindow",
+    "RegionDef",
+    "RejectedCandidate",
     "RenderedFloorMap",
     "RenderedRouteBundle",
     "RetentionClass",
@@ -121,10 +149,13 @@ __all__ = [
     "SiteGraph",
     "SiteAssetDescriptor",
     "SiteVersionResponse",
+    "StopReason",
     "StepResult",
     "TargetGalleryCommand",
     "TargetGalleryResult",
     "Tracklet",
+    "Transition",
+    "Visit",
     "VideoAvailability",
     "VideoSegmentRequest",
     "VideoSegmentResult",
@@ -136,4 +167,5 @@ __all__ = [
     "WorkerTaskEnvelope",
     "WorkerTaskFailureRequest",
     "WorkerTaskResultRequest",
+    "ZoneEstimate",
 ]

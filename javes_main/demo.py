@@ -11,8 +11,8 @@ from typing import Sequence
 import httpx
 
 from javes_contracts import ArtifactRef, FakeObservation
-from routing.contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
-from routing.contracts.params import RoutingParams
+from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
+from javes_routing.core.params import RoutingParams
 
 from .api import create_app
 from .bootstrap import build_in_memory_system

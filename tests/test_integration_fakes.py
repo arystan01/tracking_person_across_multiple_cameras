@@ -37,7 +37,7 @@ from javes_fakes.contracts import (
     VideoSegmentRequest,
 )
 from javes_fakes.demo import build_scenario
-from routing.contracts import ProbeRequest, ProbeStatus
+from javes_contracts import ProbeRequest, ProbeStatus
 
 
 UTC = timezone.utc

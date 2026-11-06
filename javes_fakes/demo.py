@@ -6,7 +6,7 @@ import argparse
 import json
 from datetime import datetime, timedelta, timezone
 
-from routing.contracts import ProbeRequest
+from javes_contracts import ProbeRequest
 
 from .clip import FakeClipWorker
 from .contracts import (
