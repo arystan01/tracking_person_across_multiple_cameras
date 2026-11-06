@@ -147,10 +147,10 @@ def movement_ranges(
     observed_distance = sum(item[0] for item in observed)
     observed_error = sum(item[2] for item in observed)
     inferred_distances = [
-        distance
+        (transition.geometry.distance_min_m + transition.geometry.distance_max_m)
+        / 2.0
         for transition in hypothesis.transitions
-        for edge_id in transition.edge_ids
-        if (distance := edge_distance_m(edge_id, graph)) is not None
+        if transition.geometry is not None
     ]
     inferred_distance = sum(inferred_distances)
     total = observed_distance + inferred_distance

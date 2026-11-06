@@ -23,12 +23,14 @@ from javes_contracts import (
     ProbeResult,
     ProbeStatus,
     ProbedWindow,
+    ProjectedTrajectoryPoint,
     SearchFrontier,
     SearchMode,
     SiteGraph,
     StepResult,
     Tracklet,
     Transition,
+    TransitionGeometry,
     Visit,
 )
 from javes_routing.core.params import RoutingParams
@@ -262,14 +264,31 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
         ],
     )
     visits = [
-        Visit(id="vA", camera="A", t_in=T0, t_out=T0, score=0.7),
-        Visit(id="vB", camera="B", t_in=T0 + timedelta(seconds=10), t_out=T0 + timedelta(seconds=12), score=0.8),
+        Visit(
+            id="vA", camera="A", t_in=T0, t_out=T0, score=0.7,
+            projected_trajectory=[ProjectedTrajectoryPoint(timestamp=T0, x=20, y=30, floor_id="1F")],
+            trajectory_approximate=False,
+        ),
+        Visit(
+            id="vB", camera="B", t_in=T0 + timedelta(seconds=10), t_out=T0 + timedelta(seconds=12), score=0.8,
+            projected_trajectory=[ProjectedTrajectoryPoint(timestamp=T0 + timedelta(seconds=10), x=300, y=80, floor_id="1F")],
+            trajectory_approximate=False,
+        ),
         Visit(id="vC", camera="C", t_in=T0 + timedelta(seconds=45), t_out=T0 + timedelta(seconds=50), score=0.8, flags=["LONG_GAP"]),
     ]
     hypothesis = Hypothesis(
         id="h1", visits=visits,
         transitions=[
-            Transition(from_visit_id="vA", to_visit_id="vB", edge_ids=["A-B"], alternative_edge_paths=[["A-B-alt"]]),
+            Transition(
+                from_visit_id="vA", to_visit_id="vB", edge_ids=["A-B"], alternative_edge_paths=[["A-B-alt"]],
+                geometry=TransitionGeometry(
+                    floor_id="1F",
+                    points=[(20, 30), (150, 40), (300, 80)],
+                    alternative_paths=[[(20, 30), (180, 130), (300, 80)]],
+                    distance_min_m=10,
+                    distance_max_m=12,
+                ),
+            ),
             Transition(from_visit_id="vB", to_visit_id="vC", edge_ids=["B-C"], kind="VERTICAL", flags=["LONG_GAP"]),
         ],
         current_node="C", status=HypothesisStatus.ALIVE, score=1.0,
@@ -296,7 +315,7 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
     assert 'data-approximate="false"' in floor_one
     assert 'data-role="alternative-path"' in floor_one
     assert 'stroke-dasharray="5 7"' in floor_one
-    assert 'data-role="inter-floor"' in floor_one
+    assert 'data-role="inter-floor"' not in floor_one
     floor_two = next(item.svg for item in first.maps if item.floor_id == "2F")
     assert "LONG_GAP" in floor_two
 

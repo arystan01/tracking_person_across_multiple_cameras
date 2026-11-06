@@ -393,6 +393,77 @@ class ProjectedTrajectoryPoint(ContractModel):
         return value
 
 
+class GroundPosition(ContractModel):
+    """A person's position on an immutable floor map, never a camera marker."""
+
+    timestamp: datetime
+    x: float
+    y: float
+    floor_id: str
+    error_m: float = Field(default=0.0, ge=0.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    source_camera_ids: list[str] = Field(default_factory=list)
+    source_tracklet_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _aware_timestamp(cls, value: datetime) -> datetime:
+        return _utc(value)  # type: ignore[return-value]
+
+    @field_validator("x", "y", mode="after")
+    @classmethod
+    def _finite_map_coordinate(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("ground position coordinates must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def _normalise_sources(self) -> GroundPosition:
+        self.source_camera_ids = sorted(set(self.source_camera_ids))
+        self.source_tracklet_ids = sorted(set(self.source_tracklet_ids))
+        return self
+
+
+class ObservedSegment(ContractModel):
+    """One fused, time-ordered ground-plane observation of the person."""
+
+    id: str
+    points: list[GroundPosition]
+    camera_ids: list[str] = Field(default_factory=list)
+    tracklet_ids: list[str] = Field(default_factory=list)
+    approximate: bool = False
+
+    @model_validator(mode="after")
+    def _ordered_points(self) -> ObservedSegment:
+        timestamps = [point.timestamp for point in self.points]
+        if timestamps != sorted(timestamps):
+            raise ValueError("observed segment points must be time ordered")
+        self.camera_ids = sorted(set(self.camera_ids))
+        self.tracklet_ids = sorted(set(self.tracklet_ids))
+        return self
+
+
+class TransitionGeometry(ContractModel):
+    """Pedestrian geometry between observed positions on one floor."""
+
+    floor_id: str
+    points: list[tuple[float, float]] = Field(min_length=2)
+    alternative_paths: list[list[tuple[float, float]]] = Field(default_factory=list)
+    distance_min_m: float = Field(ge=0.0)
+    distance_max_m: float = Field(ge=0.0)
+    approximate: bool = False
+    source: Literal["WALK_GRAPH", "MANUAL"] = "WALK_GRAPH"
+
+    @model_validator(mode="after")
+    def _valid_geometry(self) -> TransitionGeometry:
+        if self.distance_max_m < self.distance_min_m:
+            raise ValueError("transition distance maximum must not be below minimum")
+        for path in [self.points, *self.alternative_paths]:
+            if any(not math.isfinite(value) for point in path for value in point):
+                raise ValueError("transition geometry coordinates must be finite")
+        return self
+
+
 class Visit(ContractModel):
     id: str = Field(validation_alias=AliasChoices("id", "visit_id"), serialization_alias="visit_id")
     camera: str = Field(validation_alias=AliasChoices("camera", "camera_id"), serialization_alias="camera_id")
@@ -439,6 +510,7 @@ class Transition(ContractModel):
     via_nodes: list[str] = Field(default_factory=list)
     kind: Literal["EDGE", "BLIND", "OUTSIDE", "UNKNOWN", "VERTICAL", "GAP"] = "EDGE"
     flags: list[str] = Field(default_factory=list)
+    geometry: TransitionGeometry | None = None
 
 
 class HypothesisStatus(str, Enum):
@@ -459,6 +531,7 @@ class Hypothesis(ContractModel):
     requires_confirmation: bool = False
     reject_reason: str | None = None
     gate_margin_s: float | None = None
+    observed_segments: list[ObservedSegment] = Field(default_factory=list)
 
 
 class SearchMode(str, Enum):
