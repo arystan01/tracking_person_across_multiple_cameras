@@ -13,6 +13,7 @@ from javes_contracts import (
     CreateCaseBody,
     FakeObservation,
     LastKnown,
+    ProbeRequest,
     ProbeResult,
     ProbeStatus,
     ReviewDecisionBody,
@@ -357,6 +358,142 @@ def test_review_hold_is_retained_until_case_ttl():
     app.routing_dispatcher.drain()
     app.outbox_dispatcher.drain()
     assert app.retention_worker.resources[retention_resource_id].deleted is False
+
+
+@pytest.mark.parametrize("decision", ["CONFIRM", "REJECT"])
+def test_closed_case_review_recalculates_history_without_restarting_search(decision):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key=f"closed-review-{decision}")
+    app.scheduler.run_case_once("case-1")
+    before_close = app.manager.get_view("case-1")
+    candidate = before_close.candidates[0]
+
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id=f"close-{decision}",
+            action="CLOSE",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key=f"close-{decision}",
+    )
+    app.routing_dispatcher.drain()
+    app.outbox_dispatcher.drain()
+    closed = app.repository.get("case-1")
+    assert closed.lifecycle == CaseLifecycle.CLOSED
+    assert closed.latest_route is not None
+    assert closed.latest_route.step_result.stop_reason.value == "OPERATOR_CLOSED"
+    route_revision = closed.latest_route.revision
+    closed_at = closed.closed_at
+    retention_due_at = closed.retention_due_at
+    job_ids = [item.job_id for item in app.repository.list_jobs("case-1")]
+    gallery_messages = [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == "TARGET_GALLERY"
+    ]
+    assert app.manager.get_view("case-1").candidates
+
+    body = ReviewDecisionBody(
+        decision_id=f"closed-{decision}",
+        candidate_id=candidate["candidate_id"],
+        tracklet_id=candidate["tracklet_id"],
+        decision=decision,
+        operator_id="operator-1",
+        occurred_at=BASE + timedelta(seconds=80),
+    )
+    app.manager.decide(
+        "case-1", body, idempotency_key=f"closed-{decision}"
+    )
+    app.routing_dispatcher.drain()
+    reviewed = app.repository.get("case-1")
+    assert reviewed.lifecycle == CaseLifecycle.CLOSED
+    assert reviewed.closed_at == closed_at
+    assert reviewed.retention_due_at == retention_due_at
+    assert reviewed.next_heartbeat_at is None
+    assert reviewed.live_feed is None
+    assert reviewed.latest_route is not None
+    assert reviewed.latest_route.revision > route_revision
+    assert reviewed.latest_route.step_result.done
+    assert reviewed.latest_route.step_result.mode.value == "PAST_SUMMARY"
+    assert reviewed.latest_route.step_result.stop_reason.value == "OPERATOR_CLOSED"
+    assert reviewed.latest_route.step_result.probes == []
+    assert [item.job_id for item in app.repository.list_jobs("case-1")] == job_ids
+    assert [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == "TARGET_GALLERY"
+    ] == gallery_messages
+
+    revision_after_review = reviewed.latest_route.revision
+    app.manager.decide(
+        "case-1", body, idempotency_key=f"closed-{decision}"
+    )
+    app.routing_dispatcher.drain()
+    replay = app.repository.get("case-1")
+    assert replay.latest_route is not None
+    assert replay.latest_route.revision == revision_after_review
+
+
+def test_closed_case_discards_probes_returned_by_routing_defence_in_depth(
+    monkeypatch,
+):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="closed-probe-guard")
+    app.scheduler.run_case_once("case-1")
+    candidate = app.manager.get_view("case-1").candidates[0]
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="close-before-malicious-probe",
+            action="CLOSE",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="close-before-malicious-probe",
+    )
+    app.routing_dispatcher.drain()
+    jobs_before = [item.job_id for item in app.repository.list_jobs("case-1")]
+    real_advance = app.manager.routing.advance
+
+    def advance_with_unexpected_probe(*args, **kwargs):
+        result = real_advance(*args, **kwargs)
+        unexpected = ProbeRequest(
+            probe_id="unexpected-closed-probe",
+            camera="B",
+            t_from=BASE + timedelta(seconds=80),
+            t_to=BASE + timedelta(seconds=90),
+        )
+        return result.model_copy(
+            update={
+                "step_result": result.step_result.model_copy(
+                    update={"probes": [unexpected]}, deep=True
+                )
+            },
+            deep=True,
+        )
+
+    monkeypatch.setattr(app.manager.routing, "advance", advance_with_unexpected_probe)
+    app.manager.decide(
+        "case-1",
+        ReviewDecisionBody(
+            decision_id="closed-malicious-probe-decision",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ),
+        idempotency_key="closed-malicious-probe-decision",
+    )
+    app.routing_dispatcher.drain()
+
+    reviewed = app.repository.get("case-1")
+    assert reviewed.lifecycle == CaseLifecycle.CLOSED
+    assert reviewed.latest_route is not None
+    assert reviewed.latest_route.step_result.probes == []
+    assert [item.job_id for item in app.repository.list_jobs("case-1")] == jobs_before
 
 
 def test_repository_optimistic_revision_check():

@@ -291,10 +291,16 @@ class CaseManager:
             )
         ):
             return self.repository.get(trigger.case_id)
+        anchors = trigger.anchors
+        if (
+            trigger.trigger_type == "OPERATOR_DECISION"
+            and current_case.lifecycle == CaseLifecycle.CLOSED
+        ):
+            anchors = anchors.model_copy(update={"review_only": True})
         return self._routing_tick(
             trigger.case_id,
             probe_results=trigger.probe_results,
-            anchors=trigger.anchors,
+            anchors=anchors,
             trigger_id=trigger.trigger_id,
             trigger_type=trigger.trigger_type,
         )
@@ -483,6 +489,8 @@ class CaseManager:
             ),
         )
         step = worker_result.step_result
+        if case.lifecycle != CaseLifecycle.SEARCHING and step.probes:
+            step = step.model_copy(update={"probes": []}, deep=True)
         case.routing_state = step.state
         route_revision = worker_result.rendered_route.route_revision
         previous_route = case.latest_route
@@ -554,7 +562,11 @@ class CaseManager:
             created_at=now,
         )
         case.updated_at = now
-        case.next_heartbeat_at = now + timedelta(seconds=params.heartbeat_s)
+        case.next_heartbeat_at = (
+            now + timedelta(seconds=params.heartbeat_s)
+            if case.lifecycle == CaseLifecycle.SEARCHING and not step.done
+            else None
+        )
         automatic_retention_command: RetentionCommand | None = None
         if step.done and case.lifecycle == CaseLifecycle.SEARCHING:
             case.lifecycle = CaseLifecycle.CLOSED
@@ -575,7 +587,8 @@ class CaseManager:
         clip_commands = self._clip_hold_commands(case, probe_results)
         with self.repository.transaction():
             saved = self.repository.save(case, expected_revision)
-            self._create_probe_jobs(saved, step.probes)
+            if saved.lifecycle == CaseLifecycle.SEARCHING:
+                self._create_probe_jobs(saved, step.probes)
             for resource in route_resources:
                 self._enqueue(
                     case_id,
@@ -1087,6 +1100,7 @@ class CaseManager:
                 if body.decision == "REJECT"
                 else [],
             )
+            searching = case.lifecycle == CaseLifecycle.SEARCHING
             expected = case.revision
             pending = (
                 case.pending_confirm_tracklet_ids
@@ -1104,7 +1118,7 @@ class CaseManager:
                 f"decision:{body.decision_id}",
                 anchors=anchors,
             )
-            if body.decision == "CONFIRM":
+            if body.decision == "CONFIRM" and searching:
                 gallery_command = TargetGalleryCommand(
                     command_id=self.ids.new(
                         "gallery_cmd", case_id, "confirmed", body.tracklet_id

@@ -276,6 +276,123 @@ async def test_controls_http_fake_end_to_end():
 
 
 @pytest.mark.anyio
+async def test_controls_allows_authorised_review_after_close_without_restarting_search():
+    system = make_system()
+    transport = httpx.ASGITransport(
+        app=create_app(
+            system.manager,
+            auth=system.auth,
+            scheduler=system.scheduler,
+            run_fake_jobs_inline=True,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        root_token = await login(client, "root", "root-password-for-tests")
+
+        async def create_user(username: str, role: str) -> tuple[str, str]:
+            temporary_password = f"{username}-temporary-password"
+            created_user = await client.post(
+                "/v1/admin/users",
+                json={
+                    "username": username,
+                    "temporary_password": temporary_password,
+                    "role": role,
+                },
+                headers=headers(f"create-{username}", root_token),
+            )
+            assert created_user.status_code == 201, created_user.text
+            user_id = created_user.json()["user_id"]
+            temporary_token = await login(client, username, temporary_password)
+            password = f"{username}-permanent-password"
+            changed = await client.post(
+                "/v1/auth/change-password",
+                json={
+                    "current_password": temporary_password,
+                    "new_password": password,
+                },
+                headers=headers(f"change-{username}-password", temporary_token),
+            )
+            assert changed.status_code == 204, changed.text
+            return user_id, await login(client, username, password)
+
+        operator_id, operator_token = await create_user("reviewer", "OPERATOR")
+        viewer_id, viewer_token = await create_user("observer", "VIEWER")
+        created = await client.post(
+            "/v1/cases",
+            json=body(operator_id).model_dump(mode="json"),
+            headers=headers("closed-review-create", operator_token),
+        )
+        assert created.status_code == 201, created.text
+        candidate = created.json()["candidates"][0]
+
+        closed = await client.post(
+            "/v1/cases/api-case/commands/close",
+            json=CaseCommandBody(
+                command_id="closed-review-close",
+                action="CLOSE",
+                operator_id=operator_id,
+                occurred_at=BASE + timedelta(seconds=70),
+            ).model_dump(mode="json"),
+            headers=headers("closed-review-close", operator_token),
+        )
+        assert closed.status_code == 200, closed.text
+        closed_view = closed.json()
+        assert closed_view["lifecycle"] == "CLOSED"
+        assert closed_view["candidates"]
+        route_revision = closed_view["route_revision"]
+        job_ids = [item.job_id for item in system.repository.list_jobs("api-case")]
+
+        viewer_read = await client.get(
+            "/v1/cases/api-case/view",
+            headers={"authorization": f"Bearer {viewer_token}"},
+        )
+        assert viewer_read.status_code == 200
+        assert viewer_read.json()["candidates"]
+        viewer_decision = ReviewDecisionBody(
+            decision_id="viewer-cannot-review",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id=viewer_id,
+            occurred_at=BASE + timedelta(seconds=80),
+        )
+        forbidden = await client.post(
+            "/v1/cases/api-case/decisions",
+            json=viewer_decision.model_dump(mode="json"),
+            headers=headers("viewer-cannot-review", viewer_token),
+        )
+        assert forbidden.status_code == 403
+
+        operator_decision = viewer_decision.model_copy(
+            update={
+                "decision_id": "operator-closed-review",
+                "operator_id": operator_id,
+            }
+        )
+        reviewed = await client.post(
+            "/v1/cases/api-case/decisions",
+            json=operator_decision.model_dump(mode="json"),
+            headers=headers("operator-closed-review", operator_token),
+        )
+        assert reviewed.status_code == 200, reviewed.text
+        reviewed_view = reviewed.json()
+        assert reviewed_view["lifecycle"] == "CLOSED"
+        assert reviewed_view["route_revision"] > route_revision
+        assert reviewed_view["mode"] == "PAST_SUMMARY"
+        assert reviewed_view["stop_reason"] == "OPERATOR_CLOSED"
+        assert reviewed_view["candidates"]
+        assert [item.job_id for item in system.repository.list_jobs("api-case")] == job_ids
+
+        replay = await client.post(
+            "/v1/cases/api-case/decisions",
+            json=operator_decision.model_dump(mode="json"),
+            headers=headers("operator-closed-review", operator_token),
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["route_revision"] == reviewed_view["route_revision"]
+
+
+@pytest.mark.anyio
 async def test_worker_result_endpoint_requires_token_and_is_idempotent():
     system = make_system()
     transport = httpx.ASGITransport(
