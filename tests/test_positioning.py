@@ -29,6 +29,7 @@ from javes_contracts import (
     Tracklet,
     TrajectoryPoint,
     Transition,
+    TransitionGeometry,
     Visit,
 )
 from javes_routing.core.params import RoutingParams
@@ -262,12 +263,32 @@ def test_distance_speed_ranges_and_max_speed_guard() -> None:
         t_in=T0 + timedelta(seconds=10),
         t_out=T0 + timedelta(seconds=12),
         appearance_score=0.9,
+        projected_trajectory=[
+            ProjectedTrajectoryPoint(
+                timestamp=T0 + timedelta(seconds=10),
+                x=300,
+                y=40,
+                floor_id="1F",
+                calibration_error_m=0.1,
+            )
+        ],
+        trajectory_approximate=False,
     )
     hypothesis = Hypothesis(
         id="h",
         visits=[first, second],
         transitions=[
-            Transition(from_visit_id="vA", to_visit_id="vB", edge_ids=["A-B"])
+            Transition(
+                from_visit_id="vA",
+                to_visit_id="vB",
+                edge_ids=["A-B"],
+                geometry=TransitionGeometry(
+                    floor_id="1F",
+                    points=[(26, 48), (150, 40), (300, 40)],
+                    distance_min_m=9.5,
+                    distance_max_m=10.5,
+                ),
+            )
         ],
         current_node="B",
         status=HypothesisStatus.ALIVE,
@@ -389,6 +410,16 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
         t_in=T0 + timedelta(seconds=10),
         t_out=T0 + timedelta(seconds=12),
         appearance_score=0.9,
+        projected_trajectory=[
+            ProjectedTrajectoryPoint(
+                timestamp=T0 + timedelta(seconds=10),
+                x=300,
+                y=40,
+                floor_id="1F",
+                calibration_error_m=0.1,
+            )
+        ],
+        trajectory_approximate=False,
     )
     hypothesis = Hypothesis(
         id="h",
@@ -399,6 +430,13 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
                 to_visit_id="vB",
                 edge_ids=["A-B"],
                 alternative_edge_paths=[["A-C"]],
+                geometry=TransitionGeometry(
+                    floor_id="1F",
+                    points=[(26, 48), (150, 40), (300, 40)],
+                    alternative_paths=[[(26, 48), (20, 150), (300, 40)]],
+                    distance_min_m=9.5,
+                    distance_max_m=10.5,
+                ),
             )
         ],
         current_node="B",
@@ -448,3 +486,45 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
     ):
         assert f'data-role="{role}"' in first_svg
     assert "calculated 2026-11-06T04:00:12+00:00" in first_svg
+
+
+def test_svg_never_invents_route_from_camera_markers() -> None:
+    graph = _graph()
+    first = _visit_with_trajectory()
+    second = Visit(
+        visit_id="vB",
+        camera_id="B",
+        t_in=T0 + timedelta(seconds=10),
+        t_out=T0 + timedelta(seconds=12),
+        appearance_score=0.9,
+    )
+    hypothesis = Hypothesis(
+        id="h",
+        visits=[first, second],
+        transitions=[
+            Transition(from_visit_id="vA", to_visit_id="vB", edge_ids=["A-B"])
+        ],
+        current_node="B",
+        status=HypothesisStatus.ALIVE,
+    )
+    from javes_contracts import SearchState
+
+    state = SearchState(
+        case_id="case",
+        site_version=graph.version,
+        params_version="1",
+        hypotheses=[hypothesis],
+    )
+    svg = render_route_maps(
+        StepResult(
+            state=state,
+            probes=[],
+            hypotheses=[hypothesis],
+            best=hypothesis,
+            mode=SearchMode.CATCHING_UP,
+        ),
+        graph,
+        {},
+    ).maps[0].svg
+    assert 'data-role="inferred-path"' not in svg
+    assert 'points="20.00,40.00 150.00,40.00 300.00,40.00"' not in svg

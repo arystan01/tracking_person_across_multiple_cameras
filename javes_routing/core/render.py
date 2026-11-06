@@ -86,6 +86,58 @@ def _edge_points(
     return []
 
 
+def _endpoint_for_visit(
+    hypothesis: Hypothesis,
+    visit_index: int,
+    floor_id: str,
+    *,
+    first: bool,
+) -> tuple[float, float, float] | None:
+    visit = hypothesis.visits[visit_index]
+    points = [
+        point for point in visit.projected_trajectory if point.floor_id == floor_id
+    ]
+    if not points:
+        return None
+    point = points[0] if first else points[-1]
+    return point.x, point.y, point.calibration_error_m
+
+
+def _geometry_is_continuous(
+    hypothesis: Hypothesis,
+    visit_index: int,
+    graph: SiteGraph,
+) -> bool:
+    transition = hypothesis.transitions[visit_index - 1]
+    geometry = transition.geometry
+    if geometry is None:
+        return False
+    start = _endpoint_for_visit(
+        hypothesis, visit_index - 1, geometry.floor_id, first=False
+    )
+    end = _endpoint_for_visit(hypothesis, visit_index, geometry.floor_id, first=True)
+    if start is None or end is None:
+        return False
+    floor = next(
+        (
+            item
+            for item in (graph.map.floors if graph.map is not None else [])
+            if item.id == geometry.floor_id
+        ),
+        None,
+    )
+    scale = floor.m_per_px if floor is not None else None
+    tolerance_px = 1.0
+    if scale is not None:
+        tolerance_px = max(tolerance_px, (start[2] + end[2]) / scale)
+    return (
+        math.hypot(geometry.points[0][0] - start[0], geometry.points[0][1] - start[1])
+        <= tolerance_px
+        and math.hypot(geometry.points[-1][0] - end[0], geometry.points[-1][1] - end[1])
+        <= tolerance_px
+    )
+
+
 def _route_elements(
     hypothesis: Hypothesis,
     graph: SiteGraph,
@@ -101,20 +153,19 @@ def _route_elements(
         previous, current = hypothesis.visits[index - 1], hypothesis.visits[index]
         transition = hypothesis.transitions[index - 1] if index - 1 < len(hypothesis.transitions) else None
         pieces: list[tuple[list[tuple[float, float]], bool, str]] = []
-        if transition and transition.edge_ids:
+        if (
+            transition is not None
+            and transition.geometry is not None
+            and transition.geometry.floor_id == floor_id
+            and _geometry_is_continuous(hypothesis, index, graph)
+        ):
             pieces = [
-                (points, not bool(edge.map_path), edge.id)
-                for edge_id in transition.edge_ids
-                if (edge := next((item for item in graph.edges if item.id == edge_id), None)) is not None
-                if (points := _edge_points(graph, edge_id, floor_id, positions))
+                (
+                    transition.geometry.points,
+                    transition.geometry.approximate,
+                    ",".join(transition.edge_ids) or transition.geometry.source,
+                )
             ]
-        if not pieces:
-            p1 = positions.get(previous.camera)
-            p2 = positions.get(current.camera)
-            camera_floor_1 = graph.cameras.get(previous.camera).floor if previous.camera in graph.cameras else None
-            camera_floor_2 = graph.cameras.get(current.camera).floor if current.camera in graph.cameras else None
-            if (camera_floor_1 or "ABSTRACT") == floor_id and (camera_floor_2 or "ABSTRACT") == floor_id and p1 and p2:
-                pieces = [([p1, p2], True, "approximate")]
         transition_gap = bool(
             transition
             and (
@@ -139,16 +190,21 @@ def _route_elements(
                     f'<g data-role="inter-floor"><circle cx="{x:.2f}" cy="{y:.2f}" r="9" fill="{colour}"/>'
                     f'<text x="{x + 12:.2f}" y="{y - 12:.2f}">{escape(label)}</text></g>'
                 )
-        if transition:
-            for alternative in transition.alternative_edge_paths:
-                for edge_id in alternative:
-                    points = _edge_points(graph, edge_id, floor_id, positions)
-                    if len(points) >= 2:
-                        elements.append(
-                            f'<polyline data-role="alternative-path" data-edge="{escape(edge_id)}" '
-                            f'points="{" ".join(_point(item) for item in points)}" fill="none" '
-                            f'stroke="#f59e0b" stroke-width="3" stroke-dasharray="5 7"/>'
-                        )
+        if (
+            transition
+            and transition.geometry
+            and transition.geometry.floor_id == floor_id
+            and _geometry_is_continuous(hypothesis, index, graph)
+        ):
+            for alternative_index, points in enumerate(
+                transition.geometry.alternative_paths
+            ):
+                if len(points) >= 2:
+                    elements.append(
+                        f'<polyline data-role="alternative-path" data-edge="alternative-{alternative_index}" '
+                        f'points="{" ".join(_point(item) for item in points)}" fill="none" '
+                        f'stroke="#f59e0b" stroke-width="3" stroke-dasharray="5 7"/>'
+                    )
         flags = set(current.flags) | (set(transition.flags) if transition else set())
         for flag in sorted(flags & {"LONG_GAP", "GATE_OVERRIDE", "UNKNOWN"}):
             point = positions.get(current.camera)
