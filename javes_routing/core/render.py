@@ -222,6 +222,31 @@ def _observed_elements(
     floor_id: str,
 ) -> list[str]:
     elements: list[str] = []
+    if hypothesis.observed_segments:
+        for segment in hypothesis.observed_segments:
+            points = [point for point in segment.points if point.floor_id == floor_id]
+            if len(points) >= 2:
+                elements.append(
+                    f'<polyline data-role="observed-path" data-camera="{escape(",".join(segment.camera_ids))}" '
+                    f'data-segment="{escape(segment.id)}" '
+                    f'data-from="{escape(points[0].timestamp.isoformat())}" '
+                    f'data-to="{escape(points[-1].timestamp.isoformat())}" '
+                    f'data-approximate="{str(segment.approximate).lower()}" '
+                    f'points="{" ".join(_point((point.x, point.y)) for point in points)}" '
+                    'fill="none" stroke="#0891b2" stroke-width="6" stroke-linecap="round" '
+                    'stroke-linejoin="round"/>'
+                )
+            elif points:
+                point = points[0]
+                elements.append(
+                    f'<circle data-role="observed-path" data-camera="{escape(",".join(segment.camera_ids))}" '
+                    f'data-segment="{escape(segment.id)}" '
+                    f'data-from="{escape(point.timestamp.isoformat())}" '
+                    f'data-to="{escape(point.timestamp.isoformat())}" '
+                    f'data-approximate="{str(segment.approximate).lower()}" '
+                    f'cx="{point.x:.2f}" cy="{point.y:.2f}" r="5" fill="#0891b2"/>'
+                )
+        return elements
     for visit in hypothesis.visits:
         points = [
             point

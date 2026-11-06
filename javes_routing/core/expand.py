@@ -213,6 +213,37 @@ def expand_hypotheses(
         if not hypothesis.visits:
             continue
         visit = hypothesis.visits[-1]
+        camera = graph.cameras.get(visit.camera)
+        if (
+            visit.source == "LAST_KNOWN"
+            and not visit.tracklet_ids
+            and camera is not None
+            and camera.overlap_camera_ids
+        ):
+            anchor_to = min(
+                visit.t_out + timedelta(seconds=params.anchor_probe_window_s),
+                state.window_end or now,
+                now,
+            )
+            if anchor_to >= visit.t_in:
+                camera_ids = [
+                    visit.camera,
+                    *camera.overlap_camera_ids,
+                ]
+                for camera_id in sorted(set(camera_ids)):
+                    if camera_id not in graph.cameras:
+                        continue
+                    candidate = _make_probe(
+                        state,
+                        camera_id,
+                        visit.t_in,
+                        anchor_to,
+                        weight * params.live_current_priority,
+                        "ANCHOR_EVIDENCE",
+                        [hypothesis.id],
+                    )
+                    if candidate:
+                        probes.append(candidate)
         if visit.open:
             current = _make_probe(
                 state, visit.camera, visit.t_in, None,
