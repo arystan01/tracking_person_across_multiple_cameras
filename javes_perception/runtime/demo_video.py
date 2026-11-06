@@ -9,8 +9,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .config import CameraSource, PerceptionSettings
-from .worker import PerceptionWorker
+from ..core.config import CameraSource, PerceptionSettings
+from ..core.worker import PerceptionWorker
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 TILE_W, TILE_H = 960, 540

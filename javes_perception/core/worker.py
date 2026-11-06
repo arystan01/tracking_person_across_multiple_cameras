@@ -14,7 +14,7 @@ from javes_contracts import Candidate, ProbeResult, ProbeStatus, Tracklet
 
 from .config import PerceptionSettings
 from .models import normalize
-from .video import DecodeError, LocalVideoArchive
+from ..runtime.video import DecodeError, LocalVideoArchive
 
 
 def _stable_id(prefix: str, *parts: object) -> str:
@@ -83,12 +83,6 @@ class PerceptionWorker:
         self._gallery_sources: dict[str, dict[str, np.ndarray]] = {}
         self._gallery_commands: dict[str, tuple[str, TargetGalleryResult]] = {}
         self._closed: dict[str, ProbeResult] = {}
-
-    @classmethod
-    def from_config(cls, path, artifacts) -> PerceptionWorker:
-        from .config import load_settings
-
-        return cls(load_settings(path), artifacts)
 
     @property
     def detector(self):

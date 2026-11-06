@@ -1,13 +1,14 @@
-from .config import CameraSource, PerceptionSettings, load_settings
+from .core.config import CameraSource, PerceptionSettings
+from .runtime.config_loader import load_settings
 
 
 def __getattr__(name: str):
     if name == "PerceptionWorker":
-        from .worker import PerceptionWorker
+        from .core.worker import PerceptionWorker
 
         return PerceptionWorker
     if name == "HttpVideoArchive":
-        from .archive_api import HttpVideoArchive
+        from .runtime.archive_api import HttpVideoArchive
 
         return HttpVideoArchive
     raise AttributeError(name)

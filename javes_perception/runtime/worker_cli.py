@@ -22,10 +22,10 @@ def main() -> None:
     from javes_workers import HttpWorkerClient
 
     from .archive_api import HttpVideoArchive
-    from .config import load_settings
-    from .runtime import PerceptionTaskRunner
+    from .config_loader import load_settings
+    from .runner import PerceptionTaskRunner
     from .state import PerceptionStateStore
-    from .worker import PerceptionWorker
+    from ..core.worker import PerceptionWorker
 
     state = PerceptionStateStore(args.state_db)
     artifacts = FileArtifactStore(args.artifact_root)

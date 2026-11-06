@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .models import OsnetEmbedder, pick_device
+from ..core.models import OsnetEmbedder, pick_device
 
 
 def parse_name(path: Path) -> tuple[int, int]:

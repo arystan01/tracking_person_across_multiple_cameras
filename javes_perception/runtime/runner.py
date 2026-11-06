@@ -16,7 +16,7 @@ from javes_contracts import (
 from javes_workers import HttpWorkerClient
 
 from .state import PerceptionStateStore
-from .worker import PerceptionWorker
+from ..core.worker import PerceptionWorker
 
 
 def _task_fingerprint(task: WorkerTaskEnvelope) -> str:

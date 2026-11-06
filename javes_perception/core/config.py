@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 
-import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from javes_contracts.boundary import aware_utc
@@ -46,18 +44,3 @@ class PerceptionSettings(BaseModel):
     calib_b: float = -15.49
     score_floor: float = 0.1
     calibration_version: str = "osnet-ain-market1501-logit-v1"
-
-
-def load_settings(path: str | Path) -> PerceptionSettings:
-    path = Path(path)
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    settings = PerceptionSettings.model_validate(data)
-    base = path.parent
-    for camera in settings.cameras.values():
-        if not Path(camera.path).is_absolute():
-            camera.path = str((base / camera.path).resolve())
-    for field in ("detector_weights", "reid_weights"):
-        value = getattr(settings, field)
-        if not Path(value).is_absolute() and (base / value).exists():
-            setattr(settings, field, str((base / value).resolve()))
-    return settings

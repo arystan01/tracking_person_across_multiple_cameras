@@ -186,9 +186,9 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
     from javes_main.persistence import InMemoryRepository
     from javes_main.scheduler import RoutingTriggerDispatcher
     from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
-    from javes_perception.archive_api import HttpVideoArchive
-    from javes_perception.runtime import PerceptionTaskRunner
-    from javes_perception.state import PerceptionStateStore
+    from javes_perception.runtime.archive_api import HttpVideoArchive
+    from javes_perception.runtime.runner import PerceptionTaskRunner
+    from javes_perception.runtime.state import PerceptionStateStore
     from javes_routing.service import create_routing_app
     from javes_site_config import FilesystemSiteConfigRegistry, create_site_config_app
     from javes_site_config.client import HttpSiteConfigClient

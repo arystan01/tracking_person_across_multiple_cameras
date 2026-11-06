@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from .config import CameraSource, PerceptionSettings
-from .models import normalize
-from .worker import PerceptionWorker
+from ..core.config import CameraSource, PerceptionSettings
+from ..core.models import normalize
+from ..core.worker import PerceptionWorker
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 

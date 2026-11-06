@@ -7,7 +7,7 @@ from typing import Iterator
 
 import cv2
 
-from .config import CameraSource
+from ..core.config import CameraSource
 
 
 class DecodeError(RuntimeError):
