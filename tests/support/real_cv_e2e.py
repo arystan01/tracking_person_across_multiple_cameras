@@ -209,6 +209,7 @@ th,td{{text-align:left;border:1px solid #cbd5e1;padding:7px}}pre{{background:#ff
 </header><main><section class="videos">{video_cards}</section>
 <section class="map"><h2>Final Routing map</h2><object data="route.svg" type="image/svg+xml"></object></section>
 <h2>Timeline</h2><table><thead><tr><th>Seconds</th><th>Camera</th><th>Event</th><th>Details</th></tr></thead><tbody>{timeline_rows}</tbody></table>
+<p><a href="case-view.json">Case view JSON</a> · <a href="probe-results.json">Probe results JSON</a> · <a href="video-manifest.json">Video manifest</a></p>
 <h2>Run report</h2><pre>{summary}</pre></main>
 <script>
 const videos=[...document.querySelectorAll('video')], seek=document.querySelector('#seek'), clock=document.querySelector('#clock');
@@ -240,6 +241,23 @@ def publish_inspectable_report(
 
     output_root.mkdir(parents=True, exist_ok=True)
     video_manifest = [item.manifest() for item in videos]
+    candidate_decisions = report.get("candidate_decisions", {})
+    report.setdefault(
+        "candidates",
+        [
+            {
+                "probe_id": result.get("probe_id"),
+                "candidate_id": candidate.get("candidate_id"),
+                "tracklet_id": candidate.get("tracklet_id"),
+                "appearance_score": candidate.get("appearance_score"),
+                "decision": candidate_decisions.get(
+                    candidate.get("candidate_id"), "NOT_REVIEWED"
+                ),
+            }
+            for result in probe_results
+            for candidate in result.get("candidates", [])
+        ],
+    )
     files = {
         "route.svg": route_svg,
         "case-view.json": json.dumps(case_view, indent=2).encode(),

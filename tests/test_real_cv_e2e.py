@@ -119,7 +119,7 @@ def _write_site_registry(run_root: Path, repository_root: Path) -> Path:
     (params_dir / "real-cv-e2e-params-v1.yaml").write_text(
         "version: real-cv-e2e-params-v1\n"
         "K: 4\nB: 5\n"
-        "anchor_probe_window_s: 5\n"
+        "anchor_probe_window_s: 60\n"
         "overlap_time_tolerance_s: 1\n"
         "overlap_position_tolerance_m: 0.75\n"
         "max_walk_snap_m: 3\n",
@@ -244,6 +244,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
     from fastapi import Body, FastAPI, Header, HTTPException
     from javes_contracts import (
         ArtifactRef,
+        CaseCommandBody,
         CaseWindow,
         CreateCaseBody,
         LastKnown,
@@ -272,7 +273,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
     output_root = Path(
         os.environ.get(
             "JAVES_REAL_CV_E2E_OUT",
-            repository_root / "artifacts" / "real-cv-e2e",
+            repository_root / "artifacts" / "real-cv-e2e" / "full-minute",
         )
     ).resolve()
     run_id = datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%S-%fZ")
@@ -280,7 +281,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
     run_root.mkdir(parents=True)
     site_root = _write_site_registry(run_root, repository_root)
     artifact_store = FileArtifactStore(run_root / "artifact-store")
-    base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=30)
+    base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=2)
 
     videos = {
         "Cam001": repository_root
@@ -363,7 +364,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             "http://routing", "routing-secret", client=routing_http
         )
 
-        clock = FixedClock(base + timedelta(seconds=16))
+        clock = FixedClock(base + timedelta(seconds=60))
         repository = InMemoryRepository()
         ids = ContentIdGenerator()
         manager = CaseManager(
@@ -377,6 +378,10 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             live_feed=artifact_store,
             clock=clock,
             ids=ids,
+            # Two complete one-minute clips are decoded serially on CPU.  Keep
+            # the production default out of this opt-in performance test so
+            # the second finite probe cannot expire while the first runs.
+            job_deadline_s=900,
         )
         auth = AuthService(repository=repository, clock=clock, ids=ids)
         root_user = auth.bootstrap_root("root", "real-cv-e2e-password")
@@ -424,12 +429,11 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
                 reference_image_ref=ArtifactRef(object_key=reference_key),
                 last_known=LastKnown(
                     camera_id="Cam001",
-                    time=base + timedelta(seconds=5),
-                    footpoint_px=(337.7, 985.9),
+                    time=base,
                 ),
                 window=CaseWindow(
-                    start=base + timedelta(seconds=5),
-                    end=base + timedelta(seconds=16),
+                    start=base,
+                    end=base + timedelta(seconds=60),
                 ),
                 site_id="nvidia-mtmc-4cam",
                 site_version="real-cv-e2e-v1",
@@ -449,8 +453,8 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             json=VideoSegmentRequest(
                 request_id="real-cv-contract-check",
                 camera_id="Cam003",
-                t_from=base + timedelta(seconds=5),
-                t_to=base + timedelta(seconds=10),
+                t_from=base,
+                t_to=base + timedelta(seconds=60),
             ).model_dump(mode="json"),
         )
         assert archive_contract.status_code == 200, archive_contract.text
@@ -500,6 +504,11 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             assert {
                 job.payload.probe.reason for job in pending_jobs
             } == {"ANCHOR_EVIDENCE"}
+            assert all(job.payload.probe.t_from == base for job in pending_jobs)
+            assert all(
+                job.payload.probe.t_to == base + timedelta(seconds=60)
+                for job in pending_jobs
+            )
 
             assert runner.run_once(limit=4, lease_seconds=600) == 2
             probe_jobs = repository.list_jobs(case_id)
@@ -512,9 +521,38 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         finally:
             perception_state.close()
 
+        closed = main_http.post(
+            f"/v1/cases/{case_id}/commands/close",
+            headers={
+                "authorization": f"Bearer {access_token}",
+                "idempotency-key": "real-cv-e2e-close",
+            },
+            json=CaseCommandBody(
+                command_id="real-cv-e2e-close",
+                action="CLOSE",
+                operator_id=root_user.user_id,
+                occurred_at=base + timedelta(seconds=60),
+            ).model_dump(mode="json"),
+        )
+        assert closed.status_code == 200, closed.text
+        close_dispatch = routing_dispatcher.drain()
+        # At the exact case-window boundary Routing may already have produced
+        # its terminal summary while consuming the second result.  CLOSE is
+        # intentionally idempotent in that state and therefore has no trigger
+        # left for the scheduler to claim.
+        assert close_dispatch.failed == 0
+        assert close_dispatch.completed in {0, 1}
+
         probe_records = repository.list_probe_results(case_id)
         assert probe_records
         real_results = [record.result for record in probe_records]
+        assert all(result.status == "DONE" for result in real_results)
+        assert all(result.coverage_ratio == 1.0 for result in real_results)
+        assert all(
+            result.processed_duration_s is not None
+            and result.processed_duration_s >= 59.0
+            for result in real_results
+        )
         assert any(result.tracklets for result in real_results)
         candidate_scores = [
             candidate.score
@@ -535,6 +573,8 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         )
         assert dashboard.status_code == 200, dashboard.text
         view = dashboard.json()
+        assert view["lifecycle"] == "CLOSED"
+        assert view["mode"] == "PAST_SUMMARY"
         assert view["best_hypothesis"] is not None
         route_cameras = [
             visit["camera_id"] for visit in view["best_hypothesis"]["visits"]
@@ -611,9 +651,12 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
 
         xs = [point["x"] for point in observed_points]
         ys = [point["y"] for point in observed_points]
-        assert min(xs) >= 645 and max(xs) <= 695
-        assert min(ys) >= 485 and max(ys) <= 525
-        assert xs[-1] - xs[0] >= 8
+        # The original five-second smoke test only covered the first few
+        # footsteps.  Across the complete clip the same person continues
+        # north-east through the shared Cam001/Cam003 coverage.
+        assert min(xs) >= 665 and max(xs) <= 735
+        assert min(ys) >= 445 and max(ys) <= 515
+        assert max(xs) - min(xs) >= 50
         observed_distance_m = sum(
             (
                 (right["x"] - left["x"]) ** 2
@@ -623,7 +666,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             * m_per_px
             for left, right in zip(observed_points, observed_points[1:])
         )
-        assert 0.2 <= observed_distance_m <= 3.0
+        assert 1.0 <= observed_distance_m <= 5.0
 
         source_tracklet = next(
             tracklet
@@ -661,7 +704,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         presentation = view["route_presentation"]
         assert presentation["position_state"] == "LAST_SEEN"
         assert presentation["source_camera_ids"] == ["Cam001", "Cam003"]
-        assert presentation["visible_at_interval_end"] is True
+        assert presentation["visible_at_interval_end"] is False
         assert presentation["search_area_as_of"] is None
         assert presentation["shown_layers"] == [
             "CAMERAS",
@@ -711,6 +754,9 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         ]
         report = {
             "case_id": case_id,
+            "lifecycle": view["lifecycle"],
+            "mode": view["mode"],
+            "stop_reason": view["stop_reason"],
             "route": route_cameras,
             "max_real_reid_score": max(candidate_scores),
             "tracklet_count": sum(len(item.tracklets) for item in real_results),
@@ -737,7 +783,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
                 for camera, path in videos.items()
                 if camera in {"Cam001", "Cam003"}
             },
-            "source_video_window_s": [5.0, 10.0],
+            "source_video_window_s": [0.0, 60.0],
             "run_directory": str(run_root.resolve()),
         }
         verification_jpeg = _verification_jpeg(
@@ -760,6 +806,29 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             for tracklet in real_tracklets
             if tracklet.id in selected_tracklet_ids
         ]
+        last_confirmed = presentation["last_confirmed_position"]
+        timeline.extend(
+            [
+                {
+                    "time_s": round(
+                        (
+                            datetime.fromisoformat(last_confirmed["timestamp"])
+                            - base
+                        ).total_seconds(),
+                        3,
+                    ),
+                    "camera": ", ".join(presentation["source_camera_ids"]),
+                    "event": "last confirmed position",
+                    "details": "projected from real foot-points",
+                },
+                {
+                    "time_s": 60.0,
+                    "camera": "—",
+                    "event": "search closed",
+                    "details": view["stop_reason"],
+                },
+            ]
+        )
         publish_inspectable_report(
             output_root,
             run_root,
@@ -768,8 +837,12 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             probe_results=result_payloads,
             report=report,
             videos=[
-                ReportVideo("Cam001", videos["Cam001"], "evidence"),
-                ReportVideo("Cam003", videos["Cam003"], "evidence"),
+                ReportVideo(
+                    "Cam001", videos["Cam001"], "evidence", note="full 60 s"
+                ),
+                ReportVideo(
+                    "Cam003", videos["Cam003"], "evidence", note="full 60 s"
+                ),
             ],
             timeline=timeline,
             extra_files={"verification.jpg": verification_jpeg},
