@@ -705,6 +705,25 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
     )
     assert "%" not in visible_text
 
+    final_state = state.model_copy(
+        update={"done": True, "stop_reason": StopReason.MAX_GAP},
+        deep=True,
+    )
+    final_svg = render_route_maps(
+        result.model_copy(
+            update={
+                "state": final_state,
+                "done": True,
+                "stop_reason": StopReason.MAX_GAP,
+            },
+            deep=True,
+        ),
+        graph,
+        {},
+    ).maps[0].svg
+    assert "Possible area when search stopped" in final_svg
+    assert "Possible area after last sighting" not in final_svg
+
 
 def test_svg_never_invents_route_from_camera_markers() -> None:
     graph = _graph()

@@ -500,10 +500,15 @@ class CaseManager:
         case.routing_state = step.state
         route_revision = worker_result.rendered_route.route_revision
         previous_route = case.latest_route
+        route_changed = (
+            previous_route is None or previous_route.revision != route_revision
+        )
         route_resources: list[RetentionResource] = []
         superseded_route_resources: list[RetentionResource] = []
         route_artifacts: list[dict[str, Any]] = []
         for rendered in worker_result.rendered_route.maps:
+            if not route_changed:
+                continue
             key = (
                 f"cases/{case_id}/routes/{route_revision}/"
                 f"{rendered.floor_id}.svg"
@@ -540,7 +545,7 @@ class CaseManager:
                     artifact_ref=ArtifactRef(object_key=key),
                 )
             )
-        if previous_route is not None and previous_route.revision != route_revision:
+        if previous_route is not None and route_changed:
             for rendered in previous_route.rendered.maps:
                 old_key = (
                     f"cases/{case_id}/routes/{previous_route.revision}/"
@@ -633,13 +638,14 @@ class CaseManager:
                         "reason": step.stop_reason,
                     },
                 )
-            for artifact in route_artifacts:
-                self._record_case_data(
-                    case_id,
-                    CaseDataKind.ARTIFACT,
-                    artifact["artifact_id"],
-                    artifact,
-                )
+            if route_changed:
+                for artifact in route_artifacts:
+                    self._record_case_data(
+                        case_id,
+                        CaseDataKind.ARTIFACT,
+                        artifact["artifact_id"],
+                        artifact,
+                    )
             for result in probe_results:
                 for tracklet in result.tracklets:
                     self._record_case_data(
@@ -659,28 +665,29 @@ class CaseManager:
             self._record_case_data(
                 case_id,
                 CaseDataKind.ROUTING_STATE,
-                f"{case_id}:state:{route_revision}",
+                f"{case_id}:state:{step.state.state_version}",
                 step.state.model_dump(mode="json"),
             )
-            self._record_case_data(
-                case_id,
-                CaseDataKind.ROUTE_REVISION,
-                f"{case_id}:route:{route_revision}",
-                {
-                    "revision": route_revision,
-                    "step_result": step.model_dump(mode="json"),
-                    "maps": [
-                        {
-                            "floor_id": item.floor_id,
-                            "mime_type": item.mime_type,
-                            "width": item.width,
-                            "height": item.height,
-                            "alt_text": item.alt_text,
-                        }
-                        for item in worker_result.rendered_route.maps
-                    ],
-                },
-            )
+            if route_changed:
+                self._record_case_data(
+                    case_id,
+                    CaseDataKind.ROUTE_REVISION,
+                    f"{case_id}:route:{route_revision}",
+                    {
+                        "revision": route_revision,
+                        "step_result": step.model_dump(mode="json"),
+                        "maps": [
+                            {
+                                "floor_id": item.floor_id,
+                                "mime_type": item.mime_type,
+                                "width": item.width,
+                                "height": item.height,
+                                "alt_text": item.alt_text,
+                            }
+                            for item in worker_result.rendered_route.maps
+                        ],
+                    },
+                )
             run_id = trigger_id or self.ids.new(
                 "routing_run",
                 case_id,

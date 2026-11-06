@@ -349,7 +349,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
     site_registry = FilesystemSiteConfigRegistry(site_root)
     site_api = create_site_config_app(site_registry, service_token="site-secret")
 
-    with ExitStack() as stack:
+    with ExitStack():
         archive_http = _SyncASGIClient(archive_api, base_url="http://archive")
         site_http = _SyncASGIClient(site_api, base_url="http://site")
         site_client = HttpSiteConfigClient(

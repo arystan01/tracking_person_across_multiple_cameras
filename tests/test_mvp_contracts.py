@@ -26,6 +26,7 @@ from javes_contracts import (
     ProjectedTrajectoryPoint,
     SearchFrontier,
     SearchMode,
+    SearchState,
     SiteGraph,
     StepResult,
     Tracklet,
@@ -34,6 +35,7 @@ from javes_contracts import (
     Visit,
 )
 from javes_routing.core.params import RoutingParams
+from javes_routing.core.expand import expand_dormant_watch_probes
 from javes_routing.core.render import render_route_maps
 from javes_routing.core.facade import step_and_render
 from javes_routing.service.demo import _write_viewer
@@ -135,6 +137,51 @@ def test_retry_limit_and_unobserved_window() -> None:
     third = step(second.state, [ProbeResult(probe_id=retry_two.probe_id, status="FAILED")], graph, Anchors(), params, T0)
     assert all(item.retry_of != "p0" for item in third.probes)
     assert third.estimate and third.estimate.unobserved_windows[0]["reason"] == "FAILED"
+
+
+def test_terminal_unavailable_open_watch_is_not_reissued() -> None:
+    graph = SiteGraph(
+        site="watch",
+        version="v1",
+        cameras={"A": CameraDef(id="A")},
+        edges=[],
+        blind_nodes=[BlindNodeDef(id="blind", borders=["A"])],
+    )
+    visit = Visit(
+        visit_id="v1",
+        camera_id="A",
+        t_in=T0,
+        t_out=T0,
+        score=0.9,
+    )
+    state = SearchState(
+        case_id="case",
+        site_version="v1",
+        params_version="1",
+        hypotheses=[
+            Hypothesis(
+                id="h1",
+                visits=[visit],
+                current_node="blind",
+                status=HypothesisStatus.DORMANT,
+            )
+        ],
+        probed_windows=[
+            ProbedWindow(
+                camera="A",
+                t_from=T0,
+                t_to=None,
+                probe_id="watch-A",
+                status=ProbeStatus.UNAVAILABLE,
+                coverage_ratio=0.0,
+                found=False,
+            )
+        ],
+    )
+
+    assert expand_dormant_watch_probes(
+        state, graph, RoutingParams(), T0 + timedelta(seconds=30)
+    ) == []
 
 
 def test_non_empty_step_is_byte_deterministic_and_does_not_mutate_input() -> None:

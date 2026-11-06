@@ -429,8 +429,14 @@ class InMemoryRepository:
         with self._lock:
             previous = self._case_data.get(key)
             if previous is not None:
-                if previous != record:
-                    raise ValueError("case data record id reused with different payload")
+                if (
+                    previous.schema_version != record.schema_version
+                    or previous.payload != record.payload
+                ):
+                    raise ValueError(
+                        "case data record id reused with different payload: "
+                        f"{key!r}"
+                    )
                 return
             self._case_data[key] = record.model_copy(deep=True)
 

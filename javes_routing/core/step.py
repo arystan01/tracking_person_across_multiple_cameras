@@ -23,7 +23,12 @@ from javes_contracts import (
 )
 from .params import RoutingParams
 from .positioning import project_trajectory
-from .expand import _probe_id, expand_dormant_watch_probes, expand_hypotheses
+from .expand import (
+    _covered,
+    _probe_id,
+    expand_dormant_watch_probes,
+    expand_hypotheses,
+)
 from .frontier import (
     advance_empty_shell,
     advance_finished_frontier,
@@ -356,6 +361,17 @@ def step(
                     )
                 }
             )
+        # Expansion checks coverage before the historical frontier clamps a
+        # probe. A wider raw window can look new even when its clamped form is
+        # exactly the in-flight probe. Re-check the actual wire identity so a
+        # heartbeat cannot duplicate it and strand the frontier.
+        if _covered(
+            state,
+            clamped.camera,
+            clamped.t_from,
+            clamped.t_to,
+        ):
+            continue
         clamped_candidates.append(clamped)
     candidates = sorted(
         {probe.probe_id: probe for probe in clamped_candidates}.values(),

@@ -241,6 +241,35 @@ def test_partial_coverage_is_unobserved_not_full_negative_evidence() -> None:
     assert partial.hypotheses[0].miss_count == 0
 
 
+def test_frame_clock_rounding_counts_as_full_coverage() -> None:
+    graph = outside_graph()
+    params = RoutingParams(max_gap_s=600, historical_shell_s=300)
+    now = T0 + timedelta(days=1)
+    issued = step(
+        historical_state(graph, params), [], graph, Anchors(), params, now
+    )
+    original = issued.probes[0]
+    completed = step(
+        issued.state,
+        [done(original, coverage_ratio=0.9999)],
+        graph,
+        Anchors(),
+        params,
+        now,
+    )
+
+    assert not any(
+        probe.probe_id == original.probe_id
+        for probe in completed.state.pending_probes
+    )
+    assert not any(
+        item["reason"] == "PARTIAL_COVERAGE"
+        for item in completed.state.unobserved_windows
+    )
+    assert completed.state.search_frontier is not None
+    assert completed.state.search_frontier.reached_at >= T0 + timedelta(seconds=300)
+
+
 def test_window_end_before_gap_horizon_finishes_all_ended() -> None:
     graph = outside_graph()
     params = RoutingParams(max_gap_s=900, historical_shell_s=300)

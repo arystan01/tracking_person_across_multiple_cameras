@@ -472,7 +472,11 @@ def _status_element(text: str) -> str:
     )
 
 
-def _legend_element(layers: list[RouteLayer]) -> str:
+def _legend_element(
+    layers: list[RouteLayer],
+    *,
+    search_stopped_at_max_gap: bool = False,
+) -> str:
     rows: list[str] = []
     y = 0
     for layer in layers:
@@ -484,7 +488,11 @@ def _legend_element(layers: list[RouteLayer]) -> str:
             label = "Estimated between sightings"
         elif layer == RouteLayer.SEARCH_AREA:
             sample = f'<line x1="0" y1="{y}" x2="34" y2="{y}" stroke="#7c3aed" stroke-width="14" stroke-opacity="0.32"/>'
-            label = "Possible area after last sighting"
+            label = (
+                "Possible area when search stopped"
+                if search_stopped_at_max_gap
+                else "Possible area after last sighting"
+            )
         elif layer == RouteLayer.LAST_POSITION:
             sample = f'<circle cx="17" cy="{y}" r="7" fill="#fff" stroke="#111827" stroke-width="3"/>'
             label = "Last confirmed position"
@@ -651,7 +659,15 @@ def render_route_maps(
         if floor_camera_count:
             floor_layers.append(RouteLayer.CAMERAS)
         if floor_layers:
-            content.append(_legend_element(floor_layers))
+            content.append(
+                _legend_element(
+                    floor_layers,
+                    search_stopped_at_max_gap=(
+                        step_result.done
+                        and step_result.stop_reason == StopReason.MAX_GAP
+                    ),
+                )
+            )
         content.append('</svg>')
         if best and best.observed_segments:
             observed_cameras = sorted(

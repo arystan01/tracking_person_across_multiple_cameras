@@ -252,6 +252,24 @@ def test_case_data_ids_are_scoped_to_case(repo_factory):
 
 
 @pytest.mark.parametrize("repo_factory", [InMemoryRepository, repository])
+def test_case_data_duplicate_payload_ignores_redelivery_time(repo_factory):
+    repo = repo_factory()
+    first = CaseDataRecord(
+        record_id="candidate-1",
+        case_id="case-a",
+        kind=CaseDataKind.CANDIDATE,
+        occurred_at=NOW,
+        payload={"candidate_id": "candidate-1", "score": 0.9},
+    )
+    repo.add_case_data(first)
+    repo.add_case_data(
+        first.model_copy(update={"occurred_at": NOW + timedelta(seconds=5)})
+    )
+
+    assert repo.list_case_data("case-a") == [first]
+
+
+@pytest.mark.parametrize("repo_factory", [InMemoryRepository, repository])
 def test_outbox_is_deduplicated_leased_and_recovered(repo_factory):
     repo = repo_factory()
     message = OutboxRecord(

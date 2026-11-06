@@ -205,7 +205,7 @@ th,td{{text-align:left;border:1px solid #cbd5e1;padding:7px}}pre{{background:#ff
 </style></head><body><header><h1>JAVES real-CV E2E</h1>
 <div class="controls"><button id="play">Play</button><button id="pause">Pause</button>
 <label>Time <input id="seek" type="range" min="0" max="1" step="0.05" value="0"></label>
-<output id="clock">0.00 s</output><label>Speed <select id="speed"><option>0.5</option><option selected>1</option><option>2</option></select></label></div>
+<output id="clock">0.00 s</output><label>Speed <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label></div>
 </header><main><section class="videos">{video_cards}</section>
 <section class="map"><h2>Final Routing map</h2><object data="route.svg" type="image/svg+xml"></object></section>
 <h2>Timeline</h2><table><thead><tr><th>Seconds</th><th>Camera</th><th>Event</th><th>Details</th></tr></thead><tbody>{timeline_rows}</tbody></table>

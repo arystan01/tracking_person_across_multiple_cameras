@@ -5,7 +5,7 @@ from datetime import timedelta
 from javes_contracts import CaseCommandBody, PerceptionProbeJob, ProbeRequest, RetentionResource
 from javes_main.domain import JobRecord, JobState, OutboxRecord, OutboxState, OutboxTopic
 
-from tests.test_main_infra import BASE, create_body, system
+from tests.test_main_infra import create_body, system
 
 
 def test_scheduler_runs_due_heartbeat_and_global_job_queue():
@@ -24,6 +24,44 @@ def test_scheduler_runs_due_heartbeat_and_global_job_queue():
     assert report.heartbeats == 1
     assert report.perception_jobs >= 1
     assert app.repository.list_probe_results("case-1")
+
+
+def test_heartbeat_persists_new_state_without_duplicate_svg_revision():
+    app = system()
+    original_routing = app.manager.routing
+
+    class StableRenderedRevision:
+        def initialise(self, *args, **kwargs):
+            return original_routing.initialise(*args, **kwargs)
+
+        def advance(self, *args, **kwargs):
+            result = original_routing.advance(*args, **kwargs)
+            return result.model_copy(
+                update={
+                    "rendered_route": result.rendered_route.model_copy(
+                        update={"route_revision": 1}
+                    )
+                }
+            )
+
+    app.manager.routing = StableRenderedRevision()
+    app.manager.create_case(create_body(), idempotency_key="stable-route-create")
+    app.outbox_dispatcher.drain()
+    assert app.routing_dispatcher.drain().failed == 0
+    before = app.repository.get("case-1")
+    assert before.next_heartbeat_at is not None
+    route_revision = before.latest_route.revision
+
+    app.clock.set(before.next_heartbeat_at)
+    app.manager.heartbeat("case-1")
+    assert app.routing_dispatcher.drain().failed == 0
+
+    after = app.repository.get("case-1")
+    assert after.latest_route.revision == route_revision
+    states = app.repository.list_case_data("case-1", kinds={"ROUTING_STATE"})
+    routes = app.repository.list_case_data("case-1", kinds={"ROUTE_REVISION"})
+    assert len(states) == 2
+    assert len(routes) == 1
 
 
 def test_expired_job_deadline_becomes_timeout_without_calling_worker():

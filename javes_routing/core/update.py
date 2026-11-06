@@ -41,6 +41,12 @@ from .timemodel import (
 
 logger = logging.getLogger(__name__)
 
+# Decoded video timestamps are quantised to the source frame clock.  A window
+# that ends between frames can therefore report 0.9999 coverage even though
+# every available frame was processed.  Keep genuinely partial windows
+# distinct while avoiding an endless re-probe for sub-millisecond rounding.
+_FULL_COVERAGE_TOLERANCE = 1e-3
+
 
 def _make_id(prefix: str, *parts: object) -> str:
     """Stable content-derived identifier; never depends on process state."""
@@ -926,10 +932,18 @@ def _process_probe_results(
             logger.warning("ProbeResult %s has no pending probe; accepting observations only", result.probe_id)
         else:
             found = bool(valid_result_candidates)
+            effective_coverage = (
+                1.0
+                if result.coverage_ratio >= 1.0 - _FULL_COVERAGE_TOLERANCE
+                else result.coverage_ratio
+            )
             duration = result.processed_duration_s
             if duration is None and matching.t_to is not None:
-                duration = max((matching.t_to - matching.t_from).total_seconds(), 0.0) * result.coverage_ratio
-            miss_coverage = result.coverage_ratio
+                duration = (
+                    max((matching.t_to - matching.t_from).total_seconds(), 0.0)
+                    * effective_coverage
+                )
+            miss_coverage = effective_coverage
             if (
                 result.status == ProbeStatus.DONE
                 and graph.cameras[matching.camera].busy
@@ -938,8 +952,8 @@ def _process_probe_results(
                 and duration >= params.quiet_window_s
             ):
                 miss_coverage *= 0.5
-            if result.status == ProbeStatus.DONE and result.coverage_ratio < 1.0:
-                low_coverage = result.coverage_ratio < params.min_coverage
+            if result.status == ProbeStatus.DONE and effective_coverage < 1.0:
+                low_coverage = effective_coverage < params.min_coverage
                 if low_coverage:
                     miss_coverage = 0.0
                 state.unobserved_windows.append(
@@ -950,7 +964,7 @@ def _process_probe_results(
                         "reason": (
                             "LOW_COVERAGE" if low_coverage else "PARTIAL_COVERAGE"
                         ),
-                        "coverage_ratio": result.coverage_ratio,
+                        "coverage_ratio": effective_coverage,
                     }
                 )
             state.probed_windows.append(
@@ -1008,7 +1022,7 @@ def _process_probe_results(
                     duration if result.status == ProbeStatus.DONE else None
                 ),
                 coverage_ratio=(
-                    result.coverage_ratio
+                    effective_coverage
                     if result.status == ProbeStatus.DONE
                     else 0.0
                 ),

@@ -801,7 +801,11 @@ class SqlAlchemyRepository:
             }
             previous = session.get(CaseDataRow, key)
             if previous is not None:
-                if CaseDataRecord.model_validate(previous.payload) != record:
+                existing = CaseDataRecord.model_validate(previous.payload)
+                if (
+                    existing.schema_version != record.schema_version
+                    or existing.payload != record.payload
+                ):
                     raise ValueError("case data record id reused with different payload")
                 return
             session.add(

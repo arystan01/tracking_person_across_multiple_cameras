@@ -127,9 +127,12 @@ def _covered(
         if probe.t_from <= t_from and (probe.t_to is None or (t_to is not None and probe.t_to >= t_to)):
             return True
     for window in state.probed_windows:
-        if window.camera != camera or window.status != ProbeStatus.DONE:
+        if window.camera != camera:
             continue
-        if window.coverage_ratio < 1.0:
+        if (
+            window.status == ProbeStatus.DONE
+            and window.coverage_ratio < 1.0
+        ):
             continue
         if window.t_from <= t_from and (window.t_to is None or (t_to is not None and window.t_to >= t_to)):
             return True

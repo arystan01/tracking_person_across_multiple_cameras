@@ -151,18 +151,22 @@ python -m pip install -e '.[test,infra,perception]'
 JAVES_RUN_REAL_CV=1 python -m pytest -q tests/test_perception_real_smoke.py
 ```
 
-Run the inspectable API-first E2E (real NVIDIA video -> real Perception ->
-Main worker API -> Routing API -> Controls SVG) with:
+Run the two inspectable API-first E2E scenarios (real NVIDIA video -> real
+Perception -> Main worker API -> Routing API -> Controls SVG) with:
 
 ```bash
 JAVES_RUN_REAL_CV=1 python -m pytest -q -s tests/test_real_cv_e2e.py
+JAVES_RUN_REAL_CV=1 python -m pytest -q -s tests/test_real_cv_blind_gap_e2e.py
 ```
 
-Open `artifacts/real-cv-e2e/index.html` or
-`artifacts/real-cv-e2e/route.svg` afterwards. The standalone SVG embeds the
-tracked NVIDIA warehouse map. `case-view.json`, `probe-results.json`, and
-`report.json` are saved beside it; `LATEST.txt` points to the immutable run
-directory. Set `JAVES_REAL_CV_E2E_OUT` to publish these files elsewhere.
+Open `artifacts/real-cv-e2e/full-minute/index.html` for the complete 60-second
+Cam001/Cam003 scenario, or `artifacts/real-cv-e2e/blind-gap/index.html` for the
+Cam009 -> Cam006 blind-corridor and `MAX_GAP` scenario. Each synchronized report
+contains the source videos, final Routing SVG, event timeline, candidate review
+decisions, and links to the generated JSON. Videos are symlinked rather than
+copied. `LATEST.txt` points to the immutable run directory. Set
+`JAVES_REAL_CV_E2E_OUT` or `JAVES_REAL_CV_BLIND_GAP_OUT` to publish a scenario
+elsewhere.
 
 CI keeps fast contract/unit tests and the real-CV job separate. The real-CV job
 is available through manual workflow dispatch because model execution is much

@@ -7,6 +7,7 @@ from javes_contracts import (
     CameraCalibration,
     CameraDef,
     Candidate,
+    CaseInfo,
     EdgeDef,
     Hypothesis,
     HypothesisStatus,
@@ -31,6 +32,7 @@ from javes_routing.core.ground import build_transition_geometry
 from javes_routing.core.expand import expand_hypotheses
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.render import render_route_maps
+from javes_routing.core.step import init_state, step
 from javes_routing.core.update import update_hypotheses
 
 
@@ -291,3 +293,67 @@ def test_reachable_ground_path_selects_camera_by_coverage_polygon() -> None:
     coverage = [probe for probe in probes if probe.camera == "C"]
     assert len(coverage) == 1
     assert coverage[0].reason == "GROUND_COVERAGE"
+
+
+def test_historical_clamp_does_not_duplicate_pending_ground_probe() -> None:
+    graph = _graph()
+    params = RoutingParams(
+        historical_shell_s=30,
+        max_gap_s=60,
+        max_walk_snap_m=2,
+    )
+    state = init_state(
+        CaseInfo(
+            case_id="historical-ground",
+            target_id="target",
+            start_time=T0,
+            last_known_camera="A",
+            last_known_time=T0,
+            window_start=T0,
+            window_end=T0 + timedelta(minutes=5),
+        ),
+        graph,
+        params,
+    )
+    issued = step(
+        state,
+        [],
+        graph,
+        Anchors(),
+        params,
+        T0 + timedelta(minutes=5),
+    )
+    pending_ids = [probe.probe_id for probe in issued.state.pending_probes]
+    assert len(pending_ids) == len(set(pending_ids))
+
+    heartbeat = step(
+        issued.state,
+        [],
+        graph,
+        Anchors(),
+        params,
+        T0 + timedelta(minutes=5),
+    )
+    repeated_ids = [probe.probe_id for probe in heartbeat.state.pending_probes]
+    assert repeated_ids == pending_ids
+
+    completed = step(
+        heartbeat.state,
+        [
+            ProbeResult(
+                probe_id=probe.probe_id,
+                status=ProbeStatus.DONE,
+                coverage_ratio=1.0,
+                processed_duration_s=(probe.t_to - probe.t_from).total_seconds(),
+            )
+            for probe in heartbeat.state.pending_probes
+            if probe.t_to is not None
+        ],
+        graph,
+        Anchors(),
+        params,
+        T0 + timedelta(minutes=5),
+    )
+    assert not set(pending_ids) & {
+        probe.probe_id for probe in completed.state.pending_probes
+    }
