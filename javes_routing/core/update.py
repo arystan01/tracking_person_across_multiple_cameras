@@ -310,7 +310,9 @@ def gate_visit_details(
     if dt < 0:
         return GateResult(0.0, reject_reason="arrival before previous visit ended", gate_margin_s=dt)
     if visit.camera == last_visit.camera:
-        return GateResult(0.0, kind="EDGE")
+        # Repeated evidence from one sensor extends an observed segment; it is
+        # not an inferred movement through the pedestrian graph.
+        return GateResult(0.0, kind="OVERLAP")
 
     skip_lateness = last_visit.clipped_out or visit.clipped_in
     candidates: list[tuple[float, tuple[str, ...], tuple[str, ...], str]] = []
@@ -700,13 +702,20 @@ def fuse_observed_segments(
         used_cameras = {camera}
         for index, candidate in enumerate(remaining):
             other, other_camera, _ = candidate
-            if other_camera in used_cameras:
+            same_camera_duplicate = (
+                other_camera == camera
+                and abs((other.timestamp - point.timestamp).total_seconds())
+                <= 1e-6
+            )
+            if other_camera in used_cameras and not same_camera_duplicate:
                 continue
             if other.floor_id != point.floor_id:
                 continue
             if abs((other.timestamp - point.timestamp).total_seconds()) > params.overlap_time_tolerance_s:
                 continue
-            if not _declared_overlap(camera, other_camera, graph):
+            if not same_camera_duplicate and not _declared_overlap(
+                camera, other_camera, graph
+            ):
                 continue
             scale = _floor_scale(graph, point.floor_id)
             if scale is None:

@@ -331,6 +331,9 @@ class CaseManager:
             last_known_camera=body.last_known.camera_id,
             last_known_zone=body.last_known.zone_id,
             last_known_time=body.last_known.time,
+            last_known_bbox_xywh=body.last_known.bbox_xywh,
+            last_known_footpoint_px=body.last_known.footpoint_px,
+            last_known_map_position=body.last_known.map_position,
         )
         state = self.routing.initialise(
             case_info,
@@ -340,6 +343,9 @@ class CaseManager:
                 last_known_camera=body.last_known.camera_id,
                 last_known_zone=body.last_known.zone_id,
                 last_known_time=body.last_known.time,
+                last_known_bbox_xywh=body.last_known.bbox_xywh,
+                last_known_footpoint_px=body.last_known.footpoint_px,
+                last_known_map_position=body.last_known.map_position,
             ),
             now,
         )

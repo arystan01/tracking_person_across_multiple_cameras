@@ -473,6 +473,20 @@ class GroundPosition(ContractModel):
         return self
 
 
+class MapPosition(ContractModel):
+    x: float
+    y: float
+    floor_id: str
+    error_m: float = Field(default=0.0, ge=0.0)
+
+    @field_validator("x", "y", mode="after")
+    @classmethod
+    def _finite_coordinate(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("map position coordinates must be finite")
+        return value
+
+
 class ObservedSegment(ContractModel):
     """One fused, time-ordered ground-plane observation of the person."""
 
@@ -674,6 +688,9 @@ class Anchors(ContractModel):
     last_known_camera: str | None = Field(default=None, validation_alias=AliasChoices("last_known_camera", "camera_id"))
     last_known_zone: str | None = Field(default=None, validation_alias=AliasChoices("last_known_zone", "zone_id"))
     last_known_time: datetime | None = None
+    last_known_bbox_xywh: tuple[float, float, float, float] | None = None
+    last_known_footpoint_px: tuple[float, float] | None = None
+    last_known_map_position: MapPosition | None = None
     confirm: list[str] = Field(default_factory=list, validation_alias=AliasChoices("confirm", "confirm_tracklet_ids"))
     reject: list[str] = Field(default_factory=list, validation_alias=AliasChoices("reject", "reject_tracklet_ids"))
     operator_closed: bool = False
@@ -688,6 +705,15 @@ class Anchors(ContractModel):
             data.setdefault("last_known_camera", last_known.get("camera", last_known.get("camera_id")))
             data.setdefault("last_known_zone", last_known.get("zone", last_known.get("zone_id")))
             data.setdefault("last_known_time", last_known.get("time"))
+            data.setdefault(
+                "last_known_bbox_xywh", last_known.get("bbox_xywh")
+            )
+            data.setdefault(
+                "last_known_footpoint_px", last_known.get("footpoint_px")
+            )
+            data.setdefault(
+                "last_known_map_position", last_known.get("map_position")
+            )
         return data
 
     @field_validator("last_known_time", mode="after")
@@ -707,6 +733,9 @@ class CaseInfo(ContractModel):
     last_known_camera: str | None = None
     last_known_zone: str | None = None
     last_known_time: datetime | None = None
+    last_known_bbox_xywh: tuple[float, float, float, float] | None = None
+    last_known_footpoint_px: tuple[float, float] | None = None
+    last_known_map_position: MapPosition | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -723,6 +752,13 @@ class CaseInfo(ContractModel):
             data.setdefault("last_known_camera", last_known.get("camera", last_known.get("camera_id")))
             data.setdefault("last_known_zone", last_known.get("zone", last_known.get("zone_id")))
             data.setdefault("last_known_time", last_known.get("time"))
+            data.setdefault("last_known_bbox_xywh", last_known.get("bbox_xywh"))
+            data.setdefault(
+                "last_known_footpoint_px", last_known.get("footpoint_px")
+            )
+            data.setdefault(
+                "last_known_map_position", last_known.get("map_position")
+            )
         if data.get("start_time") is None:
             data["start_time"] = data.get("last_known_time") or data.get("window_start")
         return data

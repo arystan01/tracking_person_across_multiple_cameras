@@ -10,15 +10,19 @@ from javes_contracts import (
     CaseInfo,
     Hypothesis,
     HypothesisStatus,
+    MapPosition,
     ProbeRequest,
     ProbeResult,
+    ProjectedTrajectoryPoint,
     SearchMode,
     SearchState,
     SiteGraph,
     StepResult,
+    TrajectoryPoint,
     Visit,
 )
 from .params import RoutingParams
+from .positioning import project_trajectory
 from .expand import _probe_id, expand_dormant_watch_probes, expand_hypotheses
 from .frontier import (
     advance_empty_shell,
@@ -56,13 +60,59 @@ def _anchor_hypotheses(
     zone: str | None,
     at: datetime | None,
     graph: SiteGraph,
+    params: RoutingParams,
+    bbox_xywh: tuple[float, float, float, float] | None = None,
+    footpoint_px: tuple[float, float] | None = None,
+    map_position: MapPosition | None = None,
 ) -> list[Hypothesis]:
     if at is None:
         return []
+    projected: list[ProjectedTrajectoryPoint] = []
+    if map_position is not None:
+        floor = next(
+            (
+                item
+                for item in (graph.map.floors if graph.map is not None else [])
+                if item.id == map_position.floor_id
+            ),
+            None,
+        )
+        if (
+            map_position.error_m <= params.max_calibration_error_m
+            and floor is not None
+            and 0 <= map_position.x <= floor.size_px[0]
+            and 0 <= map_position.y <= floor.size_px[1]
+        ):
+            projected = [
+                ProjectedTrajectoryPoint(
+                    timestamp=at,
+                    x=map_position.x,
+                    y=map_position.y,
+                    floor_id=map_position.floor_id,
+                    calibration_error_m=map_position.error_m,
+                )
+            ]
+        else:
+            logger.warning("Ignoring invalid last_known map position")
     if camera is not None:
         cameras = [camera] if camera in graph.cameras else []
         if not cameras:
             logger.warning("Ignoring last_known on unknown camera %s", camera)
+        elif not projected:
+            pixel = footpoint_px
+            if pixel is None and bbox_xywh is not None:
+                x, y, width, height = bbox_xywh
+                pixel = (x + width / 2.0, y + height)
+            if pixel is not None:
+                projected, _ = project_trajectory(
+                    graph.cameras[camera],
+                    [
+                        TrajectoryPoint(
+                            timestamp=at, x_px=pixel[0], y_px=pixel[1]
+                        )
+                    ],
+                    max_error_m=params.max_calibration_error_m,
+                )
     elif zone in {node.id for node in graph.blind_nodes} or zone == "OUTSIDE":
         visit = Visit(
             id=_stable_id("v", "last-known", zone, at.isoformat()),
@@ -73,6 +123,8 @@ def _anchor_hypotheses(
             score=0.5,
             source="LAST_KNOWN",
             flags=["LAST_KNOWN"],
+            projected_trajectory=projected,
+            trajectory_approximate=not bool(projected),
         )
         return [
             Hypothesis(
@@ -97,6 +149,8 @@ def _anchor_hypotheses(
             score=0.5,
             source="LAST_KNOWN",
             flags=["LAST_KNOWN"],
+            projected_trajectory=projected,
+            trajectory_approximate=not bool(projected),
         )
         result.append(
             Hypothesis(
@@ -116,6 +170,10 @@ def init_state(case: CaseInfo, graph: SiteGraph, params: RoutingParams) -> Searc
         case.last_known_zone,
         case.last_known_time,
         graph,
+        params,
+        case.last_known_bbox_xywh,
+        case.last_known_footpoint_px,
+        case.last_known_map_position,
     )
     return SearchState(
         case_id=case.case_id,
@@ -209,7 +267,14 @@ def step(
 
     if not state.hypotheses and anchors.last_known_time is not None:
         state.hypotheses = _anchor_hypotheses(
-            anchors.last_known_camera, anchors.last_known_zone, anchors.last_known_time, graph
+            anchors.last_known_camera,
+            anchors.last_known_zone,
+            anchors.last_known_time,
+            graph,
+            params,
+            anchors.last_known_bbox_xywh,
+            anchors.last_known_footpoint_px,
+            anchors.last_known_map_position,
         )
 
     previous_pending = {probe.probe_id for probe in state.pending_probes}
