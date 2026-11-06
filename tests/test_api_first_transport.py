@@ -37,9 +37,9 @@ from javes_main.application import AuthService, CaseManager
 from javes_main.persistence import InMemoryRepository
 from javes_main.domain import JobRecord, JobState
 from javes_main.scheduler import RoutingTriggerDispatcher
-from javes_retention.repository import SQLiteRetentionRepository
-from javes_retention.storage import ArtifactStoreDeletionBackend, DeletionRouter
-from javes_retention.worker import RetentionWorker
+from javes_retention.core.worker import RetentionWorker
+from javes_retention.runtime.repository import SQLiteRetentionRepository
+from javes_retention.runtime.storage import ArtifactStoreDeletionBackend, DeletionRouter
 from javes_routing.service import create_routing_app
 from javes_site_config import FilesystemSiteConfigRegistry, create_site_config_app
 from javes_site_config.client import HttpSiteConfigClient

@@ -7,7 +7,7 @@ from javes_main.adapters.artifacts import FileArtifactStore
 from javes_workers import HttpWorkerClient
 
 from .factory import build_local_retention_worker
-from .runtime import RetentionTaskRunner
+from .runner import RetentionTaskRunner
 
 
 def main() -> None:

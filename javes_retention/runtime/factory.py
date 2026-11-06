@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote, urlparse
 
-from .policy import RetentionPolicy
+from ..core.policy import RetentionPolicy
 from .repository import SQLiteRetentionRepository
 from .storage import (
     ArtifactStoreDeletionBackend,
@@ -16,7 +16,7 @@ from .storage import (
     LocalFileDeletionBackend,
     StorageLocator,
 )
-from .worker import RetentionWorker
+from ..core.worker import RetentionWorker
 
 
 def build_local_retention_worker(

@@ -7,7 +7,7 @@ from javes_contracts import (
 )
 from javes_workers import HttpWorkerClient
 
-from .worker import RetentionWorker
+from ..core.worker import RetentionWorker
 
 
 class RetentionTaskRunner:

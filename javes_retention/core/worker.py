@@ -13,8 +13,8 @@ from typing import Callable
 from javes_contracts import RetentionCommand, RetentionResource, RetentionResult
 
 from .policy import RetentionPolicy
-from .repository import SQLiteRetentionRepository, StoredResource
-from .storage import DeletionPending, DeletionRouter
+from ..runtime.repository import SQLiteRetentionRepository, StoredResource
+from ..runtime.storage import DeletionPending, DeletionRouter
 
 
 def _system_now() -> datetime:
