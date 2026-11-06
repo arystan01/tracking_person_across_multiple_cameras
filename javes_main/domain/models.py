@@ -361,6 +361,7 @@ class CaseView(DomainModel):
     alternatives: list[dict[str, Any]] = Field(default_factory=list)
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     estimate: dict[str, Any] | None = None
+    route_presentation: dict[str, Any] | None = None
     rendered_route_maps: list[RouteMapView] = Field(default_factory=list)
     clips: list[dict[str, Any]] = Field(default_factory=list)
     export: dict[str, Any] | None = None
