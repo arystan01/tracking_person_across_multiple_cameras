@@ -524,6 +524,48 @@ class ProbedWindow(ContractModel):
         return "OPEN" if value is None else value
 
 
+class SearchFrontier(ContractModel):
+    """Durable progress through historical CCTV time."""
+
+    last_observed_at: datetime
+    reached_at: datetime
+    shell_from: datetime | None = None
+    shell_to: datetime | None = None
+    required_probe_ids: list[str] = Field(default_factory=list)
+    reached_at_by_probe: dict[str, datetime] = Field(default_factory=dict)
+
+    @field_validator(
+        "last_observed_at",
+        "reached_at",
+        "shell_from",
+        "shell_to",
+        mode="after",
+    )
+    @classmethod
+    def _aware_frontier_times(cls, value: datetime | None) -> datetime | None:
+        return _utc(value)
+
+    @field_validator("reached_at_by_probe", mode="after")
+    @classmethod
+    def _aware_probe_progress(
+        cls, value: dict[str, datetime]
+    ) -> dict[str, datetime]:
+        return {key: _utc(item) for key, item in value.items()}  # type: ignore[misc]
+
+    @model_validator(mode="after")
+    def _normalise_frontier(self) -> SearchFrontier:
+        if self.reached_at < self.last_observed_at:
+            raise ValueError("frontier reached_at must not precede last_observed_at")
+        if (
+            self.shell_from is not None
+            and self.shell_to is not None
+            and self.shell_to < self.shell_from
+        ):
+            raise ValueError("frontier shell_to must not precede shell_from")
+        self.required_probe_ids = sorted(set(self.required_probe_ids))
+        return self
+
+
 class SearchState(ContractModel):
     case_id: str
     profile: str = "ADULT"
@@ -544,6 +586,7 @@ class SearchState(ContractModel):
     pending_probes: list[ProbeRequest] = Field(default_factory=list)
     pending_review_visits: list[Visit] = Field(default_factory=list)
     unobserved_windows: list[dict[str, Any]] = Field(default_factory=list)
+    search_frontier: SearchFrontier | None = None
     mode: SearchMode = SearchMode.CATCHING_UP
     camera_minutes_used: float = 0.0
     baseline_started: bool = False

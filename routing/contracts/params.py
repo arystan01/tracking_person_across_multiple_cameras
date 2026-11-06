@@ -12,6 +12,7 @@ class RoutingParams(BaseModel):
     p_det: float = Field(default=0.85, ge=0.0, le=1.0)
     merge_gap_s: float = Field(default=10.0, ge=0.0)
     max_gap_s: float = Field(default=2400.0, gt=0.0)
+    historical_shell_s: float = Field(default=300.0, gt=0.0)
     amb_delta: float = Field(default=1.0, ge=0.0)
     max_retries: int = Field(default=2, ge=0)
     new_hyp_floor: float = -20.0
