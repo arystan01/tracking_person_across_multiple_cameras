@@ -15,7 +15,7 @@ from javes_contracts import (
     SearchState,
     SiteGraph,
 )
-from .contracts.params import RoutingParams
+from .params import RoutingParams
 from .timemodel import arrival_mass
 from .update import _scale_edge
 

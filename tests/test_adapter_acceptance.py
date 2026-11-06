@@ -36,7 +36,7 @@ from javes_fakes import (
     FakeVideoArchive,
 )
 from javes_fakes.contracts import FakeObservation, RetentionClass, RetentionResource
-from routing.site import parse_site
+from javes_routing.core.site import parse_site
 
 
 UTC = timezone.utc

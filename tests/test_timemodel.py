@@ -1,6 +1,6 @@
 import pytest
 import math
-from routing.timemodel import (
+from javes_routing.core.timemodel import (
     time_likelihood, dwell_likelihood, edge_sigma,
     lognormal_pdf, lognormal_peak,
     edge_time_likelihood, blind_dwell_likelihood, outside_dwell_likelihood,

@@ -1,6 +1,4 @@
 from __future__ import annotations
-import yaml
-from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class RoutingParams(BaseModel):
@@ -58,11 +56,3 @@ class RoutingParams(BaseModel):
             if factors is None or any(float(factors.get(key, 0.0)) <= 0 for key in ("tmin_k", "ttyp_k", "tmax_k")):
                 raise ValueError(f"invalid timing profile {name}")
         return self
-
-    @classmethod
-    def from_yaml(cls, path: str | Path) -> RoutingParams:
-        with open(path, 'r') as f:
-            data = yaml.safe_load(f)
-        if not data:
-            data = {}
-        return cls(**data)

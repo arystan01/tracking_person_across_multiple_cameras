@@ -6,8 +6,8 @@ import csv
 import statistics
 from pathlib import Path
 
-from routing.demo import run_demo
-from routing.sim.config import SimParams
+from javes_routing.service.demo import run_demo
+from javes_routing.core.sim.config import SimParams
 
 
 def _variant_scenario(scenario: str) -> str:

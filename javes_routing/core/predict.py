@@ -14,7 +14,7 @@ from javes_contracts import (
     StopReason,
     ZoneEstimate,
 )
-from .contracts.params import RoutingParams
+from .params import RoutingParams
 from .expand import _camera_paths, _softmax
 from .frontier import frontier_horizon
 from .update import _scale_edge

@@ -9,13 +9,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from javes_contracts import Anchors, CaseInfo, MapDef, MapFloor
-from .contracts.params import RoutingParams
-from .render import render_route_maps
-from .sim.generator import generate_ring_graph
-from .sim.perception import FakePerception
-from .sim.config import SimParams
-from .sim.walker import GroundTruthVisit, simulate_walk
-from .step import init_state, step
+from ..core.params import RoutingParams
+from ..core.render import render_route_maps
+from ..core.sim.generator import generate_ring_graph
+from ..core.sim.perception import FakePerception
+from ..core.sim.config import SimParams
+from ..core.sim.walker import GroundTruthVisit, simulate_walk
+from ..core.step import init_state, step
+from .config_loader import load_sim_params
 
 
 @dataclass(frozen=True)
@@ -219,9 +220,9 @@ def main() -> None:
     arguments = parser.parse_args()
     default_sim_path = Path("sim_params.yaml")
     sim_params = (
-        SimParams.from_yaml(arguments.sim_params)
+        load_sim_params(arguments.sim_params)
         if arguments.sim_params
-        else SimParams.from_yaml(default_sim_path) if default_sim_path.exists() else None
+        else load_sim_params(default_sim_path) if default_sim_path.exists() else None
     )
     summary = run_demo(
         scenario=arguments.scenario,

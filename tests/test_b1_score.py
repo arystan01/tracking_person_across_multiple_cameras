@@ -1,5 +1,5 @@
 import math
-from routing.update import compute_appearance_log_lik
+from javes_routing.core.update import compute_appearance_log_lik
 
 def test_b1_score_formula():
     # a) strong sighting raises score (positive log odds)

@@ -10,7 +10,7 @@ from javes_contracts import (
     SearchState,
     SiteGraph,
 )
-from .contracts.params import RoutingParams
+from .params import RoutingParams
 from .render import render_route_maps
 from .step import step
 

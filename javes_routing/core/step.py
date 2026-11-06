@@ -18,7 +18,7 @@ from javes_contracts import (
     StepResult,
     Visit,
 )
-from .contracts.params import RoutingParams
+from .params import RoutingParams
 from .expand import _probe_id, expand_dormant_watch_probes, expand_hypotheses
 from .frontier import (
     advance_empty_shell,

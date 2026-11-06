@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from pathlib import Path
 from typing import Any
-
-import yaml
 
 from javes_contracts import (
     BlindNodeDef,
@@ -16,28 +13,9 @@ from javes_contracts import (
     RegionDef,
     SiteGraph,
 )
-from .contracts.params import RoutingParams
+from .params import RoutingParams
 
 logger = logging.getLogger(__name__)
-
-
-def load_site(path: str | Path, params: RoutingParams | None = None) -> SiteGraph:
-    """Load and validate a site YAML document.
-
-    Invalid site configuration is the one class of input error that Routing
-    intentionally raises instead of skipping.
-    """
-
-    config_path = Path(path)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Site config not found: {config_path}")
-    with config_path.open(encoding="utf-8") as stream:
-        raw = yaml.safe_load(stream)
-    if raw is None:
-        raise ValueError("Empty site config")
-    if not isinstance(raw, dict):
-        raise ValueError("Site config root must be a mapping")
-    return parse_site(raw, params=params, base_path=config_path.parent)
 
 
 def _region_items(raw_regions: Any) -> list[tuple[str, dict[str, Any]]]:
@@ -105,7 +83,6 @@ def _validate_point(
 def parse_site(
     raw: dict[str, Any],
     params: RoutingParams | None = None,
-    base_path: Path | None = None,
 ) -> SiteGraph:
     """Parse both the canonical architecture YAML and the legacy test form."""
 
@@ -260,10 +237,6 @@ def parse_site(
     if map_def:
         if len(floor_sizes) != len(map_def.floors):
             raise ValueError("Duplicate floor ID in map")
-        for floor in map_def.floors:
-            if floor.image and base_path is not None and not (base_path / floor.image).exists():
-                logger.warning("Map image does not exist: %s", base_path / floor.image)
-
     for camera in cameras.values():
         _validate_point(f"Camera '{camera.id}'", camera.floor, camera.map_xy, floor_sizes)
     for node in blind_nodes:

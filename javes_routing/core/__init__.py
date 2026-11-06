@@ -11,6 +11,6 @@ def __getattr__(name: str):
         from .render import render_route_maps
         return render_route_maps
     if name == "step_and_render":
-        from .worker import step_and_render
+        from .facade import step_and_render
         return step_and_render
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

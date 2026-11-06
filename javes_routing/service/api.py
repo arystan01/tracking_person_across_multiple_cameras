@@ -11,9 +11,9 @@ from javes_contracts import (
     RoutingStepRequest,
     RoutingStepResponse,
 )
-from routing.contracts.params import RoutingParams
-from routing.step import init_state
-from routing.worker import step_and_render
+from javes_routing.core.params import RoutingParams
+from javes_routing.core.step import init_state
+from javes_routing.core.facade import step_and_render
 
 
 def create_routing_app(site_config, *, service_token: str) -> FastAPI:

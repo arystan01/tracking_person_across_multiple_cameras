@@ -11,7 +11,7 @@ from javes_fakes import (
     FakeRetentionWorker,
     FakeVideoArchive,
 )
-from routing.contracts.params import RoutingParams
+from javes_routing.core.params import RoutingParams
 
 from .adapters import (
     FakeClipAdapter,

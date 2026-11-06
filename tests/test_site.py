@@ -1,7 +1,8 @@
 import pytest
 import yaml
 from pathlib import Path
-from routing.site import load_site, parse_site
+from javes_routing.core.site import parse_site
+from javes_routing.service.site_loader import load_site
 from javes_contracts import SiteGraph
 
 # Helpers to generate valid configs

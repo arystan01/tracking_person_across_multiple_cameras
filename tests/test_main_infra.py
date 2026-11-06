@@ -34,7 +34,7 @@ from javes_main.domain import CaseLifecycle, JobState, ProbeResultRecord
 from javes_main.persistence import RevisionConflict
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
-from routing.contracts.params import RoutingParams
+from javes_routing.core.params import RoutingParams
 
 
 UTC = timezone.utc

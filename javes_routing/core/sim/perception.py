@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timedelta
 
 from javes_contracts import Candidate, ProbeRequest, ProbeResult, ProbeStatus, Tracklet
-from routing.sim.walker import GroundTruthVisit
+from javes_routing.core.sim.walker import GroundTruthVisit
 
 
 class FakePerception:

@@ -40,11 +40,11 @@ from javes_main.scheduler import RoutingTriggerDispatcher
 from javes_retention.repository import SQLiteRetentionRepository
 from javes_retention.storage import ArtifactStoreDeletionBackend, DeletionRouter
 from javes_retention.worker import RetentionWorker
-from javes_routing_api import create_routing_app
+from javes_routing.service import create_routing_app
 from javes_site_config import FilesystemSiteConfigRegistry, create_site_config_app
 from javes_site_config.client import HttpSiteConfigClient
-from routing.step import init_state
-from routing.worker import step_and_render
+from javes_routing.core.step import init_state
+from javes_routing.core.facade import step_and_render
 from tests.test_main_infra import BASE, create_body, system
 
 
@@ -298,7 +298,7 @@ max_gap_s: 2400
             body = RoutingInitRequest.model_validate(payload)
             site = registry.site(body.site_id, body.site_version)
             params_data = registry.params(body.params_version)
-            from routing.contracts.params import RoutingParams
+            from javes_routing.core.params import RoutingParams
 
             params = RoutingParams.model_validate(params_data.params)
             response = RoutingInitResponse(
@@ -310,7 +310,7 @@ max_gap_s: 2400
             body = RoutingStepRequest.model_validate(payload)
             site = registry.site(body.site_id, body.site_version)
             params_data = registry.params(body.params_version)
-            from routing.contracts.params import RoutingParams
+            from javes_routing.core.params import RoutingParams
 
             params = RoutingParams.model_validate(params_data.params)
             response = RoutingStepResponse(

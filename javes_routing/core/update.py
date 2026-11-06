@@ -25,7 +25,7 @@ from javes_contracts import (
     Transition,
     Visit,
 )
-from .contracts.params import RoutingParams
+from .params import RoutingParams
 from .frontier import record_probe_progress
 from .timemodel import (
     arrival_mass,

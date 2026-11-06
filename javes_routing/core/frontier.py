@@ -9,7 +9,7 @@ from javes_contracts import (
     SearchFrontier,
     SearchState,
 )
-from .contracts.params import RoutingParams
+from .params import RoutingParams
 
 
 def latest_observed_at(hypotheses: list[Hypothesis]) -> datetime | None:

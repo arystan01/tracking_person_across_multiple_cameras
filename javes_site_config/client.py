@@ -5,7 +5,7 @@ from urllib.parse import quote
 import httpx
 
 from javes_contracts import RoutingParamsResponse, SiteVersionResponse
-from routing.contracts.params import RoutingParams
+from javes_routing.core.params import RoutingParams
 
 
 class HttpSiteConfigClient:
