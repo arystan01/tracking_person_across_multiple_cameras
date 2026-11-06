@@ -73,8 +73,19 @@ def compute_estimate(
     best = _best(pool)
     last = best.visits[-1] if best and best.visits else None
     speed_range, distance_range = movement_ranges(best, graph, params)
-    reachable_segments, reachable_nodes = reachable_area(
-        best, graph, params, now
+    show_final_search_area = bool(
+        state
+        and state.done
+        and state.stop_reason == StopReason.MAX_GAP
+    )
+    suppress_reachable = bool(
+        (last and last.open)
+        or (state and state.done and not show_final_search_area)
+    )
+    reachable_segments, reachable_nodes = (
+        ([], [])
+        if suppress_reachable
+        else reachable_area(best, graph, params, now)
     )
     return Estimate(
         zones=zones,

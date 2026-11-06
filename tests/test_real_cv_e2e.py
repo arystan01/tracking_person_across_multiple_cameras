@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 import shutil
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
@@ -168,10 +169,10 @@ def _write_site_registry(run_root: Path, repository_root: Path) -> Path:
                 "route-4": {"floor_id": "warehouse", "map_xy": [740, 480]},
             },
             "edges": [
-                {"id": "route-0-1", "from": "route-0", "to": "route-1", "floor_id": "warehouse"},
-                {"id": "route-1-2", "from": "route-1", "to": "route-2", "floor_id": "warehouse"},
-                {"id": "route-2-3", "from": "route-2", "to": "route-3", "floor_id": "warehouse"},
-                {"id": "route-3-4", "from": "route-3", "to": "route-4", "floor_id": "warehouse"},
+                {"id": "route-0-1", "from": "route-0", "to": "route-1", "floor_id": "warehouse", "bidirectional": True},
+                {"id": "route-1-2", "from": "route-1", "to": "route-2", "floor_id": "warehouse", "bidirectional": True},
+                {"id": "route-2-3", "from": "route-2", "to": "route-3", "floor_id": "warehouse", "bidirectional": True},
+                {"id": "route-3-4", "from": "route-3", "to": "route-4", "floor_id": "warehouse", "bidirectional": True},
             ],
         },
         "max_gap_s": 2400,
@@ -800,6 +801,17 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         allowed_projection_error_px = 0.01
         assert projection_error_px <= allowed_projection_error_px
         assert view["rendered_route_maps"]
+        presentation = view["route_presentation"]
+        assert presentation["position_state"] == "LAST_SEEN"
+        assert presentation["source_camera_ids"] == ["Cam001", "Cam003"]
+        assert presentation["visible_at_interval_end"] is True
+        assert presentation["search_area_as_of"] is None
+        assert presentation["shown_layers"] == [
+            "CAMERAS",
+            "LAST_POSITION",
+            "OBSERVED",
+        ]
+        assert view["estimate"]["zones_operator_display"] == "TECHNICAL_ONLY"
         route_map = view["rendered_route_maps"][0]
         route_response = main_http.get(
             route_map["url"],
@@ -811,8 +823,31 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
         assert b'data-role="best-route"' in route_svg
         assert b'data-role="observed-path"' in route_svg
         assert b'data-role="inferred-path"' not in route_svg
+        assert b'data-role="reachable-area"' not in route_svg
+        assert b'data-role="last-confirmed-position"' in route_svg
+        assert b'data-role="route-status"' in route_svg
+        assert b'data-role="estimate"' not in route_svg
         assert b'data-role="legend"' in route_svg
-        assert b"Cam001" in route_svg and b"Cam003" in route_svg
+        svg_root = ET.fromstring(route_svg)
+        visible_text = " ".join(
+            text.strip()
+            for text in svg_root.itertext()
+            if text and text.strip()
+        )
+        camera_labels = {
+            " ".join(text.strip() for text in element.itertext() if text.strip())
+            for element in svg_root.iter()
+            if element.attrib.get("data-role") == "camera"
+        }
+        assert camera_labels == {
+            "Cam001 · video evidence",
+            "Cam003 · video evidence",
+        }
+        assert "%" not in visible_text
+        assert "Seen on video" in visible_text
+        assert "Last confirmed position" in visible_text
+        assert "Estimated between sightings" not in visible_text
+        assert "Possible area after last sighting" not in visible_text
 
         result_payloads = [
             result.model_dump(mode="json", by_alias=True) for result in real_results

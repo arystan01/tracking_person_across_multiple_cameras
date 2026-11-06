@@ -242,6 +242,11 @@ def build_case_view(
         alternatives=alternatives,
         candidates=[dict(item) for item in candidates],
         estimate=step.estimate.model_dump(mode="json") if step.estimate is not None else None,
+        route_presentation=(
+            route.rendered.presentation.model_dump(mode="json")
+            if route.rendered.presentation is not None
+            else None
+        ),
         rendered_route_maps=maps,
         clips=visible_clips(),
         export=(dict(case.export_ref) if case.export_ref is not None else None),

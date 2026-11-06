@@ -363,6 +363,10 @@ class WalkEdgeDef(ContractModel):
     floor_id: str
     map_path: list[tuple[float, float]] = Field(default_factory=list)
     d_m: float | None = Field(default=None, gt=0.0)
+    bidirectional: bool = Field(
+        default=False,
+        exclude_if=lambda value: value is False,
+    )
 
 
 class WalkGraphDef(ContractModel):
@@ -379,7 +383,21 @@ class WalkGraphDef(ContractModel):
         return self
 
     def get_edges_from(self, node_id: str) -> list[WalkEdgeDef]:
-        return [edge for edge in self.edges if edge.source == node_id]
+        direct = [edge for edge in self.edges if edge.source == node_id]
+        reverse = [
+            edge.model_copy(
+                update={
+                    "id": f"{edge.id}::reverse",
+                    "source": edge.target,
+                    "target": edge.source,
+                    "map_path": list(reversed(edge.map_path)),
+                    "bidirectional": False,
+                }
+            )
+            for edge in self.edges
+            if edge.bidirectional and edge.target == node_id
+        ]
+        return [*direct, *reverse]
 
 
 class SiteGraph(ContractModel):
@@ -643,6 +661,7 @@ class ReachableNode(ContractModel):
 class Estimate(ContractModel):
     zones: list[ZoneEstimate]
     probability_kind: Literal["RELATIVE"] = "RELATIVE"
+    zones_operator_display: Literal["TECHNICAL_ONLY"] = "TECHNICAL_ONLY"
     valid_until: datetime | None = None
     last_observed_camera: str | None = None
     last_observed_time: datetime | None = None
@@ -659,6 +678,41 @@ class Estimate(ContractModel):
     @classmethod
     def _aware_estimate_times(cls, value: datetime | None) -> datetime | None:
         return _utc(value)
+
+
+class PositionState(str, Enum):
+    OBSERVED = "OBSERVED"
+    LAST_SEEN = "LAST_SEEN"
+    LOST = "LOST"
+    UNKNOWN = "UNKNOWN"
+
+
+class RouteLayer(str, Enum):
+    OBSERVED = "OBSERVED"
+    INFERRED = "INFERRED"
+    SEARCH_AREA = "SEARCH_AREA"
+    LAST_POSITION = "LAST_POSITION"
+    CAMERAS = "CAMERAS"
+
+
+class RoutePresentation(ContractModel):
+    position_state: PositionState = PositionState.UNKNOWN
+    last_confirmed_position: GroundPosition | None = None
+    source_camera_ids: list[str] = Field(default_factory=list)
+    visible_at_interval_end: bool = False
+    search_area_as_of: datetime | None = None
+    shown_layers: list[RouteLayer] = Field(default_factory=list)
+
+    @field_validator("search_area_as_of", mode="after")
+    @classmethod
+    def _aware_search_area_time(cls, value: datetime | None) -> datetime | None:
+        return _utc(value)
+
+    @model_validator(mode="after")
+    def _normalise_presentation(self) -> RoutePresentation:
+        self.source_camera_ids = sorted(set(self.source_camera_ids))
+        self.shown_layers = sorted(set(self.shown_layers), key=lambda item: item.value)
+        return self
 
 
 class Ambiguity(ContractModel):
@@ -912,6 +966,7 @@ class RenderedFloorMap(ContractModel):
 class RenderedRouteBundle(ContractModel):
     route_revision: int
     best_hypothesis_id: str | None = None
+    presentation: RoutePresentation | None = None
     maps: list[RenderedFloorMap] = Field(default_factory=list)
 
 

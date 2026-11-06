@@ -19,12 +19,15 @@ from javes_contracts import (
     MapDef,
     MapFloor,
     OutsideDef,
+    PositionState,
     ProjectedTrajectoryPoint,
     ReachableNode,
     ReachableSegment,
+    RouteLayer,
     SearchFrontier,
     SearchMode,
     SiteGraph,
+    StopReason,
     StepResult,
     Tracklet,
     TrajectoryPoint,
@@ -36,6 +39,7 @@ from javes_contracts import (
     WalkNodeDef,
 )
 from javes_routing.core.params import RoutingParams
+from javes_routing.core.predict import compute_estimate
 from javes_routing.core.positioning import (
     movement_ranges,
     project_trajectory,
@@ -314,6 +318,7 @@ def test_site_has_separate_camera_coverage_and_pedestrian_topology() -> None:
                         "floor_id": "1F",
                         "map_path": [[250, 120]],
                         "d_m": 40,
+                        "bidirectional": True,
                     }
                 ],
             },
@@ -324,6 +329,10 @@ def test_site_has_separate_camera_coverage_and_pedestrian_topology() -> None:
     assert graph.walk_graph is not None
     assert graph.walk_graph.edges[0].source == "west"
     assert graph.walk_graph.nodes["east"].map_xy == (450.0, 100.0)
+    reverse_edges = graph.walk_graph.get_edges_from("east")
+    assert [(edge.id, edge.target) for edge in reverse_edges] == [
+        ("west-east::reverse", "west")
+    ]
 
     camera_only_changed = graph.model_copy(
         update={
@@ -500,6 +509,56 @@ def test_reachable_area_follows_directed_graph_and_normalises_leaf_nodes() -> No
     assert probabilities == pytest.approx({"wblind": 0.5, "woutside": 0.5})
 
 
+def test_open_observation_and_closed_summary_suppress_reachable_area() -> None:
+    graph = _graph()
+    params = RoutingParams(max_speed=2.0)
+    open_visit = _visit_with_trajectory().model_copy(
+        update={"open": True}, deep=True
+    )
+    open_hypothesis = Hypothesis(
+        id="open",
+        visits=[open_visit],
+        current_node="A",
+        status=HypothesisStatus.ALIVE,
+    )
+    from javes_contracts import SearchState
+
+    active_state = SearchState(
+        case_id="case",
+        site_version=graph.version,
+        params_version=params.version,
+        hypotheses=[open_hypothesis],
+    )
+    open_estimate = compute_estimate(
+        [open_hypothesis], graph, T0 + timedelta(seconds=20), active_state, params
+    )
+    assert open_estimate.reachable_segments == []
+    assert open_estimate.reachable_nodes == []
+
+    closed_visit = open_visit.model_copy(update={"open": False}, deep=True)
+    closed_hypothesis = open_hypothesis.model_copy(
+        update={"visits": [closed_visit]}, deep=True
+    )
+    closed_state = active_state.model_copy(
+        update={
+            "hypotheses": [closed_hypothesis],
+            "done": True,
+            "stop_reason": StopReason.ALL_ENDED,
+            "mode": SearchMode.PAST_SUMMARY,
+        },
+        deep=True,
+    )
+    closed_estimate = compute_estimate(
+        [closed_hypothesis],
+        graph,
+        T0 + timedelta(seconds=20),
+        closed_state,
+        params,
+    )
+    assert closed_estimate.reachable_segments == []
+    assert closed_estimate.reachable_nodes == []
+
+
 def test_max_gap_keeps_final_reachable_snapshot() -> None:
     graph = _graph()
     params = RoutingParams(max_gap_s=20, max_speed=2.0)
@@ -612,9 +671,20 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
         estimate=estimate,
         mode=SearchMode.CATCHING_UP,
     )
-    first_svg = render_route_maps(result, graph, {}).maps[0].svg
-    second_svg = render_route_maps(result, graph, {}).maps[0].svg
+    first_bundle = render_route_maps(result, graph, {})
+    second_bundle = render_route_maps(result, graph, {})
+    first_svg = first_bundle.maps[0].svg
+    second_svg = second_bundle.maps[0].svg
     assert first_svg == second_svg
+    assert first_bundle.presentation is not None
+    assert first_bundle.presentation.position_state == PositionState.LOST
+    assert first_bundle.presentation.shown_layers == [
+        RouteLayer.CAMERAS,
+        RouteLayer.INFERRED,
+        RouteLayer.LAST_POSITION,
+        RouteLayer.OBSERVED,
+        RouteLayer.SEARCH_AREA,
+    ]
     ET.fromstring(first_svg)
     for role in (
         "best-route",
@@ -625,7 +695,15 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
         "legend",
     ):
         assert f'data-role="{role}"' in first_svg
-    assert "calculated 2026-11-06T04:00:12+00:00" in first_svg
+    assert "Possible area after last sighting" in first_svg
+    assert "possible area as of 2026-11-06 04:00:12 UTC" in first_svg
+    assert 'data-role="estimate"' not in first_svg
+    visible_text = " ".join(
+        text.strip()
+        for text in ET.fromstring(first_svg).itertext()
+        if text and text.strip()
+    )
+    assert "%" not in visible_text
 
 
 def test_svg_never_invents_route_from_camera_markers() -> None:
@@ -668,3 +746,8 @@ def test_svg_never_invents_route_from_camera_markers() -> None:
     ).maps[0].svg
     assert 'data-role="inferred-path"' not in svg
     assert 'points="20.00,40.00 150.00,40.00 300.00,40.00"' not in svg
+    assert "Estimated between sightings" not in svg
+    assert "Possible area after last sighting" not in svg
+    assert "A · video evidence" in svg
+    assert "B · video evidence" in svg
+    assert "C ·" not in svg
