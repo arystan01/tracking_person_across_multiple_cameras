@@ -17,6 +17,7 @@ from javes_contracts import (
 from .params import RoutingParams
 from .expand import _camera_paths, _softmax
 from .frontier import frontier_horizon
+from .positioning import movement_ranges, reachable_area
 from .update import _scale_edge
 
 
@@ -71,12 +72,21 @@ def compute_estimate(
     ] if total else []
     best = _best(pool)
     last = best.visits[-1] if best and best.visits else None
+    speed_range, distance_range = movement_ranges(best, graph, params)
+    reachable_segments, reachable_nodes = reachable_area(
+        best, graph, params, now
+    )
     return Estimate(
         zones=zones,
         valid_until=None if state and state.done else now + timedelta(seconds=params.heartbeat_s),
         last_observed_camera=last.camera if last else None,
         last_observed_time=last.t_out if last else None,
         unobserved_windows=list(state.unobserved_windows) if state else [],
+        speed_range=speed_range,
+        distance_range=distance_range,
+        reachable_segments=reachable_segments,
+        reachable_nodes=reachable_nodes,
+        calculated_at=now,
     )
 
 
