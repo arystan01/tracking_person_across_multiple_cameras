@@ -7,100 +7,36 @@ can open the exact SVG returned through Controls after the test finishes.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import html
-import importlib.util
-import json
 import os
 import shutil
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from tests.support.real_cv_e2e import (
+    ReportVideo,
+    SyncASGIClient as _SyncASGIClient,
+    clip_video_window as _clip_video_window,
+    nvidia_pixel_to_map_homographies,
+    publish_inspectable_report,
+    require_real_cv as _require_real_cv,
+)
+
 
 pytestmark = pytest.mark.real_cv
-
-
-class _SyncASGIClient:
-    """Small sync facade over httpx's ASGI transport.
-
-    The repository's production HTTP adapters are synchronous. Each request
-    gets its own worker thread so nested Main -> Routing -> Site Config calls
-    can still execute their ASGI applications through real HTTP contracts.
-    """
-
-    def __init__(self, app, *, base_url: str) -> None:
-        self.app = app
-        self.base_url = base_url
-
-    def request(self, method: str, url: str, **kwargs):
-        import httpx
-
-        async def send():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=self.app),
-                base_url=self.base_url,
-            ) as client:
-                return await client.request(method, url, **kwargs)
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            return executor.submit(lambda: asyncio.run(send())).result(timeout=60)
-
-    def get(self, url: str, **kwargs):
-        return self.request("GET", url, **kwargs)
-
-    def post(self, url: str, **kwargs):
-        return self.request("POST", url, **kwargs)
-
-
-def _require_real_cv() -> None:
-    if os.environ.get("JAVES_RUN_REAL_CV") != "1":
-        pytest.skip("set JAVES_RUN_REAL_CV=1 in the real-CV environment")
-    # Do not import the ML stacks before the TestClient portals are running.
-    # In CPU-only environments PyTorch/TensorFlow initialise native thread
-    # pools during import, which can deadlock a subsequently-created AnyIO
-    # portal. Perception imports the real models lazily once all APIs are up.
-    missing = [
-        module
-        for module in ("cv2", "ultralytics", "torchreid")
-        if importlib.util.find_spec(module) is None
-    ]
-    if missing:
-        pytest.skip(f"missing real-CV dependencies: {', '.join(missing)}")
 
 
 def _nvidia_pixel_to_map_homographies(
     repository_root: Path,
 ) -> dict[str, list[list[float]]]:
-    import numpy as np
-    import yaml
-
     fixture = repository_root / "data/nvidia_mtmc/mtmc_4cam"
-    transforms = yaml.safe_load((fixture / "transforms.yml").read_text())
-    world_to_map = np.asarray(transforms["T_ov2px"], dtype=float).reshape(3, 3)
-    result: dict[str, list[list[float]]] = {}
-    for index in range(1, 5):
-        camera = f"Cam{index:03d}"
-        raw = yaml.safe_load(
-            (
-                fixture
-                / "camInfo"
-                / f"Warehouse_Synthetic_{camera}.yml"
-            ).read_text()
-        )
-        projection = np.asarray(
-            raw["projectionMatrix_3x4_w2p"], dtype=float
-        ).reshape(3, 4)
-        ground_plane_to_pixel = projection[:, [0, 1, 3]]
-        pixel_to_map = world_to_map @ np.linalg.inv(ground_plane_to_pixel)
-        pixel_to_map /= pixel_to_map[2, 2]
-        result[camera] = pixel_to_map.tolist()
-    return result
+    return nvidia_pixel_to_map_homographies(
+        fixture, [f"Cam{index:03d}" for index in range(1, 5)]
+    )
 
 
 def _write_site_registry(run_root: Path, repository_root: Path) -> Path:
@@ -209,45 +145,6 @@ def _reference_jpeg(video: Path) -> bytes:
     return encoded.tobytes()
 
 
-def _clip_video_window(
-    source: Path,
-    destination: Path,
-    *,
-    start_s: float,
-    duration_s: float,
-) -> None:
-    """Make the fixture behave like an archive returning the exact window."""
-    import cv2
-
-    capture = cv2.VideoCapture(str(source))
-    assert capture.isOpened(), f"cannot open {source}"
-    fps = capture.get(cv2.CAP_PROP_FPS)
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    assert fps > 0 and width > 0 and height > 0
-    first_frame = max(int(round(start_s * fps)), 0)
-    frame_count = max(int(round(duration_s * fps)), 1)
-    capture.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(
-        str(destination),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (width, height),
-    )
-    assert writer.isOpened(), f"cannot create {destination}"
-    try:
-        for _ in range(frame_count):
-            ok, frame = capture.read()
-            if not ok:
-                break
-            writer.write(frame)
-    finally:
-        writer.release()
-        capture.release()
-    assert destination.is_file() and destination.stat().st_size > 0
-
-
 def _verification_jpeg(
     videos: dict[str, Path],
     map_path: Path,
@@ -339,46 +236,6 @@ def _verification_jpeg(
     encoded_ok, encoded = cv2.imencode(".jpg", contact_sheet)
     assert encoded_ok
     return encoded.tobytes()
-
-
-def _publish_inspectable_output(
-    output_root: Path,
-    run_root: Path,
-    *,
-    route_svg: bytes,
-    case_view: dict,
-    probe_results: list[dict],
-    report: dict,
-    verification_jpeg: bytes,
-) -> None:
-    output_root.mkdir(parents=True, exist_ok=True)
-    files = {
-        "route.svg": route_svg,
-        "case-view.json": json.dumps(case_view, indent=2).encode(),
-        "probe-results.json": json.dumps(probe_results, indent=2).encode(),
-        "report.json": json.dumps(report, indent=2).encode(),
-        "verification.jpg": verification_jpeg,
-    }
-    for name, data in files.items():
-        (run_root / name).write_bytes(data)
-        # Stable aliases make the newest result easy to find after every run.
-        (output_root / name).write_bytes(data)
-    summary = html.escape(json.dumps(report, indent=2))
-    page = (
-        "<!doctype html><meta charset='utf-8'><title>JAVES real-CV E2E</title>"
-        "<style>body{font:14px system-ui;margin:24px;background:#f8fafc}"
-        "img{max-width:100%;border:1px solid #cbd5e1;background:white}"
-        "pre{background:#fff;padding:16px;overflow:auto}</style>"
-        "<h1>JAVES real-CV E2E route</h1><img src='route.svg' alt='route'>"
-        "<h2>Video and map verification</h2>"
-        "<img src='verification.jpg' alt='Cam001, Cam003 and fused map path'>"
-        f"<h2>Run report</h2><pre>{summary}</pre>"
-    )
-    (run_root / "index.html").write_text(page, encoding="utf-8")
-    (output_root / "index.html").write_text(page, encoding="utf-8")
-    (output_root / "LATEST.txt").write_text(
-        str(run_root.resolve()) + "\n", encoding="utf-8"
-    )
 
 
 def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
@@ -890,13 +747,31 @@ def test_real_cv_http_pipeline_renders_nvidia_route() -> None:
             selected_tracklet_ids,
             observed_points,
         )
-        _publish_inspectable_output(
+        timeline = [
+            {
+                "time_s": round((tracklet.t_in - base).total_seconds(), 3),
+                "camera": tracklet.camera,
+                "event": "target tracklet",
+                "details": (
+                    f"{(tracklet.t_out - tracklet.t_in).total_seconds():.2f}s · "
+                    f"{len(tracklet.trajectory or [])} trajectory points"
+                ),
+            }
+            for tracklet in real_tracklets
+            if tracklet.id in selected_tracklet_ids
+        ]
+        publish_inspectable_report(
             output_root,
             run_root,
             route_svg=route_svg,
             case_view=view,
             probe_results=result_payloads,
             report=report,
-            verification_jpeg=verification_jpeg,
+            videos=[
+                ReportVideo("Cam001", videos["Cam001"], "evidence"),
+                ReportVideo("Cam003", videos["Cam003"], "evidence"),
+            ],
+            timeline=timeline,
+            extra_files={"verification.jpg": verification_jpeg},
         )
         print(f"real-CV E2E output: {output_root}")
