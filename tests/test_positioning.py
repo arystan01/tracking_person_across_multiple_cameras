@@ -31,6 +31,9 @@ from javes_contracts import (
     Transition,
     TransitionGeometry,
     Visit,
+    WalkEdgeDef,
+    WalkGraphDef,
+    WalkNodeDef,
 )
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.positioning import (
@@ -252,6 +255,120 @@ def test_calibration_changes_immutable_site_checksum() -> None:
         update={"cameras": {**graph.cameras, "A": changed_camera}}, deep=True
     )
     assert model_checksum(graph) != model_checksum(changed)
+
+
+def test_site_has_separate_camera_coverage_and_pedestrian_topology() -> None:
+    graph = parse_site(
+        {
+            "site": "ground-plane",
+            "version": "v1",
+            "map": {
+                "floors": [
+                    {"id": "1F", "size_px": [500, 400], "m_per_px": 0.1}
+                ]
+            },
+            "cameras": {
+                "A": {
+                    "floor": "1F",
+                    "map_xy": [25, 20],
+                    "coverage_polygon": [[0, 0], [250, 0], [250, 200], [0, 200]],
+                    "overlap_camera_ids": ["B"],
+                },
+                "B": {
+                    "floor": "1F",
+                    "map_xy": [475, 20],
+                    "coverage_polygon": [[200, 0], [500, 0], [500, 200], [200, 200]],
+                    "overlap_camera_ids": ["A"],
+                },
+            },
+            "edges": [],
+            "walk_graph": {
+                "nodes": {
+                    "west": {"floor_id": "1F", "map_xy": [50, 100]},
+                    "east": {"floor_id": "1F", "map_xy": [450, 100]},
+                },
+                "edges": [
+                    {
+                        "id": "west-east",
+                        "from": "west",
+                        "to": "east",
+                        "floor_id": "1F",
+                        "map_path": [[250, 120]],
+                        "d_m": 40,
+                    }
+                ],
+            },
+        }
+    )
+    assert graph.cameras["A"].overlap_camera_ids == ["B"]
+    assert graph.cameras["A"].coverage_polygon[0] == (0.0, 0.0)
+    assert graph.walk_graph is not None
+    assert graph.walk_graph.edges[0].source == "west"
+    assert graph.walk_graph.nodes["east"].map_xy == (450.0, 100.0)
+
+    camera_only_changed = graph.model_copy(
+        update={
+            "cameras": {
+                **graph.cameras,
+                "A": graph.cameras["A"].model_copy(
+                    update={"map_xy": (30.0, 20.0)}
+                ),
+            }
+        },
+        deep=True,
+    )
+    walk_changed = graph.model_copy(
+        update={
+            "walk_graph": WalkGraphDef(
+                nodes={
+                    **graph.walk_graph.nodes,
+                    "west": WalkNodeDef(
+                        id="west", floor_id="1F", map_xy=(60, 100)
+                    ),
+                },
+                edges=[
+                    WalkEdgeDef(
+                        id="west-east",
+                        source="west",
+                        target="east",
+                        floor_id="1F",
+                        map_path=[(250, 120)],
+                        d_m=40,
+                    )
+                ],
+            )
+        },
+        deep=True,
+    )
+    assert model_checksum(graph) != model_checksum(camera_only_changed)
+    assert model_checksum(graph) != model_checksum(walk_changed)
+
+
+def test_site_rejects_asymmetric_overlap_and_invalid_walk_geometry() -> None:
+    base = {
+        "map": {"floors": [{"id": "1F", "size_px": [100, 100]}]},
+        "cameras": {
+            "A": {"floor": "1F", "overlap_camera_ids": ["B"]},
+            "B": {"floor": "1F"},
+        },
+        "edges": [],
+    }
+    with pytest.raises(ValueError, match="symmetric"):
+        parse_site(base)
+
+    invalid_walk = {
+        **base,
+        "cameras": {"A": {"floor": "1F"}, "B": {"floor": "1F"}},
+        "walk_graph": {
+            "nodes": {
+                "inside": {"floor_id": "1F", "map_xy": [50, 50]},
+                "outside": {"floor_id": "1F", "map_xy": [101, 50]},
+            },
+            "edges": [],
+        },
+    }
+    with pytest.raises(ValueError, match="outside floor"):
+        parse_site(invalid_walk)
 
 
 def test_distance_speed_ranges_and_max_speed_guard() -> None:
