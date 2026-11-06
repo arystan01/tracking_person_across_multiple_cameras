@@ -16,6 +16,7 @@ from javes_contracts import (
     SiteGraph,
 )
 from .params import RoutingParams
+from .positioning import reachable_area
 from .timemodel import arrival_mass
 from .update import _scale_edge
 
@@ -27,6 +28,72 @@ def _softmax(scores: list[float]) -> list[float]:
     values = [math.exp(score - pivot) for score in scores]
     total = sum(values)
     return [value / total for value in values]
+
+
+def _point_in_polygon(
+    point: tuple[float, float], polygon: list[tuple[float, float]]
+) -> bool:
+    if len(polygon) < 3:
+        return False
+    px, py = point
+    inside = False
+    previous = polygon[-1]
+    for current in polygon:
+        xi, yi = current
+        xj, yj = previous
+        if ((yi > py) != (yj > py)) and (
+            px < (xj - xi) * (py - yi) / (yj - yi) + xi
+        ):
+            inside = not inside
+        previous = current
+    return inside
+
+
+def _segments_intersect(
+    left_a: tuple[float, float],
+    left_b: tuple[float, float],
+    right_a: tuple[float, float],
+    right_b: tuple[float, float],
+) -> bool:
+    def orientation(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (
+            c[0] - a[0]
+        )
+
+    def on_segment(a, b, c):
+        return (
+            min(a[0], b[0]) <= c[0] <= max(a[0], b[0])
+            and min(a[1], b[1]) <= c[1] <= max(a[1], b[1])
+        )
+
+    values = (
+        orientation(left_a, left_b, right_a),
+        orientation(left_a, left_b, right_b),
+        orientation(right_a, right_b, left_a),
+        orientation(right_a, right_b, left_b),
+    )
+    if values[0] * values[1] < 0 and values[2] * values[3] < 0:
+        return True
+    return bool(
+        (abs(values[0]) < 1e-9 and on_segment(left_a, left_b, right_a))
+        or (abs(values[1]) < 1e-9 and on_segment(left_a, left_b, right_b))
+        or (abs(values[2]) < 1e-9 and on_segment(right_a, right_b, left_a))
+        or (abs(values[3]) < 1e-9 and on_segment(right_a, right_b, left_b))
+    )
+
+
+def _polyline_intersects_polygon(
+    points: list[tuple[float, float]],
+    polygon: list[tuple[float, float]],
+) -> bool:
+    if any(_point_in_polygon(point, polygon) for point in points):
+        return True
+    polygon_edges = list(zip(polygon, [*polygon[1:], polygon[0]]))
+    return any(
+        _segments_intersect(left, right, edge_left, edge_right)
+        for left, right in zip(points, points[1:])
+        for edge_left, edge_right in polygon_edges
+    )
 
 
 def _probe_id(
@@ -306,6 +373,47 @@ def expand_hypotheses(
             )
             if candidate:
                 probes.append(candidate)
+
+        reachable_segments, _ = reachable_area(
+            hypothesis, graph, params, now
+        )
+        coverage_priority: dict[str, float] = {}
+        for segment in reachable_segments:
+            for camera_id, camera_def in sorted(graph.cameras.items()):
+                if camera_id == visit.camera or not camera_def.coverage_polygon:
+                    continue
+                if camera_def.floor != segment.floor_id:
+                    continue
+                if _polyline_intersects_polygon(
+                    segment.points, camera_def.coverage_polygon
+                ):
+                    coverage_priority[camera_id] = max(
+                        coverage_priority.get(camera_id, 0.0),
+                        segment.probability,
+                    )
+        for camera_id, probability in sorted(coverage_priority.items()):
+            t_from = max(
+                (
+                    hypothesis.observed_segments[-1].points[-1].timestamp
+                    if hypothesis.observed_segments
+                    and hypothesis.observed_segments[-1].points
+                    else visit.t_out
+                ),
+                state.window_start or visit.t_out,
+            )
+            if now < t_from:
+                continue
+            coverage_probe = _make_probe(
+                state,
+                camera_id,
+                t_from,
+                min(now, state.window_end or now),
+                weight * probability,
+                "GROUND_COVERAGE",
+                [hypothesis.id],
+            )
+            if coverage_probe:
+                probes.append(coverage_probe)
 
     ambiguities: list[Ambiguity] = []
     for hypothesis, weight in zip(alive, weights):

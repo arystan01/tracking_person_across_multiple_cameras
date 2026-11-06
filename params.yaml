@@ -14,6 +14,8 @@ max_calibration_error_m: 2.0
 overlap_time_tolerance_s: 1.0
 overlap_position_tolerance_m: 0.75
 anchor_probe_window_s: 5.0
+max_walk_snap_m: 3.0
+walk_alternative_limit: 3
 use_st: true
 amb_priority_bonus: 2.0
 dormant_watch_boost: 1.2

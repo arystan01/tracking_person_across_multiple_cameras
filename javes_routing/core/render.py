@@ -285,13 +285,15 @@ def _reachable_elements(
         return []
     elements: list[str] = []
     for segment in step_result.estimate.reachable_segments:
-        points = _edge_points(graph, segment.edge_id, floor_id, positions)
+        points = segment.points if segment.floor_id == floor_id else []
         if len(points) < 2:
             continue
         opacity = min(0.18 + segment.probability * 0.62, 0.8)
         elements.append(
             f'<polyline data-role="reachable-area" data-edge="{escape(segment.edge_id)}" '
             f'data-probability="{segment.probability:.6f}" '
+            f'data-progress="{segment.progress:.6f}" '
+            f'data-approximate="{str(segment.approximate).lower()}" '
             f'points="{" ".join(_point(item) for item in points)}" fill="none" '
             f'stroke="#7c3aed" stroke-opacity="{opacity:.3f}" stroke-width="15" '
             'stroke-linecap="round" stroke-linejoin="round"/>'

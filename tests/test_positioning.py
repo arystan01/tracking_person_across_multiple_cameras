@@ -122,6 +122,25 @@ def _graph(*, calibrated: bool = True) -> SiteGraph:
                 d_m=10,
             ),
         ],
+        walk_graph=WalkGraphDef(
+            nodes={
+                "wa": WalkNodeDef(id="wa", floor_id="1F", map_xy=(26, 48)),
+                "wb": WalkNodeDef(id="wb", floor_id="1F", map_xy=(126, 48)),
+                "wc": WalkNodeDef(id="wc", floor_id="1F", map_xy=(26, 148)),
+                "wblind": WalkNodeDef(
+                    id="wblind", floor_id="1F", map_xy=(226, 48), kind="BLIND"
+                ),
+                "woutside": WalkNodeDef(
+                    id="woutside", floor_id="1F", map_xy=(26, 248), kind="OUTSIDE"
+                ),
+            },
+            edges=[
+                WalkEdgeDef(id="walk-A-B", source="wa", target="wb", floor_id="1F", d_m=10),
+                WalkEdgeDef(id="walk-A-C", source="wa", target="wc", floor_id="1F", d_m=10),
+                WalkEdgeDef(id="walk-B-blind", source="wb", target="wblind", floor_id="1F", d_m=10),
+                WalkEdgeDef(id="walk-C-outside", source="wc", target="woutside", floor_id="1F", d_m=10),
+            ],
+        ),
     )
 
 
@@ -458,25 +477,27 @@ def test_reachable_area_follows_directed_graph_and_normalises_leaf_nodes() -> No
         hypothesis,
         graph,
         RoutingParams(max_speed=2.0),
-        T0 + timedelta(seconds=6),
+        T0 + timedelta(seconds=10),
     )
     assert {item.edge_id for item in partial_segments} == {
-        "A-B",
-        "A-C",
-        "B-blind",
-        "C-outside",
+        "walk-A-B",
+        "walk-A-C",
+        "walk-B-blind",
+        "walk-C-outside",
     }
-    assert {item.node_id for item in partial_nodes} == {"B", "C"}
+    assert {item.node_id for item in partial_nodes} == {"wb", "wc"}
+    assert all(item.points[0] == (26.0, 48.0) for item in partial_segments[:2])
+    assert {item.progress for item in partial_segments} == {1.0, 0.2}
     assert sum(item.probability for item in partial_nodes) == pytest.approx(1.0)
 
     _, terminal_nodes = reachable_area(
         hypothesis,
         graph,
         RoutingParams(max_speed=2.0),
-        T0 + timedelta(seconds=11),
+        T0 + timedelta(seconds=15),
     )
     probabilities = {item.node_id: item.probability for item in terminal_nodes}
-    assert probabilities == pytest.approx({"blind": 0.5, "OUTSIDE": 0.5})
+    assert probabilities == pytest.approx({"wblind": 0.5, "woutside": 0.5})
 
 
 def test_max_gap_keeps_final_reachable_snapshot() -> None:
@@ -563,10 +584,12 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
         zones=[],
         reachable_segments=[
             ReachableSegment(
-                edge_id="B-blind",
-                source="B",
-                target="blind",
+                edge_id="walk-B-blind",
+                source="wb",
+                target="wblind",
                 probability=1.0,
+                floor_id="1F",
+                points=[(300, 40), (400, 40)],
             )
         ],
         reachable_nodes=[ReachableNode(node_id="blind", probability=1.0)],

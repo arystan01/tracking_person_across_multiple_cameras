@@ -28,6 +28,7 @@ from javes_contracts import (
     Visit,
 )
 from .frontier import record_probe_progress
+from .ground import build_transition_geometry
 from .params import RoutingParams
 from .positioning import project_trajectory
 from .timemodel import (
@@ -1022,7 +1023,25 @@ def _all_tracklet_ids(hypothesis: Hypothesis) -> set[str]:
     return {tracklet_id for visit in hypothesis.visits for tracklet_id in visit.tracklet_ids}
 
 
-def _transition_from_gate(previous: Visit, visit: Visit, gate: GateResult) -> Transition:
+def _transition_from_gate(
+    previous: Visit,
+    visit: Visit,
+    gate: GateResult,
+    graph: SiteGraph,
+    params: RoutingParams,
+) -> Transition:
+    geometry = None
+    if (
+        gate.kind != "OVERLAP"
+        and previous.projected_trajectory
+        and visit.projected_trajectory
+    ):
+        geometry = build_transition_geometry(
+            previous.projected_trajectory[-1],
+            visit.projected_trajectory[0],
+            graph,
+            params,
+        )
     return Transition(
         from_visit_id=previous.id,
         to_visit_id=visit.id,
@@ -1031,6 +1050,7 @@ def _transition_from_gate(previous: Visit, visit: Visit, gate: GateResult) -> Tr
         via_nodes=list(gate.via_nodes),
         kind=gate.kind,  # type: ignore[arg-type]
         flags=list(visit.flags),
+        geometry=geometry,
     )
 
 
@@ -1056,6 +1076,7 @@ def _branch_with_visit(
     hypothesis: Hypothesis,
     visit: Visit,
     gate: GateResult,
+    graph: SiteGraph,
     params: RoutingParams,
     confirmed: set[str],
 ) -> Hypothesis:
@@ -1069,7 +1090,9 @@ def _branch_with_visit(
         branch_visit = visit.model_copy(
             update={"flags": sorted(set(visit.flags) | {"PASS_THROUGH"})}
         )
-    transition = _transition_from_gate(hypothesis.visits[-1], branch_visit, gate)
+    transition = _transition_from_gate(
+        hypothesis.visits[-1], branch_visit, gate, graph, params
+    )
     visit_key = ",".join(item.id for item in hypothesis.visits + [branch_visit])
     hypothesis_id = _make_id("h", visit_key, ",".join(transition.edge_ids), hypothesis.id)
     return Hypothesis(
@@ -1253,10 +1276,10 @@ def update_hypotheses(
                         kind="UNKNOWN",
                         via_nodes=("UNKNOWN",),
                     )
-                    branches.append(_branch_with_visit(hypothesis, override_visit, override_gate, params, confirmed))
+                    branches.append(_branch_with_visit(hypothesis, override_visit, override_gate, graph, params, confirmed))
                     any_compatible = True
                 continue
-            branches.append(_branch_with_visit(hypothesis, visit, gate, params, confirmed))
+            branches.append(_branch_with_visit(hypothesis, visit, gate, graph, params, confirmed))
             any_compatible = True
 
         hypotheses = [
