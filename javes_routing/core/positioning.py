@@ -17,6 +17,14 @@ from javes_contracts import (
 )
 
 from .params import RoutingParams
+from .ground import (
+    deduplicate_points,
+    floor_scale,
+    nearest_walk_node,
+    truncate_polyline,
+    walk_edge_distance_m,
+    walk_edge_points,
+)
 
 
 def project_trajectory(
@@ -215,32 +223,91 @@ def reachable_area(
     params: RoutingParams,
     now: datetime,
 ) -> tuple[list[ReachableSegment], list[ReachableNode]]:
-    if hypothesis is None or not hypothesis.visits:
+    if hypothesis is None or not hypothesis.visits or graph.walk_graph is None:
         return [], []
-    last = hypothesis.visits[-1]
-    elapsed_s = max((now - last.t_out).total_seconds(), 0.0)
+    if hypothesis.observed_segments and hypothesis.observed_segments[-1].points:
+        ground = hypothesis.observed_segments[-1].points[-1]
+        last_point = ProjectedTrajectoryPoint(
+            timestamp=ground.timestamp,
+            x=ground.x,
+            y=ground.y,
+            floor_id=ground.floor_id,
+            confidence=ground.confidence,
+            calibration_error_m=ground.error_m,
+        )
+    else:
+        projected = [
+            point
+            for visit in hypothesis.visits
+            for point in visit.projected_trajectory
+        ]
+        if not projected:
+            return [], []
+        last_point = max(
+            projected, key=lambda item: (item.timestamp, item.x, item.y)
+        )
+    scale = floor_scale(graph, last_point.floor_id)
+    snap = nearest_walk_node(last_point, graph, params.max_walk_snap_m)
+    if scale is None or snap is None:
+        return [], []
+    start_node, connector_m = snap
+    elapsed_s = max((now - last_point.timestamp).total_seconds(), 0.0)
     budget_m = elapsed_s * params.max_speed
     node_probability: dict[str, float] = defaultdict(float)
-    segment_probability: dict[str, float] = defaultdict(float)
-    frontier = [(hypothesis.current_node, 0.0, 1.0, 0)]
-    best_distance = {hypothesis.current_node: 0.0}
-    max_depth = max(len(graph.get_node_ids()) * 2, 1)
+    segment_data: dict[str, dict[str, object]] = {}
+    if connector_m > budget_m:
+        return [], [ReachableNode(node_id=start_node, probability=1.0)]
+    frontier = [(start_node, connector_m, 1.0, 0)]
+    best_distance = {start_node: connector_m}
+    max_depth = max(len(graph.walk_graph.nodes) * 2, 1)
     while frontier:
         node, spent_m, probability, depth = frontier.pop(0)
-        outgoing = sorted(graph.get_edges_from(node), key=lambda item: item.id)
-        viable = []
-        for edge in outgoing:
-            distance = edge_distance_m(edge.id, graph)
-            if distance is None:
-                distance = edge.t_min * params.max_speed
-            if spent_m < budget_m - 1e-9:
-                viable.append((edge, distance))
+        outgoing = sorted(
+            graph.walk_graph.get_edges_from(node), key=lambda item: item.id
+        )
+        viable = [
+            (edge, distance)
+            for edge in outgoing
+            if (distance := walk_edge_distance_m(edge, graph)) is not None
+            and spent_m < budget_m - 1e-9
+        ]
         if not viable or depth >= max_depth:
             node_probability[node] += probability
             continue
         share = probability / len(viable)
         for edge, distance in viable:
-            segment_probability[edge.id] += share
+            edge_points = walk_edge_points(edge, graph)
+            available_m = max(budget_m - spent_m, 0.0)
+            progress = min(available_m / distance, 1.0)
+            visible_points = (
+                edge_points
+                if progress >= 1.0
+                else truncate_polyline(edge_points, available_m, scale)
+            )
+            if depth == 0:
+                visible_points = deduplicate_points(
+                    [
+                        (last_point.x, last_point.y),
+                        graph.walk_graph.nodes[start_node].map_xy,
+                        *visible_points,
+                    ]
+                )
+            previous_segment = segment_data.get(edge.id)
+            if previous_segment is None:
+                segment_data[edge.id] = {
+                    "edge": edge,
+                    "probability": share,
+                    "points": visible_points,
+                    "progress": progress,
+                    "approximate": depth == 0 and connector_m > 0.1,
+                }
+            else:
+                previous_segment["probability"] = min(
+                    float(previous_segment["probability"]) + share, 1.0
+                )
+                if progress > float(previous_segment["progress"]):
+                    previous_segment["points"] = visible_points
+                    previous_segment["progress"] = progress
             reached = spent_m + distance
             if reached > budget_m + 1e-9:
                 node_probability[node] += share
@@ -253,23 +320,21 @@ def reachable_area(
                 node_probability[edge.target] += share
 
     node_total = sum(node_probability.values()) or 1.0
-    segment_total = sum(segment_probability.values()) or 1.0
     segments = [
         ReachableSegment(
             edge_id=edge_id,
-            source=edge.source,
-            target=edge.target,
-            probability=round(value / segment_total, 6),
+            source=data["edge"].source,  # type: ignore[union-attr]
+            target=data["edge"].target,  # type: ignore[union-attr]
+            probability=round(float(data["probability"]), 6),
+            floor_id=data["edge"].floor_id,  # type: ignore[union-attr]
+            points=data["points"],  # type: ignore[arg-type]
+            progress=round(float(data["progress"]), 6),
+            approximate=bool(data["approximate"]),
         )
-        for edge_id, value in sorted(
-            segment_probability.items(), key=lambda item: (-item[1], item[0])
+        for edge_id, data in sorted(
+            segment_data.items(),
+            key=lambda item: (-float(item[1]["probability"]), item[0]),
         )
-        if (
-            edge := next(
-                (item for item in graph.edges if item.id == edge_id), None
-            )
-        )
-        is not None
     ]
     nodes = [
         ReachableNode(node_id=node, probability=round(value / node_total, 6))

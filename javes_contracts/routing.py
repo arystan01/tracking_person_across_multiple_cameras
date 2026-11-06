@@ -615,6 +615,10 @@ class ReachableSegment(ContractModel):
     source: str
     target: str
     probability: float = Field(ge=0.0, le=1.0)
+    floor_id: str | None = None
+    points: list[tuple[float, float]] = Field(default_factory=list)
+    progress: float = Field(default=1.0, ge=0.0, le=1.0)
+    approximate: bool = False
 
 
 class ReachableNode(ContractModel):
