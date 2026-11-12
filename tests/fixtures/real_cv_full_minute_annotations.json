@@ -1,0 +1,55 @@
+{
+  "blue-shirt-man": {
+    "checkpoints": [
+      {"time_s": 0.0, "camera": "Cam001", "bbox_xyxy": [1372, 193, 1439, 353], "foot_point_px": [1405.5, 353.0]},
+      {"time_s": 10.0, "camera": "Cam001", "bbox_xyxy": [1380, 195, 1454, 351], "foot_point_px": [1417.0, 351.0]},
+      {"time_s": 20.0, "camera": "Cam003", "bbox_xyxy": [1014, 684, 1071, 886], "foot_point_px": [1042.5, 886.0]},
+      {"time_s": 30.0, "camera": "Cam001", "bbox_xyxy": [1175, 0, 1201, 46], "foot_point_px": [1188.0, 46.0]},
+      {"time_s": 40.0, "camera": "Cam001", "bbox_xyxy": [1470, 1, 1496, 65], "foot_point_px": [1483.0, 65.0]},
+      {"time_s": 50.0, "camera": "Cam003", "bbox_xyxy": [1372, 375, 1440, 534], "foot_point_px": [1406.0, 534.0]},
+      {"time_s": 59.8, "camera": "Cam001", "bbox_xyxy": [290, 140, 370, 288], "foot_point_px": [330.0, 288.0]}
+    ],
+    "negative_checkpoints": [
+      {"time_s": 40.0, "camera": "Cam003", "bbox_xyxy": [1450, 710, 1545, 935], "foot_point_px": [1497.5, 935.0]}
+    ]
+  },
+  "burgundy-woman": {
+    "checkpoints": [
+      {"time_s": 10.0, "camera": "Cam001", "bbox_xyxy": [197, 624, 295, 815], "foot_point_px": [246.0, 815.0]},
+      {"time_s": 20.0, "camera": "Cam003", "bbox_xyxy": [484, 113, 512, 197], "foot_point_px": [498.0, 197.0]},
+      {"time_s": 30.0, "camera": "Cam003", "bbox_xyxy": [545, 44, 573, 121], "foot_point_px": [559.0, 121.0]},
+      {"time_s": 40.0, "camera": "Cam003", "bbox_xyxy": [378, 50, 408, 112], "foot_point_px": [393.0, 112.0]},
+      {"time_s": 50.0, "camera": "Cam003", "bbox_xyxy": [294, 47, 324, 121], "foot_point_px": [309.0, 121.0]},
+      {"time_s": 59.8, "camera": "Cam003", "bbox_xyxy": [457, 121, 489, 207], "foot_point_px": [473.0, 207.0]}
+    ],
+    "negative_checkpoints": [
+      {"time_s": 40.0, "camera": "Cam003", "bbox_xyxy": [843, 197, 880, 307], "foot_point_px": [861.5, 307.0]}
+    ]
+  },
+  "red-dress-woman": {
+    "checkpoints": [
+      {"time_s": 0.0, "camera": "Cam001", "bbox_xyxy": [1780, 80, 1837, 208], "foot_point_px": [1808.5, 208.0]},
+      {"time_s": 10.0, "camera": "Cam002", "bbox_xyxy": [1436, 184, 1494, 329], "foot_point_px": [1465.0, 329.0]},
+      {"time_s": 20.0, "camera": "Cam001", "bbox_xyxy": [647, 17, 679, 133], "foot_point_px": [663.0, 133.0]},
+      {"time_s": 30.0, "camera": "Cam002", "bbox_xyxy": [415, 345, 474, 531], "foot_point_px": [444.5, 531.0]},
+      {"time_s": 35.0, "camera": "Cam002", "bbox_xyxy": [588, 538, 658, 754], "foot_point_px": [623.0, 754.0]},
+      {"time_s": 40.0, "camera": "Cam001", "bbox_xyxy": [397, 234, 462, 386], "foot_point_px": [429.5, 386.0]}
+    ],
+    "negative_checkpoints": [
+      {"time_s": 30.0, "camera": "Cam001", "bbox_xyxy": [820, 776, 876, 987], "foot_point_px": [848.0, 987.0]}
+    ]
+  },
+  "yellow-top-woman": {
+    "checkpoints": [
+      {"time_s": 16.0, "camera": "Cam001", "bbox_xyxy": [1880, 580, 1920, 708], "foot_point_px": [1901.0, 708.0]},
+      {"time_s": 20.0, "camera": "Cam001", "bbox_xyxy": [1421, 635, 1512, 828], "foot_point_px": [1466.5, 828.0]},
+      {"time_s": 24.0, "camera": "Cam001", "bbox_xyxy": [870, 775, 945, 971], "foot_point_px": [907.0, 971.0]},
+      {"time_s": 28.0, "camera": "Cam001", "bbox_xyxy": [820, 776, 876, 988], "foot_point_px": [848.0, 988.0]},
+      {"time_s": 30.0, "camera": "Cam001", "bbox_xyxy": [820, 776, 876, 987], "foot_point_px": [848.0, 987.0]},
+      {"time_s": 34.0, "camera": "Cam001", "bbox_xyxy": [200, 900, 276, 1080], "foot_point_px": [238.0, 1080.0]}
+    ],
+    "negative_checkpoints": [
+      {"time_s": 20.0, "camera": "Cam002", "bbox_xyxy": [574, 13, 608, 113], "foot_point_px": [591.0, 113.0]}
+    ]
+  }
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import importlib.util
 import json
@@ -166,7 +167,13 @@ def _replace_symlink(link: Path, target: Path) -> None:
     link.symlink_to(target.resolve())
 
 
-def _report_page(report: dict, videos: list[dict], timeline: list[dict]) -> str:
+def _report_page(
+    report: dict,
+    videos: list[dict],
+    timeline: list[dict],
+    *,
+    route_filename: str,
+) -> str:
     summary = html.escape(json.dumps(report, indent=2))
     timeline_rows = "".join(
         "<tr>"
@@ -207,7 +214,7 @@ th,td{{text-align:left;border:1px solid #cbd5e1;padding:7px}}pre{{background:#ff
 <label>Time <input id="seek" type="range" min="0" max="1" step="0.05" value="0"></label>
 <output id="clock">0.00 s</output><label>Speed <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label></div>
 </header><main><section class="videos">{video_cards}</section>
-<section class="map"><h2>Final Routing map</h2><object data="route.svg" type="image/svg+xml"></object></section>
+<section class="map"><h2>Final Routing map</h2><object data="{html.escape(route_filename)}" type="image/svg+xml"></object></section>
 <h2>Timeline</h2><table><thead><tr><th>Seconds</th><th>Camera</th><th>Event</th><th>Details</th></tr></thead><tbody>{timeline_rows}</tbody></table>
 <p><a href="case-view.json">Case view JSON</a> · <a href="probe-results.json">Probe results JSON</a> · <a href="video-manifest.json">Video manifest</a></p>
 <h2>Run report</h2><pre>{summary}</pre></main>
@@ -258,8 +265,11 @@ def publish_inspectable_report(
             for candidate in result.get("candidates", [])
         ],
     )
+    route_cache_key = hashlib.sha256(route_svg).hexdigest()[:16]
+    route_filename = f"route-{route_cache_key}.svg"
     files = {
         "route.svg": route_svg,
+        route_filename: route_svg,
         "case-view.json": json.dumps(case_view, indent=2).encode(),
         "probe-results.json": json.dumps(probe_results, indent=2).encode(),
         "report.json": json.dumps(report, indent=2).encode(),
@@ -272,9 +282,20 @@ def publish_inspectable_report(
     for item in videos:
         _replace_symlink(run_root / "videos" / f"{item.camera_id}.mp4", item.path)
         _replace_symlink(output_root / "videos" / f"{item.camera_id}.mp4", item.path)
-    page = _report_page(report, video_manifest, timeline)
+    page = _report_page(
+        report,
+        video_manifest,
+        timeline,
+        route_filename=route_filename,
+    )
     (run_root / "index.html").write_text(page, encoding="utf-8")
     (output_root / "index.html").write_text(page, encoding="utf-8")
+    (run_root / f"index-{route_cache_key}.html").write_text(
+        page, encoding="utf-8"
+    )
+    (output_root / f"index-{route_cache_key}.html").write_text(
+        page, encoding="utf-8"
+    )
     (output_root / "LATEST.txt").write_text(
         str(run_root.resolve()) + "\n", encoding="utf-8"
     )
