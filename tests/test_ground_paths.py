@@ -33,7 +33,7 @@ from javes_routing.core.expand import expand_hypotheses
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.render import render_route_maps
 from javes_routing.core.step import init_state, step
-from javes_routing.core.update import update_hypotheses
+from javes_routing.core.update import gate_visit_details, update_hypotheses
 
 
 UTC = timezone.utc
@@ -156,6 +156,62 @@ def test_directed_ground_path_uses_only_authorised_walk_edges() -> None:
         build_transition_geometry(
             _projected(T0, 310, 100),
             _projected(T0 + timedelta(seconds=20), 90, 100),
+            graph,
+            RoutingParams(max_walk_snap_m=2),
+        )
+        is None
+    )
+
+
+def test_short_cross_camera_gap_uses_walk_graph_without_camera_edge() -> None:
+    graph = _graph().model_copy(update={"edges": []})
+    params = RoutingParams(max_walk_snap_m=2, gap_bridge_max_s=30)
+    first = Visit(
+        visit_id="visit-A",
+        camera_id="A",
+        t_in=T0,
+        t_out=T0,
+        tracklet_ids=["track-A"],
+        appearance_score=0.9,
+        projected_trajectory=[_projected(T0, 90, 100)],
+    )
+    possible = Visit(
+        visit_id="visit-B",
+        camera_id="B",
+        t_in=T0 + timedelta(seconds=20),
+        t_out=T0 + timedelta(seconds=21),
+        tracklet_ids=["track-B"],
+        appearance_score=0.9,
+        projected_trajectory=[
+            _projected(T0 + timedelta(seconds=20), 310, 100)
+        ],
+    )
+    gate = gate_visit_details(first, possible, graph, params, possible.t_out)
+    assert gate.reject_reason is None
+    assert gate.kind == "GAP"
+
+    impossible = possible.model_copy(
+        update={
+            "t_in": T0 + timedelta(seconds=1),
+            "t_out": T0 + timedelta(seconds=2),
+            "projected_trajectory": [
+                _projected(T0 + timedelta(seconds=1), 310, 100)
+            ],
+        }
+    )
+    rejected = gate_visit_details(first, impossible, graph, params, impossible.t_out)
+    assert rejected.reject_reason is not None
+
+
+def test_transition_geometry_rejects_single_point_walk_path() -> None:
+    graph = _graph()
+    start = _projected(T0, 100, 100)
+    end = _projected(T0 + timedelta(seconds=1), 100, 100)
+
+    assert (
+        build_transition_geometry(
+            start,
+            end,
             graph,
             RoutingParams(max_walk_snap_m=2),
         )

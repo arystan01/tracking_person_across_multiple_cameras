@@ -378,6 +378,32 @@ def gate_visit_details(
                         gate_margin_s=dt - minimum_s,
                     )
 
+    # Camera topology is intentionally coarse: calibrated observations can be
+    # closer than the camera-node graph suggests (overlapping views and blind
+    # aisle hand-offs).  A short cross-camera gap is physically admissible when
+    # the immutable pedestrian graph provides an obstacle-safe directed path
+    # and that path can be walked within the elapsed time.  This never falls
+    # back to a straight endpoint line.
+    if (
+        dt <= params.gap_bridge_max_s
+        and last_visit.projected_trajectory
+        and visit.projected_trajectory
+    ):
+        geometry = build_transition_geometry(
+            last_visit.projected_trajectory[-1],
+            visit.projected_trajectory[0],
+            graph,
+            params,
+        )
+        if geometry is not None:
+            minimum_s = geometry.distance_min_m / max(params.gate_speed, 1e-9)
+            if dt >= minimum_s - params.clock_tolerance_s:
+                return GateResult(
+                    0.0,
+                    kind="GAP",
+                    gate_margin_s=dt - minimum_s,
+                )
+
     skip_lateness = last_visit.clipped_out or visit.clipped_in
     candidates: list[tuple[float, tuple[str, ...], tuple[str, ...], str]] = []
     hard_gate_margins: list[float] = []

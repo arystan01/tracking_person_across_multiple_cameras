@@ -250,6 +250,47 @@ def _path_distance_m(
     return sum(distance for distance in distances if distance is not None)
 
 
+def _polyline_slice(
+    points: list[tuple[float, float]],
+    start_m: float,
+    end_m: float,
+    scale: float,
+) -> list[tuple[float, float]]:
+    """Slice a directed polyline at metric offsets from its source."""
+    if not points or end_m < start_m:
+        return []
+    cumulative = [0.0]
+    for left, right in zip(points, points[1:]):
+        cumulative.append(
+            cumulative[-1]
+            + math.hypot(right[0] - left[0], right[1] - left[1]) * scale
+        )
+
+    def at(offset_m: float) -> tuple[float, float]:
+        bounded = min(max(offset_m, 0.0), cumulative[-1])
+        for index, (left_m, right_m) in enumerate(
+            zip(cumulative, cumulative[1:])
+        ):
+            if bounded <= right_m + 1e-12:
+                span = right_m - left_m
+                ratio = (bounded - left_m) / span if span > 1e-12 else 0.0
+                left, right = points[index], points[index + 1]
+                return (
+                    left[0] + (right[0] - left[0]) * ratio,
+                    left[1] + (right[1] - left[1]) * ratio,
+                )
+        return points[-1]
+
+    sliced = [at(start_m)]
+    sliced.extend(
+        point
+        for point, offset_m in zip(points[1:-1], cumulative[1:-1])
+        if start_m < offset_m < end_m
+    )
+    sliced.append(at(end_m))
+    return deduplicate_points(sliced)
+
+
 def walk_edge_by_id(edge_id: str, graph: SiteGraph) -> WalkEdgeDef | None:
     """Resolve a canonical or generated reverse walk-edge id."""
     if graph.walk_graph is None:
@@ -303,32 +344,135 @@ def build_transition_geometry(
     """Return the shortest directed path made only of Site Config walk edges."""
     if start.floor_id != end.floor_id or graph.walk_graph is None:
         return None
-    source_snap = nearest_walk_node(start, graph, params.max_walk_snap_m)
-    target_snap = nearest_walk_node(end, graph, params.max_walk_snap_m)
+    source_snap = nearest_walk_position(start, graph, params.max_walk_snap_m)
+    target_snap = nearest_walk_position(end, graph, params.max_walk_snap_m)
     if source_snap is None or target_snap is None:
         return None
-    source_node, source_distance = source_snap
-    target_node, target_distance = target_snap
-    candidates = []
-    for edges in _simple_paths(
-        source_node, target_node, graph, params.max_hidden_edges
-    ):
-        distance = _path_distance_m(edges, graph)
-        if distance is None:
-            continue
-        points = _path_points(edges, graph)
-        if len(points) < 2:
-            continue
-        candidates.append(
+    scale = floor_scale(graph, start.floor_id)
+    if scale is None:
+        return None
+    candidates: list[
+        tuple[float, tuple[str, ...], list[tuple[float, float]]]
+    ] = []
+
+    if source_snap.edge.id == target_snap.edge.id:
+        source_offset = source_snap.offset_from_source_m
+        target_offset = target_snap.offset_from_source_m
+        edge_points = walk_edge_points(source_snap.edge, graph)
+        if target_offset >= source_offset:
+            candidates.append(
+                (
+                    target_offset - source_offset,
+                    (source_snap.edge.id,),
+                    _polyline_slice(
+                        edge_points, source_offset, target_offset, scale
+                    ),
+                )
+            )
+        if source_snap.edge.bidirectional and source_offset >= target_offset:
+            candidates.append(
+                (
+                    source_offset - target_offset,
+                    (f"{source_snap.edge.id}::reverse",),
+                    list(
+                        reversed(
+                            _polyline_slice(
+                                edge_points, target_offset, source_offset, scale
+                            )
+                        )
+                    ),
+                )
+            )
+
+    departures = [
+        (
+            source_snap.edge.target,
+            source_snap.offset_to_target_m,
+            list(source_snap.points_to_target),
+            (source_snap.edge.id,),
+        )
+    ]
+    if source_snap.edge.bidirectional:
+        departures.append(
             (
-                distance,
-                tuple(edge.id for edge in edges),
-                points,
+                source_snap.edge.source,
+                source_snap.offset_from_source_m,
+                list(source_snap.points_to_source),
+                (f"{source_snap.edge.id}::reverse",),
             )
         )
+    if source_snap.offset_from_source_m <= 1e-9:
+        departures.append(
+            (source_snap.edge.source, 0.0, [source_snap.point], ())
+        )
+    if source_snap.offset_to_target_m <= 1e-9:
+        departures.append(
+            (source_snap.edge.target, 0.0, [source_snap.point], ())
+        )
+    arrivals = [
+        (
+            target_snap.edge.source,
+            target_snap.offset_from_source_m,
+            list(reversed(target_snap.points_to_source)),
+            (target_snap.edge.id,),
+        )
+    ]
+    if target_snap.edge.bidirectional:
+        arrivals.append(
+            (
+                target_snap.edge.target,
+                target_snap.offset_to_target_m,
+                list(reversed(target_snap.points_to_target)),
+                (f"{target_snap.edge.id}::reverse",),
+            )
+        )
+    if target_snap.offset_from_source_m <= 1e-9:
+        arrivals.append(
+            (target_snap.edge.source, 0.0, [target_snap.point], ())
+        )
+    if target_snap.offset_to_target_m <= 1e-9:
+        arrivals.append(
+            (target_snap.edge.target, 0.0, [target_snap.point], ())
+        )
+
+    for source_node, source_distance, source_points, source_ids in departures:
+        for target_node, target_distance, target_points, target_ids in arrivals:
+            for edges in _simple_paths(
+                source_node, target_node, graph, params.max_hidden_edges
+            ):
+                middle_distance = _path_distance_m(edges, graph)
+                if middle_distance is None:
+                    continue
+                middle_points = _path_points(edges, graph)
+                points = deduplicate_points(
+                    [*source_points, *middle_points, *target_points]
+                )
+                if len(points) < 2:
+                    continue
+                candidates.append(
+                    (
+                        source_distance + middle_distance + target_distance,
+                        (*source_ids, *(edge.id for edge in edges), *target_ids),
+                        points,
+                    )
+                )
+    candidates = [
+        candidate
+        for candidate in candidates
+        if len(candidate[2]) >= 2 and candidate[2][0] != candidate[2][-1]
+    ]
     if not candidates:
         return None
-    candidates.sort(key=lambda item: (item[0], item[1]))
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    unique_candidates = []
+    seen_paths: set[tuple[tuple[float, float], ...]] = set()
+    for candidate in candidates:
+        path_key = tuple(candidate[2])
+        if path_key in seen_paths:
+            continue
+        seen_paths.add(path_key)
+        unique_candidates.append(candidate)
+    candidates = unique_candidates
     best_distance, best_edge_ids, best_points = candidates[0]
     uncertainty = start.calibration_error_m + end.calibration_error_m
     return TransitionGeometry(
@@ -343,17 +487,28 @@ def build_transition_geometry(
             list(edge_ids)
             for _, edge_ids, _ in candidates[1 : 1 + params.walk_alternative_limit]
         ],
-        start_offset_m=round(source_distance, 3),
-        end_offset_m=round(target_distance, 3),
+        start_offset_m=round(source_snap.distance_m, 3),
+        end_offset_m=round(target_snap.distance_m, 3),
         distance_min_m=round(
-            max(best_distance - source_distance - target_distance - uncertainty, 0.0),
+            max(
+                best_distance
+                - source_snap.distance_m
+                - target_snap.distance_m
+                - uncertainty,
+                0.0,
+            ),
             3,
         ),
         distance_max_m=round(
-            best_distance + source_distance + target_distance + uncertainty,
+            best_distance
+            + source_snap.distance_m
+            + target_snap.distance_m
+            + uncertainty,
             3,
         ),
-        approximate=(source_distance > 0.1 or target_distance > 0.1),
+        approximate=(
+            source_snap.distance_m > 0.1 or target_snap.distance_m > 0.1
+        ),
         source="WALK_GRAPH",
     )
 
