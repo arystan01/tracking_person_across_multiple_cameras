@@ -83,6 +83,99 @@ def _validate_point(
         raise ValueError(f"{label} point {point} lies outside floor '{floor_id}' size {(width, height)}")
 
 
+def _point_on_segment(
+    point: tuple[float, float],
+    left: tuple[float, float],
+    right: tuple[float, float],
+    *,
+    tolerance: float = 1e-7,
+) -> bool:
+    px, py = point
+    lx, ly = left
+    rx, ry = right
+    cross = (px - lx) * (ry - ly) - (py - ly) * (rx - lx)
+    if abs(cross) > tolerance:
+        return False
+    dot = (px - lx) * (rx - lx) + (py - ly) * (ry - ly)
+    length_sq = (rx - lx) ** 2 + (ry - ly) ** 2
+    return -tolerance <= dot <= length_sq + tolerance
+
+
+def _point_in_polygon(
+    point: tuple[float, float],
+    polygon: list[tuple[float, float]],
+) -> bool:
+    if any(
+        _point_on_segment(point, left, right)
+        for left, right in zip(polygon, [*polygon[1:], polygon[0]])
+    ):
+        return True
+    x, y = point
+    inside = False
+    previous = polygon[-1]
+    for current in polygon:
+        x1, y1 = previous
+        x2, y2 = current
+        if (y1 > y) != (y2 > y):
+            crossing_x = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < crossing_x:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _validate_walk_geometry(
+    edge: WalkEdgeDef,
+    points: list[tuple[float, float]],
+    floor,
+) -> None:
+    if not floor.walkable_polygons and not floor.blocked_polygons:
+        return
+    if floor.m_per_px is None:
+        raise ValueError(
+            f"Walk edge '{edge.id}' requires floor m_per_px for polygon validation"
+        )
+    sample_step_px = 0.25 / floor.m_per_px
+    half_width_px = edge.width_m / (2.0 * floor.m_per_px)
+    for left, right in zip(points, points[1:]):
+        dx = right[0] - left[0]
+        dy = right[1] - left[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            continue
+        normal = (-dy / length, dx / length)
+        steps = max(int(math.ceil(length / sample_step_px)), 1)
+        for index in range(steps + 1):
+            ratio = index / steps
+            center = (left[0] + dx * ratio, left[1] + dy * ratio)
+            samples = [
+                center,
+                (
+                    center[0] + normal[0] * half_width_px,
+                    center[1] + normal[1] * half_width_px,
+                ),
+                (
+                    center[0] - normal[0] * half_width_px,
+                    center[1] - normal[1] * half_width_px,
+                ),
+            ]
+            for point in samples:
+                if floor.walkable_polygons and not any(
+                    _point_in_polygon(point, polygon)
+                    for polygon in floor.walkable_polygons
+                ):
+                    raise ValueError(
+                        f"Walk edge '{edge.id}' leaves the walkable area at {point}"
+                    )
+                if any(
+                    _point_in_polygon(point, polygon)
+                    for polygon in floor.blocked_polygons
+                ):
+                    raise ValueError(
+                        f"Walk edge '{edge.id}' crosses a blocked area at {point}"
+                    )
+
+
 def parse_site(
     raw: dict[str, Any],
     params: RoutingParams | None = None,
@@ -237,9 +330,26 @@ def parse_site(
 
     map_def = MapDef(**raw["map"]) if raw.get("map") is not None else None
     floor_sizes = {floor.id: floor.size_px for floor in map_def.floors} if map_def else {}
+    floors_by_id = {floor.id: floor for floor in map_def.floors} if map_def else {}
     if map_def:
         if len(floor_sizes) != len(map_def.floors):
             raise ValueError("Duplicate floor ID in map")
+        for floor in map_def.floors:
+            for kind, polygons in (
+                ("walkable", floor.walkable_polygons),
+                ("blocked", floor.blocked_polygons),
+            ):
+                for polygon_index, polygon in enumerate(polygons):
+                    for point_index, point in enumerate(polygon):
+                        _validate_point(
+                            (
+                                f"Floor '{floor.id}' {kind}_polygons"
+                                f"[{polygon_index}][{point_index}]"
+                            ),
+                            floor.id,
+                            point,
+                            floor_sizes,
+                        )
     for camera in cameras.values():
         calibration = camera.calibration
         if calibration is None:
@@ -348,6 +458,11 @@ def parse_site(
                     point,
                     floor_sizes,
                 )
+            _validate_walk_geometry(
+                edge,
+                [source.map_xy, *edge.map_path, target.map_xy],
+                floors_by_id[edge.floor_id],
+            )
             walk_edges.append(edge)
         walk_graph = WalkGraphDef(nodes=walk_nodes, edges=walk_edges)
 

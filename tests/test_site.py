@@ -118,3 +118,63 @@ def test_10_get_node_ids():
     site = parse_site(config)
     nodes = site.get_node_ids()
     assert set(nodes) == {"cam_A", "cam_B", "cam_C", "stairwell", "OUTSIDE"}
+
+
+def _polygon_site() -> dict:
+    config = valid_config()
+    for camera in config["cameras"].values():
+        camera["floor"] = "1F"
+    config["map"] = {
+        "floors": [
+            {
+                "id": "1F",
+                "size_px": [100, 100],
+                "m_per_px": 0.1,
+                "walkable_polygons": [[[0, 0], [100, 0], [100, 100], [0, 100]]],
+                "blocked_polygons": [[[45, 20], [55, 20], [55, 80], [45, 80]]],
+            }
+        ]
+    }
+    config["walk_graph"] = {
+        "nodes": {
+            "left": {"floor_id": "1F", "map_xy": [20, 10]},
+            "right": {"floor_id": "1F", "map_xy": [80, 10]},
+        },
+        "edges": [
+            {
+                "id": "safe",
+                "from": "left",
+                "to": "right",
+                "floor_id": "1F",
+                "width_m": 1.0,
+                "branch_prior": 2.0,
+                "bidirectional": True,
+            }
+        ],
+    }
+    return config
+
+
+def test_walk_graph_accepts_corridor_inside_walkable_area() -> None:
+    site = parse_site(_polygon_site())
+    assert site.walk_graph is not None
+    edge = site.walk_graph.edges[0]
+    assert edge.width_m == 1.0
+    assert edge.branch_prior == 2.0
+
+
+def test_walk_graph_rejects_corridor_crossing_blocked_area() -> None:
+    config = _polygon_site()
+    config["walk_graph"]["nodes"]["left"]["map_xy"] = [20, 50]
+    config["walk_graph"]["nodes"]["right"]["map_xy"] = [80, 50]
+    with pytest.raises(ValueError, match="crosses a blocked area"):
+        parse_site(config)
+
+
+def test_walk_graph_validates_full_corridor_width() -> None:
+    config = _polygon_site()
+    config["walk_graph"]["nodes"]["left"]["map_xy"] = [20, 14]
+    config["walk_graph"]["nodes"]["right"]["map_xy"] = [80, 14]
+    config["walk_graph"]["edges"][0]["width_m"] = 2.0
+    with pytest.raises(ValueError, match="crosses a blocked area"):
+        parse_site(config)
