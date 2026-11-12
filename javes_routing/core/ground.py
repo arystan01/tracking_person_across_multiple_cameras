@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from javes_contracts import (
     ProjectedTrajectoryPoint,
@@ -11,6 +12,17 @@ from javes_contracts import (
 )
 
 from .params import RoutingParams
+
+
+@dataclass(frozen=True)
+class WalkSnap:
+    edge: WalkEdgeDef
+    point: tuple[float, float]
+    distance_m: float
+    offset_from_source_m: float
+    offset_to_target_m: float
+    points_to_source: tuple[tuple[float, float], ...]
+    points_to_target: tuple[tuple[float, float], ...]
 
 
 def floor_scale(graph: SiteGraph, floor_id: str) -> float | None:
@@ -79,6 +91,108 @@ def nearest_walk_node(
         return None
     result = min(candidates, key=lambda item: (item[1], item[0]))
     return result if result[1] <= max_distance_m else None
+
+
+def nearest_walk_position(
+    point: ProjectedTrajectoryPoint,
+    graph: SiteGraph,
+    max_distance_m: float,
+) -> WalkSnap | None:
+    """Snap a ground point to pedestrian geometry without losing edge direction."""
+    if graph.walk_graph is None:
+        return None
+    scale = floor_scale(graph, point.floor_id)
+    if scale is None:
+        return None
+    candidates: list[WalkSnap] = []
+    for edge in graph.walk_graph.edges:
+        if edge.floor_id != point.floor_id:
+            continue
+        points = walk_edge_points(edge, graph)
+        if len(points) < 2:
+            continue
+        segment_lengths = [
+            math.hypot(right[0] - left[0], right[1] - left[1])
+            for left, right in zip(points, points[1:])
+        ]
+        total_px = sum(segment_lengths)
+        travelled_px = 0.0
+        for index, (left, right, segment_length) in enumerate(
+            zip(points, points[1:], segment_lengths)
+        ):
+            if segment_length <= 1e-12:
+                continue
+            dx = right[0] - left[0]
+            dy = right[1] - left[1]
+            ratio = min(
+                max(
+                    (
+                        (point.x - left[0]) * dx
+                        + (point.y - left[1]) * dy
+                    )
+                    / (segment_length**2),
+                    0.0,
+                ),
+                1.0,
+            )
+            snapped = (left[0] + dx * ratio, left[1] + dy * ratio)
+            distance_m = math.hypot(
+                point.x - snapped[0], point.y - snapped[1]
+            ) * scale
+            offset_px = travelled_px + segment_length * ratio
+            candidates.append(
+                WalkSnap(
+                    edge=edge,
+                    point=snapped,
+                    distance_m=distance_m,
+                    offset_from_source_m=offset_px * scale,
+                    offset_to_target_m=(total_px - offset_px) * scale,
+                    points_to_source=tuple(
+                        deduplicate_points([snapped, *reversed(points[: index + 1])])
+                    ),
+                    points_to_target=tuple(
+                        deduplicate_points([snapped, *points[index + 1 :]])
+                    ),
+                )
+            )
+            travelled_px += segment_length
+    if not candidates:
+        return None
+    result = min(
+        candidates,
+        key=lambda item: (item.distance_m, item.edge.id, item.point),
+    )
+    return result if result.distance_m <= max_distance_m else None
+
+
+def point_to_polyline_distance_m(
+    point: tuple[float, float],
+    points: list[tuple[float, float]],
+    scale: float,
+) -> float | None:
+    if len(points) < 2:
+        return None
+    distances = []
+    for left, right in zip(points, points[1:]):
+        dx = right[0] - left[0]
+        dy = right[1] - left[1]
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 1e-12:
+            distances.append(math.hypot(point[0] - left[0], point[1] - left[1]))
+            continue
+        ratio = min(
+            max(
+                ((point[0] - left[0]) * dx + (point[1] - left[1]) * dy)
+                / length_sq,
+                0.0,
+            ),
+            1.0,
+        )
+        projected = (left[0] + dx * ratio, left[1] + dy * ratio)
+        distances.append(
+            math.hypot(point[0] - projected[0], point[1] - projected[1])
+        )
+    return min(distances) * scale
 
 
 def _simple_paths(

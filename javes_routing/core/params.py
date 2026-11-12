@@ -24,6 +24,11 @@ class RoutingParams(BaseModel):
     anchor_probe_window_s: float = Field(default=5.0, gt=0.0)
     max_walk_snap_m: float = Field(default=3.0, gt=0.0)
     walk_alternative_limit: int = Field(default=3, ge=0)
+    reachable_time_step_s: float = Field(default=0.5, gt=0.0)
+    reachable_heading_kappa: float = Field(default=1.0, ge=0.0)
+    reachable_probability_epsilon: float = Field(default=1e-6, gt=0.0)
+    reachable_max_states: int = Field(default=10000, ge=1)
+    reachable_method_version: str = "relative-timegraph-v1"
     gate_speed: float = 4.0
     walk_speed: float = 1.3
     tmax_over_ttyp: float = 2.5

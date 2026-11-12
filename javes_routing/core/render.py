@@ -19,7 +19,7 @@ from javes_contracts import (
     StopReason,
 )
 
-from .ground import configured_walk_path
+from .ground import configured_walk_path, floor_scale
 
 
 def _mime(data: bytes) -> str:
@@ -104,6 +104,12 @@ def _presentation(
         state = PositionState.OBSERVED
     elif has_search_area:
         state = PositionState.LOST
+    elif (
+        not result.state.done
+        and result.estimate is not None
+        and result.estimate.reachable_method_version is not None
+    ):
+        state = PositionState.UNKNOWN
     else:
         state = PositionState.LAST_SEEN
     return RoutePresentation(
@@ -402,16 +408,19 @@ def _reachable_elements(
     if step_result.estimate is None:
         return []
     elements: list[str] = []
+    scale = floor_scale(graph, floor_id)
     for segment in step_result.estimate.reachable_segments:
         points = segment.points if segment.floor_id == floor_id else []
         if len(points) < 2:
             continue
+        stroke_width = max(segment.width_m / scale, 2.0) if scale else 18.0
         elements.append(
             f'<polyline data-role="reachable-area" data-edge="{escape(segment.edge_id)}" '
             f'data-progress="{segment.progress:.6f}" '
+            f'data-width-m="{segment.width_m:.3f}" '
             f'data-approximate="{str(segment.approximate).lower()}" '
             f'points="{" ".join(_point(item) for item in points)}" fill="none" '
-            'stroke="#7c3aed" stroke-opacity="0.32" stroke-width="18" '
+            f'stroke="#7c3aed" stroke-opacity="0.32" stroke-width="{stroke_width:.2f}" '
             'stroke-linecap="round" stroke-linejoin="round"/>'
         )
     return elements

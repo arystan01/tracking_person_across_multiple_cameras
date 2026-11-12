@@ -18,6 +18,11 @@ overlap_position_tolerance_m: 0.75
 anchor_probe_window_s: 5.0
 max_walk_snap_m: 3.0
 walk_alternative_limit: 3
+reachable_time_step_s: 0.5
+reachable_heading_kappa: 1.0
+reachable_probability_epsilon: 0.000001
+reachable_max_states: 10000
+reachable_method_version: relative-timegraph-v1
 use_st: true
 amb_priority_bonus: 2.0
 dormant_watch_boost: 1.2

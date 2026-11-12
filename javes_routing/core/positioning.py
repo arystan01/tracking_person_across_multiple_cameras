@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime
 
 from javes_contracts import (
@@ -12,6 +12,7 @@ from javes_contracts import (
     RangeEstimate,
     ReachableNode,
     ReachableSegment,
+    SearchState,
     SiteGraph,
     TrajectoryPoint,
 )
@@ -19,7 +20,7 @@ from javes_contracts import (
 from .params import RoutingParams
 from .ground import (
     floor_scale,
-    nearest_walk_node,
+    nearest_walk_position,
     truncate_polyline,
     walk_edge_distance_m,
     walk_edge_points,
@@ -216,17 +217,14 @@ def movement_ranges(
     return speed, distance
 
 
-def reachable_area(
+def last_ground_point(
     hypothesis: Hypothesis | None,
-    graph: SiteGraph,
-    params: RoutingParams,
-    now: datetime,
-) -> tuple[list[ReachableSegment], list[ReachableNode]]:
-    if hypothesis is None or not hypothesis.visits or graph.walk_graph is None:
-        return [], []
+) -> ProjectedTrajectoryPoint | None:
+    if hypothesis is None or not hypothesis.visits:
+        return None
     if hypothesis.observed_segments and hypothesis.observed_segments[-1].points:
         ground = hypothesis.observed_segments[-1].points[-1]
-        last_point = ProjectedTrajectoryPoint(
+        return ProjectedTrajectoryPoint(
             timestamp=ground.timestamp,
             x=ground.x,
             y=ground.y,
@@ -234,33 +232,259 @@ def reachable_area(
             confidence=ground.confidence,
             calibration_error_m=ground.error_m,
         )
+    projected = [
+        point
+        for visit in hypothesis.visits
+        for point in visit.projected_trajectory
+    ]
+    return (
+        max(projected, key=lambda item: (item.timestamp, item.x, item.y))
+        if projected
+        else None
+    )
+
+
+def _last_heading(
+    hypothesis: Hypothesis,
+) -> tuple[float, float] | None:
+    points: list[ProjectedTrajectoryPoint] = []
+    if hypothesis.observed_segments:
+        for point in hypothesis.observed_segments[-1].points:
+            points.append(
+                ProjectedTrajectoryPoint(
+                    timestamp=point.timestamp,
+                    x=point.x,
+                    y=point.y,
+                    floor_id=point.floor_id,
+                    confidence=point.confidence,
+                    calibration_error_m=point.error_m,
+                )
+            )
     else:
-        projected = [
+        points = [
             point
             for visit in hypothesis.visits
             for point in visit.projected_trajectory
         ]
-        if not projected:
-            return [], []
-        last_point = max(
-            projected, key=lambda item: (item.timestamp, item.x, item.y)
-        )
+    if len(points) < 2:
+        return None
+    end = points[-1]
+    for start in reversed(points[:-1]):
+        if start.floor_id != end.floor_id:
+            continue
+        vector = (end.x - start.x, end.y - start.y)
+        length = math.hypot(*vector)
+        if length > 1e-9:
+            return (vector[0] / length, vector[1] / length)
+    return None
+
+
+def _direction_weight(
+    points: list[tuple[float, float]],
+    heading: tuple[float, float] | None,
+    kappa: float,
+) -> float:
+    if heading is None or kappa <= 0.0 or len(points) < 2:
+        return 1.0
+    for left, right in zip(points, points[1:]):
+        vector = (right[0] - left[0], right[1] - left[1])
+        length = math.hypot(*vector)
+        if length > 1e-9:
+            cosine = max(
+                min((vector[0] * heading[0] + vector[1] * heading[1]) / length, 1.0),
+                -1.0,
+            )
+            return math.exp(kappa * cosine)
+    return 1.0
+
+
+def _point_in_polygon(
+    point: tuple[float, float],
+    polygon: list[tuple[float, float]],
+) -> bool:
+    x, y = point
+    inside = False
+    previous = polygon[-1]
+    for current in polygon:
+        x1, y1 = previous
+        x2, y2 = current
+        if (y1 > y) != (y2 > y):
+            crossing = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x <= crossing:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _empty_probe_factor(
+    target: str,
+    graph: SiteGraph,
+    state: SearchState | None,
+    after: datetime,
+    params: RoutingParams,
+) -> float:
+    """Down-weight a branch only when its camera coverage was fully checked empty."""
+    if state is None or graph.walk_graph is None:
+        return 1.0
+    node = graph.walk_graph.nodes.get(target)
+    if node is None:
+        return 1.0
+    covering = [
+        camera
+        for camera in graph.cameras.values()
+        if camera.floor == node.floor_id
+        and camera.coverage_polygon
+        and _point_in_polygon(node.map_xy, camera.coverage_polygon)
+    ]
+    for camera in covering:
+        if any(
+            window.camera == camera.id
+            and window.status.value == "DONE"
+            and window.coverage_ratio >= 1.0
+            and not window.found
+            and (window.t_to is None or window.t_to >= after)
+            for window in state.probed_windows
+        ):
+            return max(1.0 - (camera.p_det or params.p_det), 0.0)
+    return 1.0
+
+
+def reachable_area(
+    hypothesis: Hypothesis | None,
+    graph: SiteGraph,
+    params: RoutingParams,
+    now: datetime,
+    state: SearchState | None = None,
+) -> tuple[list[ReachableSegment], list[ReachableNode]]:
+    if hypothesis is None or not hypothesis.visits or graph.walk_graph is None:
+        return [], []
+    last_point = last_ground_point(hypothesis)
+    if last_point is None:
+        return [], []
     scale = floor_scale(graph, last_point.floor_id)
-    snap = nearest_walk_node(last_point, graph, params.max_walk_snap_m)
+    snap = nearest_walk_position(last_point, graph, params.max_walk_snap_m)
     if scale is None or snap is None:
         return [], []
-    start_node, connector_m = snap
     elapsed_s = max((now - last_point.timestamp).total_seconds(), 0.0)
     budget_m = elapsed_s * params.max_speed
+    if budget_m <= 1e-9:
+        return [], []
+
     node_probability: dict[str, float] = defaultdict(float)
     segment_data: dict[str, dict[str, object]] = {}
-    if connector_m > budget_m:
-        return [], [ReachableNode(node_id=start_node, probability=1.0)]
-    frontier = [(start_node, connector_m, 1.0, 0)]
-    best_distance = {start_node: connector_m}
-    max_depth = max(len(graph.walk_graph.nodes) * 2, 1)
-    while frontier:
-        node, spent_m, probability, depth = frontier.pop(0)
+
+    def record_segment(
+        edge,
+        points: list[tuple[float, float]],
+        distance_m: float,
+        available_m: float,
+        probability: float,
+        *,
+        approximate: bool,
+    ) -> bool:
+        if distance_m <= 1e-9 or len(points) < 2:
+            return True
+        progress = min(max(available_m / distance_m, 0.0), 1.0)
+        visible = (
+            points
+            if progress >= 1.0 - 1e-9
+            else truncate_polyline(points, available_m, scale)
+        )
+        previous = segment_data.get(edge.id)
+        if previous is None:
+            segment_data[edge.id] = {
+                "edge": edge,
+                "probability": probability,
+                "points": visible,
+                "progress": progress,
+                "approximate": approximate,
+            }
+        else:
+            previous["probability"] = min(
+                float(previous["probability"]) + probability, 1.0
+            )
+            if progress > float(previous["progress"]):
+                previous["points"] = visible
+                previous["progress"] = progress
+        return progress >= 1.0 - 1e-9
+
+    # A state is a graph node reached at a physical time bin.  Distance always
+    # increases, so cycles are finite and cannot create probability mass.
+    frontier: deque[tuple[str, float, float, str | None, int]] = deque()
+    heading = _last_heading(hypothesis)
+    endpoint_tolerance_m = 1e-6
+    if snap.offset_from_source_m <= endpoint_tolerance_m:
+        frontier.append((snap.edge.source, 0.0, 1.0, None, 0))
+    elif snap.offset_to_target_m <= endpoint_tolerance_m:
+        frontier.append((snap.edge.target, 0.0, 1.0, None, 0))
+    else:
+        directions = [
+            (
+                snap.edge,
+                list(snap.points_to_target),
+                snap.offset_to_target_m,
+                snap.edge.target,
+            )
+        ]
+        if snap.edge.bidirectional:
+            directions.append(
+                (
+                    snap.edge.model_copy(
+                        update={
+                            "id": f"{snap.edge.id}::reverse",
+                            "source": snap.edge.target,
+                            "target": snap.edge.source,
+                            "map_path": list(reversed(snap.edge.map_path)),
+                            "bidirectional": False,
+                        }
+                    ),
+                    list(snap.points_to_source),
+                    snap.offset_from_source_m,
+                    snap.edge.source,
+                )
+            )
+        weighted = [
+            max(edge.branch_prior or 1.0, params.reachable_probability_epsilon)
+            * _direction_weight(points, heading, params.reachable_heading_kappa)
+            * _empty_probe_factor(target, graph, state, last_point.timestamp, params)
+            for edge, points, _, target in directions
+        ]
+        total_weight = sum(weighted) or 1.0
+        for (edge, points, distance_m, target), weight in zip(directions, weighted):
+            probability = weight / total_weight
+            reached = record_segment(
+                edge,
+                points,
+                distance_m,
+                budget_m,
+                probability,
+                approximate=snap.distance_m > 0.1,
+            )
+            if reached:
+                frontier.append((target, distance_m, probability, snap.edge.id, 1))
+            else:
+                node_probability[edge.source] += probability
+
+    visited: set[tuple[str, int, str | None]] = set()
+    expanded = 0
+    while frontier and expanded < params.reachable_max_states:
+        node, spent_m, probability, incoming_edge, depth = frontier.popleft()
+        time_bin = int(
+            math.floor(
+                spent_m
+                / max(params.max_speed * params.reachable_time_step_s, 1e-9)
+                + 1e-9
+            )
+        )
+        state_key = (node, time_bin, incoming_edge)
+        if state_key in visited:
+            node_probability[node] += probability
+            continue
+        visited.add(state_key)
+        expanded += 1
+        if spent_m >= budget_m - 1e-9:
+            node_probability[node] += probability
+            continue
         outgoing = sorted(
             graph.walk_graph.get_edges_from(node), key=lambda item: item.id
         )
@@ -268,47 +492,58 @@ def reachable_area(
             (edge, distance)
             for edge in outgoing
             if (distance := walk_edge_distance_m(edge, graph)) is not None
-            and spent_m < budget_m - 1e-9
+            and edge.id.removesuffix("::reverse") != incoming_edge
         ]
-        if not viable or depth >= max_depth:
+        if not viable:
             node_probability[node] += probability
             continue
-        share = probability / len(viable)
-        for edge, distance in viable:
-            edge_points = walk_edge_points(edge, graph)
-            available_m = max(budget_m - spent_m, 0.0)
-            progress = min(available_m / distance, 1.0)
-            visible_points = (
-                edge_points
-                if progress >= 1.0
-                else truncate_polyline(edge_points, available_m, scale)
-            )
-            previous_segment = segment_data.get(edge.id)
-            if previous_segment is None:
-                segment_data[edge.id] = {
-                    "edge": edge,
-                    "probability": share,
-                    "points": visible_points,
-                    "progress": progress,
-                    "approximate": depth == 0 and connector_m > 0.1,
-                }
-            else:
-                previous_segment["probability"] = min(
-                    float(previous_segment["probability"]) + share, 1.0
+        weights = [
+            max(edge.branch_prior or 1.0, params.reachable_probability_epsilon)
+            * (
+                _direction_weight(
+                    walk_edge_points(edge, graph),
+                    heading,
+                    params.reachable_heading_kappa,
                 )
-                if progress > float(previous_segment["progress"]):
-                    previous_segment["points"] = visible_points
-                    previous_segment["progress"] = progress
-            reached = spent_m + distance
-            if reached > budget_m + 1e-9:
+                if depth == 0
+                else 1.0
+            )
+            * _empty_probe_factor(
+                edge.target, graph, state, last_point.timestamp, params
+            )
+            for edge, _ in viable
+        ]
+        weight_total = sum(weights) or 1.0
+        for (edge, distance), weight in zip(viable, weights):
+            share = probability * weight / weight_total
+            if share < params.reachable_probability_epsilon:
                 node_probability[node] += share
                 continue
-            previous = best_distance.get(edge.target)
-            if previous is None or reached + 1e-9 < previous:
-                best_distance[edge.target] = reached
-                frontier.append((edge.target, reached, share, depth + 1))
-            else:
-                node_probability[edge.target] += share
+            edge_points = walk_edge_points(edge, graph)
+            available_m = max(budget_m - spent_m, 0.0)
+            reached = record_segment(
+                edge,
+                edge_points,
+                distance,
+                available_m,
+                share,
+                approximate=False,
+            )
+            if not reached:
+                node_probability[node] += share
+                continue
+            frontier.append(
+                (
+                    edge.target,
+                    spent_m + distance,
+                    share,
+                    edge.id.removesuffix("::reverse"),
+                    depth + 1,
+                )
+            )
+
+    for node, _, probability, _, _ in frontier:
+        node_probability[node] += probability
 
     node_total = sum(node_probability.values()) or 1.0
     segments = [
@@ -319,6 +554,7 @@ def reachable_area(
             probability=round(float(data["probability"]), 6),
             floor_id=data["edge"].floor_id,  # type: ignore[union-attr]
             points=data["points"],  # type: ignore[arg-type]
+            width_m=data["edge"].width_m,  # type: ignore[union-attr]
             progress=round(float(data["progress"]), 6),
             approximate=bool(data["approximate"]),
         )
@@ -328,7 +564,7 @@ def reachable_area(
         )
     ]
     nodes = [
-        ReachableNode(node_id=node, probability=round(value / node_total, 6))
+        ReachableNode(node_id=node, probability=round(value / node_total, 12))
         for node, value in sorted(
             node_probability.items(), key=lambda item: (-item[1], item[0])
         )

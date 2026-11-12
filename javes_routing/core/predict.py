@@ -7,6 +7,7 @@ from javes_contracts import (
     Estimate,
     Hypothesis,
     HypothesisStatus,
+    MapPosition,
     ProbeStatus,
     SearchMode,
     SearchState,
@@ -17,7 +18,7 @@ from javes_contracts import (
 from .params import RoutingParams
 from .expand import _camera_paths, _softmax
 from .frontier import frontier_horizon
-from .positioning import movement_ranges, reachable_area
+from .positioning import last_ground_point, movement_ranges, reachable_area
 from .update import _scale_edge
 
 
@@ -85,7 +86,13 @@ def compute_estimate(
     reachable_segments, reachable_nodes = (
         ([], [])
         if suppress_reachable
-        else reachable_area(best, graph, params, now)
+        else reachable_area(best, graph, params, now, state)
+    )
+    reachability_point = None if suppress_reachable else last_ground_point(best)
+    reachable_horizon_s = (
+        max((now - reachability_point.timestamp).total_seconds(), 0.0)
+        if reachability_point is not None
+        else None
     )
     return Estimate(
         zones=zones,
@@ -97,6 +104,23 @@ def compute_estimate(
         distance_range=distance_range,
         reachable_segments=reachable_segments,
         reachable_nodes=reachable_nodes,
+        reachable_origin=(
+            MapPosition(
+                x=reachability_point.x,
+                y=reachability_point.y,
+                floor_id=reachability_point.floor_id,
+                error_m=reachability_point.calibration_error_m,
+            )
+            if reachability_point is not None
+            else None
+        ),
+        reachable_as_of=now if reachability_point is not None else None,
+        reachable_horizon_s=reachable_horizon_s,
+        reachable_method_version=(
+            params.reachable_method_version
+            if reachability_point is not None
+            else None
+        ),
         calculated_at=now,
     )
 

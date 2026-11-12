@@ -20,6 +20,8 @@ from javes_contracts import (
     MapFloor,
     OutsideDef,
     PositionState,
+    ProbeStatus,
+    ProbedWindow,
     ProjectedTrajectoryPoint,
     ReachableNode,
     ReachableSegment,
@@ -495,7 +497,12 @@ def test_reachable_area_follows_directed_graph_and_normalises_leaf_nodes() -> No
         "walk-C-outside",
     }
     assert {item.node_id for item in partial_nodes} == {"wb", "wc"}
-    assert all(item.points[0] == (26.0, 48.0) for item in partial_segments[:2])
+    initial = [
+        item
+        for item in partial_segments
+        if item.edge_id in {"walk-A-B", "walk-A-C"}
+    ]
+    assert all(item.points[0] == (26.0, 48.0) for item in initial)
     assert {item.progress for item in partial_segments} == {1.0, 0.2}
     assert sum(item.probability for item in partial_nodes) == pytest.approx(1.0)
 
@@ -506,7 +513,175 @@ def test_reachable_area_follows_directed_graph_and_normalises_leaf_nodes() -> No
         T0 + timedelta(seconds=15),
     )
     probabilities = {item.node_id: item.probability for item in terminal_nodes}
-    assert probabilities == pytest.approx({"wblind": 0.5, "woutside": 0.5})
+    assert sum(probabilities.values()) == pytest.approx(1.0)
+    assert probabilities["woutside"] > probabilities["wblind"]
+
+
+def test_reachable_area_uses_branch_priors_and_done_empty_evidence() -> None:
+    graph = _graph()
+    assert graph.walk_graph is not None
+    graph = graph.model_copy(
+        update={
+            "cameras": {
+                **graph.cameras,
+                "B": graph.cameras["B"].model_copy(
+                    update={
+                        "coverage_polygon": [
+                            (100, 20),
+                            (150, 20),
+                            (150, 70),
+                            (100, 70),
+                        ],
+                        "p_det": 0.9,
+                    }
+                ),
+            },
+            "walk_graph": graph.walk_graph.model_copy(
+                update={
+                    "edges": [
+                        edge.model_copy(
+                            update={
+                                "branch_prior": 3.0
+                                if edge.id == "walk-A-B"
+                                else 1.0
+                            }
+                        )
+                        for edge in graph.walk_graph.edges
+                    ]
+                }
+            ),
+        }
+    )
+    hypothesis = Hypothesis(
+        id="h",
+        visits=[_visit_with_trajectory()],
+        current_node="A",
+        status=HypothesisStatus.ALIVE,
+    )
+    params = RoutingParams(max_speed=2.0, reachable_heading_kappa=0.0)
+    _, prior_nodes = reachable_area(
+        hypothesis, graph, params, T0 + timedelta(seconds=15)
+    )
+    prior = {item.node_id: item.probability for item in prior_nodes}
+    assert prior == pytest.approx({"wblind": 0.75, "woutside": 0.25})
+
+    from javes_contracts import SearchState
+
+    state = SearchState(
+        case_id="case",
+        site_version=graph.version,
+        params_version=params.version,
+        probed_windows=[
+            ProbedWindow(
+                camera_id="B",
+                t_from=T0,
+                t_to=T0 + timedelta(seconds=15),
+                probe_id="empty-B",
+                status=ProbeStatus.DONE,
+                found=False,
+            )
+        ],
+    )
+    _, checked_nodes = reachable_area(
+        hypothesis, graph, params, T0 + timedelta(seconds=15), state
+    )
+    checked = {item.node_id: item.probability for item in checked_nodes}
+    assert sum(checked.values()) == pytest.approx(1.0, abs=1e-9)
+    assert checked["wblind"] < checked["woutside"]
+
+
+def test_reachable_area_snaps_to_edge_instead_of_nearest_node() -> None:
+    graph = _graph()
+    assert graph.walk_graph is not None
+    edge = graph.walk_graph.edges[0].model_copy(update={"bidirectional": True})
+    graph = graph.model_copy(
+        update={
+            "walk_graph": WalkGraphDef(
+                nodes=graph.walk_graph.nodes,
+                edges=[edge],
+            )
+        }
+    )
+    visit = _visit_with_trajectory().model_copy(
+        update={
+            "projected_trajectory": [
+                ProjectedTrajectoryPoint(
+                    timestamp=T0,
+                    x=76,
+                    y=48,
+                    floor_id="1F",
+                    calibration_error_m=0.1,
+                )
+            ],
+            "t_in": T0,
+            "t_out": T0,
+        },
+        deep=True,
+    )
+    hypothesis = Hypothesis(
+        id="mid-edge",
+        visits=[visit],
+        current_node="A",
+        status=HypothesisStatus.ALIVE,
+    )
+    segments, nodes = reachable_area(
+        hypothesis,
+        graph,
+        RoutingParams(max_speed=1.0, reachable_heading_kappa=0.0),
+        T0 + timedelta(seconds=2),
+    )
+    assert {item.edge_id for item in segments} == {
+        "walk-A-B",
+        "walk-A-B::reverse",
+    }
+    assert all(item.points[0] == (76.0, 48.0) for item in segments)
+    assert {item.node_id for item in nodes} == {"wa", "wb"}
+    assert sum(item.probability for item in nodes) == pytest.approx(1.0)
+
+
+def test_impossible_walk_snap_returns_no_false_geometry() -> None:
+    graph = _graph()
+    visit = _visit_with_trajectory().model_copy(
+        update={
+            "projected_trajectory": [
+                ProjectedTrajectoryPoint(
+                    timestamp=T0,
+                    x=900,
+                    y=700,
+                    floor_id="1F",
+                    calibration_error_m=0.1,
+                )
+            ],
+            "t_in": T0,
+            "t_out": T0,
+        },
+        deep=True,
+    )
+    hypothesis = Hypothesis(
+        id="off-walk",
+        visits=[visit],
+        current_node="A",
+        status=HypothesisStatus.ALIVE,
+    )
+    from javes_contracts import SearchState
+
+    state = SearchState(
+        case_id="case",
+        site_version=graph.version,
+        params_version="1",
+        hypotheses=[hypothesis],
+    )
+    estimate = compute_estimate(
+        [hypothesis],
+        graph,
+        T0 + timedelta(seconds=10),
+        state,
+        RoutingParams(max_walk_snap_m=1.0),
+    )
+    assert estimate.reachable_segments == []
+    assert estimate.reachable_nodes == []
+    assert estimate.reachable_origin is not None
+    assert estimate.reachable_method_version == "relative-timegraph-v1"
 
 
 def test_open_observation_and_closed_summary_suppress_reachable_area() -> None:
