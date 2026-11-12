@@ -4,6 +4,11 @@ from pathlib import Path
 from javes_routing.core.site import parse_site
 from javes_routing.service.site_loader import load_site
 from javes_contracts import SiteGraph
+from tests.support.nvidia_12cam_site import (
+    CAMERAS as NVIDIA_CAMERAS,
+    calibration_checksums,
+    canonical_site,
+)
 
 # Helpers to generate valid configs
 def valid_config():
@@ -178,3 +183,25 @@ def test_walk_graph_validates_full_corridor_width() -> None:
     config["walk_graph"]["edges"][0]["width_m"] = 2.0
     with pytest.raises(ValueError, match="crosses a blocked area"):
         parse_site(config)
+
+
+def test_canonical_nvidia_site_has_all_cameras_and_obstacle_safe_walk_graph():
+    repository_root = Path(__file__).resolve().parents[1]
+    raw = canonical_site(repository_root)
+    graph = parse_site(raw)
+    assert set(graph.cameras) == set(NVIDIA_CAMERAS)
+    assert graph.walk_graph is not None
+    assert len(graph.walk_graph.edges) >= 24
+    assert all(edge.bidirectional for edge in graph.walk_graph.edges)
+    assert all(edge.width_m == pytest.approx(0.6) for edge in graph.walk_graph.edges)
+    assert len(calibration_checksums(raw)) == 12
+
+
+def test_canonical_calibration_checksum_changes_with_homography():
+    repository_root = Path(__file__).resolve().parents[1]
+    raw = canonical_site(repository_root)
+    original = calibration_checksums(raw)
+    raw["cameras"]["Cam001"]["calibration"]["homography"][0][0] += 0.001
+    changed = calibration_checksums(raw)
+    assert changed["Cam001"] != original["Cam001"]
+    assert changed["Cam002"] == original["Cam002"]
