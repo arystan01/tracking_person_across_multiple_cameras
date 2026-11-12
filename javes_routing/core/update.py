@@ -338,7 +338,12 @@ def gate_visit_details(
                         - right.calibration_error_m,
                         0.0,
                     )
-                    minimum_s = distance_m / max(params.gate_speed, 1e-9)
+                    # One calibrated camera has a shared clock and direct
+                    # ground coordinates, so use the pedestrian/profile speed
+                    # ceiling.  ``gate_speed`` is reserved for uncertain
+                    # cross-camera timing and must not admit same-camera ID
+                    # switches that would require sprinting across the frame.
+                    minimum_s = distance_m / max(params.max_speed, 1e-9)
                     if dt < minimum_s:
                         return GateResult(
                             0.0,

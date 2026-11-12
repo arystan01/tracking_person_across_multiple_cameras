@@ -227,7 +227,7 @@ def test_same_camera_reappearance_has_a_physical_speed_gate() -> None:
         first,
         impossible,
         _graph(),
-        RoutingParams(gate_speed=4.0),
+        RoutingParams(gate_speed=10.0, max_speed=2.0),
         T0 + timedelta(seconds=4),
     )
     assert rejected.reject_reason is not None
@@ -246,7 +246,7 @@ def test_same_camera_reappearance_has_a_physical_speed_gate() -> None:
         first,
         plausible,
         _graph(),
-        RoutingParams(gate_speed=4.0),
+        RoutingParams(gate_speed=10.0, max_speed=2.0),
         T0 + timedelta(seconds=4),
     )
     assert accepted.reject_reason is None
