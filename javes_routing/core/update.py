@@ -20,6 +20,7 @@ from javes_contracts import (
     ProbeResult,
     ProbeStatus,
     ProbedWindow,
+    ProjectedTrajectoryPoint,
     RejectedCandidate,
     SearchState,
     SiteGraph,
@@ -317,8 +318,65 @@ def gate_visit_details(
         return GateResult(0.0, reject_reason="arrival before previous visit ended", gate_margin_s=dt)
     if visit.camera == last_visit.camera:
         # Repeated evidence from one sensor extends an observed segment; it is
-        # not an inferred movement through the pedestrian graph.
-        return GateResult(0.0, kind="OVERLAP")
+        # not an inferred movement through the pedestrian graph.  Calibrated
+        # positions still need a hard speed gate: a strong Re-ID false positive
+        # elsewhere in the same frame must not be appended to the route merely
+        # because the camera id is unchanged.  Same-camera timestamps share one
+        # clock, so cross-camera clock tolerance is intentionally not applied.
+        if (
+            last_visit.projected_trajectory
+            and visit.projected_trajectory
+        ):
+            left = last_visit.projected_trajectory[-1]
+            right = visit.projected_trajectory[0]
+            if left.floor_id == right.floor_id:
+                scale = _floor_scale(graph, left.floor_id)
+                if scale is not None:
+                    distance_m = max(
+                        math.hypot(right.x - left.x, right.y - left.y) * scale
+                        - left.calibration_error_m
+                        - right.calibration_error_m,
+                        0.0,
+                    )
+                    minimum_s = distance_m / max(params.gate_speed, 1e-9)
+                    if dt < minimum_s:
+                        return GateResult(
+                            0.0,
+                            reject_reason=(
+                                f"same-camera movement requires {minimum_s:.3f}s "
+                                f"but only {dt:.3f}s is available"
+                            ),
+                            gate_margin_s=dt - minimum_s,
+                        )
+        return GateResult(
+            0.0,
+            kind=("GAP" if dt > params.observed_gap_s else "OVERLAP"),
+        )
+
+    if (
+        _declared_overlap(last_visit.camera, visit.camera, graph)
+        and dt <= params.gap_bridge_max_s
+        and last_visit.projected_trajectory
+        and visit.projected_trajectory
+    ):
+        left = last_visit.projected_trajectory[-1]
+        right = visit.projected_trajectory[0]
+        if left.floor_id == right.floor_id:
+            scale = _floor_scale(graph, left.floor_id)
+            if scale is not None:
+                distance_m = max(
+                    math.hypot(right.x - left.x, right.y - left.y) * scale
+                    - left.calibration_error_m
+                    - right.calibration_error_m,
+                    0.0,
+                )
+                minimum_s = distance_m / max(params.gate_speed, 1e-9)
+                if dt >= minimum_s - params.clock_tolerance_s:
+                    return GateResult(
+                        0.0,
+                        kind="GAP",
+                        gate_margin_s=dt - minimum_s,
+                    )
 
     skip_lateness = last_visit.clipped_out or visit.clipped_in
     candidates: list[tuple[float, tuple[str, ...], tuple[str, ...], str]] = []
@@ -580,6 +638,14 @@ def _gate_overlapping_observations(
         first, second, params.overlap_time_tolerance_s
     )
     if not pairs:
+        # A camera-only LAST_KNOWN anchor intentionally has no calibrated
+        # trajectory.  Evidence from a declared overlapping camera at the
+        # anchor time is still physically compatible; rejecting it here makes
+        # the final route depend on which camera result happens to arrive
+        # first.  This exception is limited to the operator-provided anchor --
+        # ordinary Perception visits still require synchronised ground points.
+        if first.source == "LAST_KNOWN" or second.source == "LAST_KNOWN":
+            return GateResult(0.0, kind="OVERLAP")
         return GateResult(
             0.0,
             kind="OVERLAP",
@@ -746,7 +812,7 @@ def fuse_observed_segments(
             not segments
             or point.floor_id != segments[-1][-1].floor_id
             or (point.timestamp - segments[-1][-1].timestamp).total_seconds()
-            > params.merge_gap_s
+            > params.observed_gap_s
             or not _sources_connect(segments[-1][-1], point, graph)
         ):
             segments.append([point])
@@ -779,6 +845,131 @@ def fuse_observed_segments(
             )
         )
     return result
+
+
+def _projected_ground_point(point: GroundPosition) -> ProjectedTrajectoryPoint:
+    return ProjectedTrajectoryPoint(
+        timestamp=point.timestamp,
+        x=point.x,
+        y=point.y,
+        floor_id=point.floor_id,
+        confidence=point.confidence,
+        calibration_error_m=point.error_m,
+    )
+
+
+def _visit_for_observed_point(
+    hypothesis: Hypothesis,
+    point: GroundPosition,
+) -> Visit | None:
+    source_ids = set(point.source_tracklet_ids)
+    candidates = [
+        visit
+        for visit in hypothesis.visits
+        if source_ids & set(visit.tracklet_ids)
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda visit: (
+            0
+            if visit.t_in <= point.timestamp <= visit.t_out
+            else min(
+                abs((point.timestamp - visit.t_in).total_seconds()),
+                abs((point.timestamp - visit.t_out).total_seconds()),
+            ),
+            visit.id,
+        ),
+    )
+
+
+def _with_observed_gap_transitions(
+    hypothesis: Hypothesis,
+    observed_segments: list[ObservedSegment],
+    graph: SiteGraph,
+    params: RoutingParams,
+) -> Hypothesis:
+    """Represent every short unobserved interval as an explicit GAP."""
+    observed_gaps: list[Transition] = []
+    for left_segment, right_segment in zip(
+        observed_segments, observed_segments[1:]
+    ):
+        if not left_segment.points or not right_segment.points:
+            continue
+        left = left_segment.points[-1]
+        right = right_segment.points[0]
+        gap_s = (right.timestamp - left.timestamp).total_seconds()
+        if not (params.observed_gap_s < gap_s <= params.gap_bridge_max_s):
+            continue
+        if left.floor_id != right.floor_id or not _sources_connect(left, right, graph):
+            continue
+        existing = next(
+            (
+                transition
+                for transition in hypothesis.transitions
+                if transition.kind == "GAP"
+                and transition.t_from == left.timestamp
+                and transition.t_to == right.timestamp
+            ),
+            None,
+        )
+        if existing is not None:
+            continue
+        left_visit = _visit_for_observed_point(hypothesis, left)
+        right_visit = _visit_for_observed_point(hypothesis, right)
+        if left_visit is None or right_visit is None:
+            continue
+        start = _projected_ground_point(left)
+        end = _projected_ground_point(right)
+        geometry = build_transition_geometry(start, end, graph, params)
+        if geometry is not None and geometry.distance_min_m / gap_s > params.max_speed:
+            continue
+        if geometry is not None:
+            geometry = geometry.model_copy(update={"approximate": True})
+        flags = ["INTRA_VISIT"] if left_visit.id == right_visit.id else []
+        observed_gaps.append(
+            Transition(
+                from_visit_id=left_visit.id,
+                to_visit_id=right_visit.id,
+                t_from=left.timestamp,
+                t_to=right.timestamp,
+                kind="GAP",
+                flags=flags,
+                geometry=geometry,
+            )
+        )
+    return hypothesis.model_copy(update={"observed_gaps": observed_gaps})
+
+
+def _refresh_observed_path(
+    hypothesis: Hypothesis,
+    graph: SiteGraph,
+    params: RoutingParams,
+    probed_windows: list[ProbedWindow],
+    now: datetime,
+    profile: str,
+) -> Hypothesis:
+    observed_segments = fuse_observed_segments(hypothesis, graph, params)
+    refreshed = hypothesis.model_copy(
+        update={
+            "score": recompute_hypothesis_score(
+                hypothesis,
+                graph,
+                params,
+                probed_windows,
+                now,
+                profile,
+            ),
+            "observed_segments": observed_segments,
+        }
+    )
+    return _with_observed_gap_transitions(
+        refreshed,
+        observed_segments,
+        graph,
+        params,
+    )
 
 
 def gate_visit_to_hypothesis(
@@ -1059,15 +1250,26 @@ def _transition_from_gate(
         and previous.projected_trajectory
         and visit.projected_trajectory
     ):
-        geometry = build_transition_geometry(
-            previous.projected_trajectory[-1],
-            visit.projected_trajectory[0],
-            graph,
-            params,
-        )
+        gap_s = (visit.t_in - previous.t_out).total_seconds()
+        if gate.kind != "GAP" or 0.0 <= gap_s <= params.gap_bridge_max_s:
+            geometry = build_transition_geometry(
+                previous.projected_trajectory[-1],
+                visit.projected_trajectory[0],
+                graph,
+                params,
+            )
+        if geometry is not None and gate.kind == "GAP":
+            geometry = geometry.model_copy(update={"approximate": True})
+    transition_from = previous.t_out
+    transition_to = visit.t_in
+    if transition_to < transition_from:
+        transition_from = None
+        transition_to = None
     return Transition(
         from_visit_id=previous.id,
         to_visit_id=visit.id,
+        t_from=transition_from,
+        t_to=transition_to,
         edge_ids=list(gate.edge_ids),
         alternative_edge_paths=[list(path) for path in gate.alternative_paths],
         via_nodes=list(gate.via_nodes),
@@ -1128,6 +1330,69 @@ def _branch_with_visit(
         via_alternatives=hypothesis.via_alternatives + [list(path) for path in gate.alternative_paths],
         miss_count=hypothesis.miss_count,
         requires_confirmation=requires_confirmation,
+    )
+
+
+def _visit_sequence_key(visit: Visit) -> tuple:
+    """Order sightings by the point at which they stop being observed.
+
+    This matters for overlapping cameras.  If camera A observes a person for
+    0-24 s and a delayed result from camera B covers 3-15 s, B must be placed
+    before A in the route frontier.  Ordering by start time would make B look
+    like the last observation and could incorrectly reject a later A sighting
+    as an 11-second gap instead of the real 2-second gap from A's 24 s end.
+    """
+    return (visit.t_out, visit.t_in, visit.camera, visit.id)
+
+
+def _branch_with_out_of_order_visit(
+    hypothesis: Hypothesis,
+    visit: Visit,
+    graph: SiteGraph,
+    params: RoutingParams,
+    now: datetime,
+    profile: str,
+) -> Hypothesis | None:
+    """Insert delayed camera evidence without discarding later observations."""
+    visits = sorted(
+        [*hypothesis.visits, visit],
+        key=_visit_sequence_key,
+    )
+    transitions: list[Transition] = []
+    for previous, current in zip(visits, visits[1:]):
+        gate = gate_visit_details(
+            previous,
+            current,
+            graph,
+            params,
+            now,
+            profile,
+        )
+        if gate.reject_reason is not None:
+            return None
+        transitions.append(
+            _transition_from_gate(previous, current, gate, graph, params)
+        )
+    visit_key = ",".join(item.id for item in visits)
+    transition_key = ",".join(
+        edge_id
+        for transition in transitions
+        for edge_id in transition.edge_ids
+    )
+    return Hypothesis(
+        id=_make_id("h", visit_key, transition_key, hypothesis.id),
+        visits=visits,
+        transitions=transitions,
+        current_node=visits[-1].camera,
+        status=hypothesis.status,
+        score=hypothesis.score,
+        via_alternatives=[
+            list(path)
+            for transition in transitions
+            for path in transition.alternative_edge_paths
+        ],
+        miss_count=hypothesis.miss_count,
+        requires_confirmation=hypothesis.requires_confirmation,
     )
 
 
@@ -1223,7 +1488,30 @@ def update_hypotheses(
     banned = set(state.rejected_tracklet_ids) | set(anchors.reject)
     confirmed = set(state.confirmed_tracklet_ids) | set(anchors.confirm)
     visits = merge_tracklets_to_visits(tracklets, candidates, graph, params, now)
-    review_visits = list(state.pending_review_visits)
+    # Beam expansion remains bounded by ``cands_per_probe``, but every
+    # Candidate already exposed to Controls must remain confirmable later.
+    # Keep the lower-ranked Visits as review-only evidence instead of silently
+    # losing them when their probe result has been consumed.
+    review_params = params.model_copy(
+        update={"cands_per_probe": max(params.cands_per_probe, len(tracklets))}
+    )
+    all_reviewable_visits = merge_tracklets_to_visits(
+        tracklets, candidates, graph, review_params, now
+    )
+    primary_visit_ids = {visit.id for visit in visits}
+    review_visits_by_id = {
+        visit.id: visit for visit in state.pending_review_visits
+    }
+    review_visits_by_id.update(
+        {
+            visit.id: visit
+            for visit in all_reviewable_visits
+            if visit.id not in primary_visit_ids
+        }
+    )
+    review_visits = sorted(
+        review_visits_by_id.values(), key=_visit_sequence_key
+    )
     for review_visit in review_visits:
         if set(review_visit.tracklet_ids) & confirmed:
             visits.append(review_visit)
@@ -1233,7 +1521,7 @@ def update_hypotheses(
     ]
     visits = sorted(
         {visit.id: visit for visit in visits}.values(),
-        key=lambda item: (item.t_in, item.t_out, item.camera, item.id),
+        key=_visit_sequence_key,
     )
     visits = [visit for visit in visits if not (set(visit.tracklet_ids) & banned)]
     profile = state.profile
@@ -1275,6 +1563,21 @@ def update_hypotheses(
                 continue
             if set(visit.tracklet_ids) & _all_tracklet_ids(hypothesis):
                 continue
+            if _visit_sequence_key(visit) < _visit_sequence_key(
+                hypothesis.visits[-1]
+            ):
+                ordered_branch = _branch_with_out_of_order_visit(
+                    hypothesis,
+                    visit,
+                    graph,
+                    params,
+                    now,
+                    profile,
+                )
+                if ordered_branch is not None:
+                    branches.append(ordered_branch)
+                    any_compatible = True
+                    continue
             gate = gate_visit_details(
                 hypothesis.visits[-1], visit, graph, params, now, profile,
                 state.probed_windows,
@@ -1344,15 +1647,13 @@ def update_hypotheses(
     hypotheses, anchor_rejected = _apply_anchors(hypotheses, state, anchors)
     rejected.extend(anchor_rejected)
     scored = [
-        hypothesis.model_copy(
-            update={
-                "score": recompute_hypothesis_score(
-                    hypothesis, graph, params, state.probed_windows, now, profile
-                ),
-                "observed_segments": fuse_observed_segments(
-                    hypothesis, graph, params
-                ),
-            }
+        _refresh_observed_path(
+            hypothesis,
+            graph,
+            params,
+            state.probed_windows,
+            now,
+            profile,
         )
         for hypothesis in hypotheses
     ]
@@ -1367,8 +1668,9 @@ def update_hypotheses(
                 )
             )
     state.hypotheses = scored[: params.B]
-    state.pending_review_visits.sort(
-        key=lambda item: (item.t_in, item.t_out, item.camera, item.id)
+    state.pending_review_visits = sorted(
+        {visit.id: visit for visit in state.pending_review_visits}.values(),
+        key=_visit_sequence_key,
     )
     rejected.sort(
         key=lambda item: (

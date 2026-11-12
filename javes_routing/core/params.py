@@ -9,6 +9,8 @@ class RoutingParams(BaseModel):
     K: int = Field(default=4, ge=1)
     p_det: float = Field(default=0.85, ge=0.0, le=1.0)
     merge_gap_s: float = Field(default=10.0, ge=0.0)
+    observed_gap_s: float = Field(default=2.0, ge=0.0)
+    gap_bridge_max_s: float = Field(default=10.0, gt=0.0)
     max_gap_s: float = Field(default=2400.0, gt=0.0)
     historical_shell_s: float = Field(default=300.0, gt=0.0)
     amb_delta: float = Field(default=1.0, ge=0.0)

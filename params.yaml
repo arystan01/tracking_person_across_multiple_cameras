@@ -3,6 +3,8 @@ B: 5
 K: 4
 p_det: 0.85
 merge_gap_s: 10.0
+observed_gap_s: 2.0
+gap_bridge_max_s: 10.0
 max_gap_s: 2400.0
 historical_shell_s: 300.0
 amb_delta: 1.0

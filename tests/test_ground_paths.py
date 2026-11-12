@@ -121,7 +121,7 @@ def _projected(timestamp: datetime, x: float, y: float) -> ProjectedTrajectoryPo
     )
 
 
-def test_directed_ground_path_uses_observed_endpoints_and_keeps_alternative() -> None:
+def test_directed_ground_path_uses_only_authorised_walk_edges() -> None:
     graph = _graph()
     geometry = build_transition_geometry(
         _projected(T0, 90, 100),
@@ -131,22 +131,24 @@ def test_directed_ground_path_uses_observed_endpoints_and_keeps_alternative() ->
     )
     assert geometry is not None
     assert geometry.points == [
-        (90.0, 100.0),
         (100.0, 100.0),
         (200.0, 50.0),
         (300.0, 100.0),
-        (310.0, 100.0),
     ]
+    assert geometry.walk_edge_ids == ["west-north", "north-east"]
     assert geometry.alternative_paths == [
         [
-            (90.0, 100.0),
             (100.0, 100.0),
             (200.0, 200.0),
             (300.0, 100.0),
-            (310.0, 100.0),
         ]
     ]
-    assert geometry.distance_min_m == 23.8
+    assert geometry.alternative_walk_edge_paths == [
+        ["west-south", "south-east"]
+    ]
+    assert geometry.start_offset_m == 1.0
+    assert geometry.end_offset_m == 1.0
+    assert geometry.distance_min_m == 19.8
     assert geometry.distance_max_m == 24.2
     assert geometry.approximate
 
@@ -237,8 +239,10 @@ def test_routing_attaches_walk_geometry_and_svg_avoids_camera_markers() -> None:
     attached = next(item for item in hypotheses if len(item.visits) == 2)
     geometry = attached.transitions[-1].geometry
     assert geometry is not None
-    assert geometry.points[0] == (90.0, 100.0)
-    assert geometry.points[-1] == (310.0, 100.0)
+    assert geometry.points[0] == (100.0, 100.0)
+    assert geometry.points[-1] == (300.0, 100.0)
+    assert (90.0, 100.0) not in geometry.points
+    assert (310.0, 100.0) not in geometry.points
 
     svg = render_route_maps(
         StepResult(
@@ -252,7 +256,9 @@ def test_routing_attaches_walk_geometry_and_svg_avoids_camera_markers() -> None:
         {},
     ).maps[0].svg
     assert 'data-role="inferred-path"' in svg
-    assert "90.00,100.00 100.00,100.00 200.00,50.00 300.00,100.00 310.00,100.00" in svg
+    assert "100.00,100.00 200.00,50.00 300.00,100.00" in svg
+    assert "90.00,100.00 100.00,100.00" not in svg
+    assert "300.00,100.00 310.00,100.00" not in svg
     assert "20.00,20.00" not in svg
     assert "480.00,20.00" not in svg
 

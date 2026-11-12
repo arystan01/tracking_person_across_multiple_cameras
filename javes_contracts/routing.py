@@ -530,10 +530,19 @@ class TransitionGeometry(ContractModel):
     floor_id: str
     points: list[tuple[float, float]] = Field(min_length=2)
     alternative_paths: list[list[tuple[float, float]]] = Field(default_factory=list)
+    walk_edge_ids: list[str] = Field(default_factory=list)
+    alternative_walk_edge_paths: list[list[str]] = Field(default_factory=list)
+    start_offset_m: float = Field(default=0.0, ge=0.0)
+    end_offset_m: float = Field(default=0.0, ge=0.0)
     distance_min_m: float = Field(ge=0.0)
     distance_max_m: float = Field(ge=0.0)
     approximate: bool = False
-    source: Literal["WALK_GRAPH", "MANUAL"] = "WALK_GRAPH"
+    # Kept only so previously persisted v1alpha1 state remains readable.
+    # Production Routing and the SVG renderer never generate or display
+    # ENDPOINT_INTERPOLATION because it is not obstacle-safe.
+    source: Literal[
+        "WALK_GRAPH", "MANUAL", "ENDPOINT_INTERPOLATION"
+    ] = "WALK_GRAPH"
 
     @model_validator(mode="after")
     def _valid_geometry(self) -> TransitionGeometry:
@@ -586,6 +595,8 @@ class Visit(ContractModel):
 class Transition(ContractModel):
     from_visit_id: str
     to_visit_id: str
+    t_from: datetime | None = None
+    t_to: datetime | None = None
     edge_ids: list[str] = Field(default_factory=list)
     alternative_edge_paths: list[list[str]] = Field(default_factory=list)
     via_nodes: list[str] = Field(default_factory=list)
@@ -594,6 +605,17 @@ class Transition(ContractModel):
     ] = "EDGE"
     flags: list[str] = Field(default_factory=list)
     geometry: TransitionGeometry | None = None
+
+    @field_validator("t_from", "t_to", mode="after")
+    @classmethod
+    def _aware_transition_time(cls, value: datetime | None) -> datetime | None:
+        return _utc(value)
+
+    @model_validator(mode="after")
+    def _ordered_transition_time(self) -> Transition:
+        if self.t_from is not None and self.t_to is not None and self.t_to < self.t_from:
+            raise ValueError("transition t_to must not be before t_from")
+        return self
 
 
 class HypothesisStatus(str, Enum):
@@ -615,6 +637,7 @@ class Hypothesis(ContractModel):
     reject_reason: str | None = None
     gate_margin_s: float | None = None
     observed_segments: list[ObservedSegment] = Field(default_factory=list)
+    observed_gaps: list[Transition] = Field(default_factory=list)
 
 
 class SearchMode(str, Enum):

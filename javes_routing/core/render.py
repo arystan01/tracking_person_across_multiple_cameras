@@ -19,6 +19,8 @@ from javes_contracts import (
     StopReason,
 )
 
+from .ground import configured_walk_path
+
 
 def _mime(data: bytes) -> str:
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -198,7 +200,10 @@ def _geometry_is_continuous(
 ) -> bool:
     transition = hypothesis.transitions[visit_index - 1]
     geometry = transition.geometry
-    if geometry is None:
+    if geometry is None or geometry.source != "WALK_GRAPH":
+        return False
+    configured = configured_walk_path(geometry.walk_edge_ids, graph)
+    if len(configured) < 2:
         return False
     start = _endpoint_for_visit(
         hypothesis, visit_index - 1, geometry.floor_id, first=False
@@ -215,14 +220,18 @@ def _geometry_is_continuous(
         None,
     )
     scale = floor.m_per_px if floor is not None else None
-    tolerance_px = 1.0
-    if scale is not None:
-        tolerance_px = max(tolerance_px, (start[2] + end[2]) / scale)
+    if scale is None:
+        return False
+    start_distance_m = math.hypot(
+        configured[0][0] - start[0], configured[0][1] - start[1]
+    ) * scale
+    end_distance_m = math.hypot(
+        configured[-1][0] - end[0], configured[-1][1] - end[1]
+    ) * scale
+    tolerance_m = 0.02
     return (
-        math.hypot(geometry.points[0][0] - start[0], geometry.points[0][1] - start[1])
-        <= tolerance_px
-        and math.hypot(geometry.points[-1][0] - end[0], geometry.points[-1][1] - end[1])
-        <= tolerance_px
+        start_distance_m <= geometry.start_offset_m + tolerance_m
+        and end_distance_m <= geometry.end_offset_m + tolerance_m
     )
 
 
@@ -247,11 +256,14 @@ def _route_elements(
             and transition.geometry.floor_id == floor_id
             and _geometry_is_continuous(hypothesis, index, graph)
         ):
+            configured = configured_walk_path(
+                transition.geometry.walk_edge_ids, graph
+            )
             pieces = [
                 (
-                    transition.geometry.points,
+                    configured,
                     transition.geometry.approximate,
-                    ",".join(transition.edge_ids) or transition.geometry.source,
+                    ",".join(transition.geometry.walk_edge_ids),
                 )
             ]
         for points, approximate, edge_label in pieces:
@@ -259,6 +271,10 @@ def _route_elements(
             if len(points) >= 2:
                 elements.append(
                     f'<polyline data-role="{role}" data-edge="{escape(edge_label)}" '
+                    f'data-kind="{escape(transition.kind if transition else "UNKNOWN")}" '
+                    f'data-source="{escape(transition.geometry.source if transition and transition.geometry else "UNKNOWN")}" '
+                    f'data-from="{escape(previous.t_out.isoformat())}" '
+                    f'data-to="{escape(current.t_in.isoformat())}" '
                     f'data-approximate="{str(approximate).lower()}" points="{" ".join(_point(item) for item in points)}" '
                     f'fill="none" stroke="{colour}" stroke-width="{width}" stroke-linecap="round" '
                     f'stroke-linejoin="round"{dash}/>'
@@ -276,9 +292,10 @@ def _route_elements(
             and transition.geometry.floor_id == floor_id
             and _geometry_is_continuous(hypothesis, index, graph)
         ):
-            for alternative_index, points in enumerate(
-                transition.geometry.alternative_paths
+            for alternative_index, edge_ids in enumerate(
+                transition.geometry.alternative_walk_edge_paths
             ):
+                points = configured_walk_path(edge_ids, graph)
                 if len(points) >= 2:
                     elements.append(
                         f'<polyline data-role="alternative-path" data-edge="alternative-{alternative_index}" '
@@ -294,6 +311,27 @@ def _route_elements(
                     f'<text data-role="gap-label" x="{x + 11:.2f}" y="{y + 24:.2f}" '
                     f'fill="#b91c1c">{escape(flag)}</text>'
                 )
+    for transition in hypothesis.observed_gaps:
+        geometry = transition.geometry
+        if (
+            geometry is None
+            or geometry.floor_id != floor_id
+            or geometry.source != "WALK_GRAPH"
+        ):
+            continue
+        configured = configured_walk_path(geometry.walk_edge_ids, graph)
+        if len(configured) < 2:
+            continue
+        timestamp_from = transition.t_from.isoformat() if transition.t_from else ""
+        timestamp_to = transition.t_to.isoformat() if transition.t_to else ""
+        elements.append(
+            f'<polyline data-role="{role}" data-edge="{escape(",".join(geometry.walk_edge_ids))}" '
+            f'data-kind="GAP" data-source="{escape(geometry.source)}" '
+            f'data-from="{escape(timestamp_from)}" data-to="{escape(timestamp_to)}" '
+            f'data-approximate="true" points="{" ".join(_point(item) for item in configured)}" '
+            f'fill="none" stroke="{colour}" stroke-width="{width}" stroke-linecap="round" '
+            'stroke-linejoin="round" stroke-dasharray="10 7"/>'
+        )
     return elements
 
 
@@ -561,23 +599,12 @@ def render_route_maps(
         floor_has_inferred = False
         observed_elements: list[str] = []
         inferred_elements: list[str] = []
-        alternatives = sorted(
-            (item for item in step_result.hypotheses if best is None or item.id != best.id),
-            key=lambda item: (-item.score, item.id),
-        )
-        for hypothesis in alternatives:
-            alternative_elements = _route_elements(
-                hypothesis,
-                graph,
-                floor_id,
-                positions,
-                "alternative-path",
-                True,
-            )
-            if alternative_elements:
-                floor_has_inferred = True
-                shown_layers.add(RouteLayer.INFERRED)
-                content.extend(alternative_elements)
+        # Competing hypotheses remain available in the Controls response, but
+        # drawing all of them on the primary operator map makes their inferred
+        # geometry look like extra movement by the selected person.  The main
+        # SVG therefore renders only ``best``.  Hidden path alternatives that
+        # belong to a transition of that best hypothesis are still rendered by
+        # ``_route_elements`` as local corridor alternatives.
         if best:
             inferred_elements = _route_elements(
                 best,

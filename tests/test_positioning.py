@@ -600,6 +600,26 @@ def test_max_gap_keeps_final_reachable_snapshot() -> None:
 
 def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> None:
     graph = _graph()
+    assert graph.walk_graph is not None
+    graph = graph.model_copy(
+        update={
+            "walk_graph": graph.walk_graph.model_copy(
+                update={
+                    "edges": [
+                        *graph.walk_graph.edges,
+                        WalkEdgeDef(
+                            id="walk-A-B-visual-alt",
+                            source="wa",
+                            target="wb",
+                            floor_id="1F",
+                            map_path=[(26, 148)],
+                            d_m=14,
+                        ),
+                    ]
+                }
+            )
+        }
+    )
     first = _visit_with_trajectory()
     second = Visit(
         visit_id="vB",
@@ -629,8 +649,11 @@ def test_svg_has_stable_observed_inferred_alternative_and_reachable_layers() -> 
                 alternative_edge_paths=[["A-C"]],
                 geometry=TransitionGeometry(
                     floor_id="1F",
-                    points=[(26, 48), (150, 40), (300, 40)],
-                    alternative_paths=[[(26, 48), (20, 150), (300, 40)]],
+                    points=[(26, 48), (126, 48)],
+                    alternative_paths=[[(26, 48), (26, 148), (126, 48)]],
+                    walk_edge_ids=["walk-A-B"],
+                    alternative_walk_edge_paths=[["walk-A-B-visual-alt"]],
+                    end_offset_m=17.418,
                     distance_min_m=9.5,
                     distance_max_m=10.5,
                 ),

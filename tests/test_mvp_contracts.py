@@ -33,6 +33,9 @@ from javes_contracts import (
     Transition,
     TransitionGeometry,
     Visit,
+    WalkEdgeDef,
+    WalkGraphDef,
+    WalkNodeDef,
 )
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.expand import expand_dormant_watch_probes
@@ -296,7 +299,7 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
         site="two-floor",
         version="v1",
         map=MapDef(floors=[
-            MapFloor(id="1F", image="one.png", size_px=(400, 300)),
+            MapFloor(id="1F", image="one.png", size_px=(400, 300), m_per_px=0.1),
             MapFloor(id="2F", size_px=(500, 350)),
         ]),
         cameras={
@@ -309,6 +312,28 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
             EdgeDef(id="A-B-alt", source="A", target="B", t_min=6, t_typ=12, t_max=24),
             EdgeDef(id="B-C", source="B", target="C", t_min=20, t_typ=30, t_max=60),
         ],
+        walk_graph=WalkGraphDef(
+            nodes={
+                "wa": WalkNodeDef(id="wa", floor_id="1F", map_xy=(20, 30)),
+                "wb": WalkNodeDef(id="wb", floor_id="1F", map_xy=(300, 80)),
+            },
+            edges=[
+                WalkEdgeDef(
+                    id="walk-main",
+                    source="wa",
+                    target="wb",
+                    floor_id="1F",
+                    map_path=[(150, 40)],
+                ),
+                WalkEdgeDef(
+                    id="walk-alt",
+                    source="wa",
+                    target="wb",
+                    floor_id="1F",
+                    map_path=[(180, 130)],
+                ),
+            ],
+        ),
     )
     visits = [
         Visit(
@@ -332,6 +357,8 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
                     floor_id="1F",
                     points=[(20, 30), (150, 40), (300, 80)],
                     alternative_paths=[[(20, 30), (180, 130), (300, 80)]],
+                    walk_edge_ids=["walk-main"],
+                    alternative_walk_edge_paths=[["walk-alt"]],
                     distance_min_m=10,
                     distance_max_m=12,
                 ),
@@ -340,11 +367,36 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
         ],
         current_node="C", status=HypothesisStatus.ALIVE, score=1.0,
     )
+    competing = hypothesis.model_copy(
+        update={
+            "id": "h2",
+            "score": 0.5,
+            "visits": visits[:2],
+            "transitions": [
+                hypothesis.transitions[0].model_copy(
+                    update={
+                        "geometry": hypothesis.transitions[0].geometry.model_copy(
+                            update={
+                                "points": [(20, 30), (100, 300), (300, 80)],
+                                "alternative_paths": [],
+                            }
+                        )
+                    }
+                )
+            ],
+            "current_node": "B",
+        }
+    )
     state = init_state(
         CaseInfo(case_id="c", target_id="t", start_time=T0), graph, RoutingParams()
-    ).model_copy(update={"hypotheses": [hypothesis], "state_version": 12})
+    ).model_copy(
+        update={"hypotheses": [hypothesis, competing], "state_version": 12}
+    )
     result = StepResult(
-        state=state, probes=[], hypotheses=[hypothesis], best=hypothesis,
+        state=state,
+        probes=[],
+        hypotheses=[hypothesis, competing],
+        best=hypothesis,
         estimate=Estimate(zones=[]), mode=SearchMode.CATCHING_UP,
     )
     assets = {"1F": b"\x89PNG\r\n\x1a\nplaceholder"}
@@ -362,6 +414,7 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
     assert 'data-approximate="false"' in floor_one
     assert 'data-role="alternative-path"' in floor_one
     assert 'stroke-dasharray="5 7"' in floor_one
+    assert "100.00,300.00" not in floor_one
     assert 'data-role="inter-floor"' not in floor_one
     floor_two = next(item.svg for item in first.maps if item.floor_id == "2F")
     assert "LONG_GAP" in floor_two
@@ -511,6 +564,77 @@ def test_later_confirm_creates_gate_override_from_saved_review_evidence() -> Non
         if hypothesis.transitions and hypothesis.transitions[-1].kind == "UNKNOWN"
     )
     assert "GATE_OVERRIDE" in override.visits[-1].flags
+
+
+def test_candidate_below_probe_beam_remains_confirmable() -> None:
+    graph = SiteGraph(cameras={"A": CameraDef(id="A")}, edges=[])
+    params = RoutingParams(cands_per_probe=1)
+    state = init_state(
+        CaseInfo(
+            case_id="c",
+            target_id="t",
+            start_time=T0,
+            last_known_camera="A",
+            last_known_time=T0,
+        ),
+        graph,
+        params,
+    )
+    high = _tracklet("high", "A", T0 + timedelta(seconds=5)).model_copy(
+        update={"probe_id": "p"}
+    )
+    low = _tracklet("low", "A", T0 + timedelta(seconds=30)).model_copy(
+        update={"probe_id": "p"}
+    )
+    result = ProbeResult(
+        probe_id="p",
+        status="DONE",
+        tracklets=[high, low],
+        candidates=[
+            Candidate(
+                candidate_id="high-c",
+                tracklet_id="high",
+                appearance_score=0.95,
+            ),
+            Candidate(
+                candidate_id="low-c",
+                tracklet_id="low",
+                appearance_score=0.2,
+            ),
+        ],
+    )
+
+    automatic = step(
+        state,
+        [result],
+        graph,
+        Anchors(),
+        params,
+        T0 + timedelta(seconds=50),
+    )
+    assert all(
+        "low" not in visit.tracklet_ids
+        for hypothesis in automatic.hypotheses
+        for visit in hypothesis.visits
+    )
+    assert any(
+        "low" in visit.tracklet_ids
+        for visit in automatic.state.pending_review_visits
+    )
+
+    confirmed = step(
+        automatic.state,
+        [],
+        graph,
+        Anchors(confirm_tracklet_ids=["low"]),
+        params,
+        T0 + timedelta(seconds=51),
+    )
+    assert any(
+        "low" in visit.tracklet_ids
+        for hypothesis in confirmed.hypotheses
+        for visit in hypothesis.visits
+    )
 
 
 def test_malformed_runtime_result_is_logged_and_skipped() -> None:

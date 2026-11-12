@@ -111,49 +111,73 @@ def _simple_paths(
 
 
 def _path_points(
-    start: ProjectedTrajectoryPoint,
-    end: ProjectedTrajectoryPoint,
     edges: list[WalkEdgeDef],
-    source_node: str,
-    target_node: str,
     graph: SiteGraph,
 ) -> list[tuple[float, float]]:
-    assert graph.walk_graph is not None
-    points = [
-        (start.x, start.y),
-        graph.walk_graph.nodes[source_node].map_xy,
-    ]
+    """Return only site-authorised pedestrian geometry.
+
+    Observation-to-graph connectors are deliberately excluded.  A straight
+    connector may cross a wall or a shelf when the observed point and nearest
+    graph node happen to be on opposite sides of an obstacle.
+    """
+    points: list[tuple[float, float]] = []
     for edge in edges:
         points.extend(walk_edge_points(edge, graph))
-    points.extend(
-        [graph.walk_graph.nodes[target_node].map_xy, (end.x, end.y)]
-    )
     return deduplicate_points(points)
 
 
 def _path_distance_m(
-    start: ProjectedTrajectoryPoint,
-    end: ProjectedTrajectoryPoint,
     edges: list[WalkEdgeDef],
-    source_node: str,
-    target_node: str,
     graph: SiteGraph,
 ) -> float | None:
-    if graph.walk_graph is None:
-        return None
-    scale = floor_scale(graph, start.floor_id)
-    if scale is None:
-        return None
-    source_xy = graph.walk_graph.nodes[source_node].map_xy
-    target_xy = graph.walk_graph.nodes[target_node].map_xy
-    connectors = (
-        math.hypot(start.x - source_xy[0], start.y - source_xy[1])
-        + math.hypot(end.x - target_xy[0], end.y - target_xy[1])
-    ) * scale
     distances = [walk_edge_distance_m(edge, graph) for edge in edges]
     if any(distance is None for distance in distances):
         return None
-    return connectors + sum(distance for distance in distances if distance is not None)
+    return sum(distance for distance in distances if distance is not None)
+
+
+def walk_edge_by_id(edge_id: str, graph: SiteGraph) -> WalkEdgeDef | None:
+    """Resolve a canonical or generated reverse walk-edge id."""
+    if graph.walk_graph is None:
+        return None
+    reverse = edge_id.endswith("::reverse")
+    base_id = edge_id.removesuffix("::reverse") if reverse else edge_id
+    edge = next(
+        (item for item in graph.walk_graph.edges if item.id == base_id),
+        None,
+    )
+    if edge is None or (reverse and not edge.bidirectional):
+        return None
+    if not reverse:
+        return edge
+    return edge.model_copy(
+        update={
+            "id": edge_id,
+            "source": edge.target,
+            "target": edge.source,
+            "map_path": list(reversed(edge.map_path)),
+            "bidirectional": False,
+        }
+    )
+
+
+def configured_walk_path(
+    edge_ids: list[str],
+    graph: SiteGraph,
+) -> list[tuple[float, float]]:
+    """Rebuild a contiguous path solely from immutable Site Config edges."""
+    if not edge_ids:
+        return []
+    edges = [walk_edge_by_id(edge_id, graph) for edge_id in edge_ids]
+    if any(edge is None for edge in edges):
+        return []
+    resolved = [edge for edge in edges if edge is not None]
+    if any(
+        left.target != right.source or left.floor_id != right.floor_id
+        for left, right in zip(resolved, resolved[1:])
+    ):
+        return []
+    return _path_points(resolved, graph)
 
 
 def build_transition_geometry(
@@ -162,7 +186,7 @@ def build_transition_geometry(
     graph: SiteGraph,
     params: RoutingParams,
 ) -> TransitionGeometry | None:
-    """Return a shortest directed pedestrian path with observed endpoints."""
+    """Return the shortest directed path made only of Site Config walk edges."""
     if start.floor_id != end.floor_id or graph.walk_graph is None:
         return None
     source_snap = nearest_walk_node(start, graph, params.max_walk_snap_m)
@@ -175,14 +199,12 @@ def build_transition_geometry(
     for edges in _simple_paths(
         source_node, target_node, graph, params.max_hidden_edges
     ):
-        distance = _path_distance_m(
-            start, end, edges, source_node, target_node, graph
-        )
+        distance = _path_distance_m(edges, graph)
         if distance is None:
             continue
-        points = _path_points(
-            start, end, edges, source_node, target_node, graph
-        )
+        points = _path_points(edges, graph)
+        if len(points) < 2:
+            continue
         candidates.append(
             (
                 distance,
@@ -193,17 +215,30 @@ def build_transition_geometry(
     if not candidates:
         return None
     candidates.sort(key=lambda item: (item[0], item[1]))
-    best_distance, _, best_points = candidates[0]
+    best_distance, best_edge_ids, best_points = candidates[0]
     uncertainty = start.calibration_error_m + end.calibration_error_m
     return TransitionGeometry(
         floor_id=start.floor_id,
         points=best_points,
+        walk_edge_ids=list(best_edge_ids),
         alternative_paths=[
             points
             for _, _, points in candidates[1 : 1 + params.walk_alternative_limit]
         ],
-        distance_min_m=round(max(best_distance - uncertainty, 0.0), 3),
-        distance_max_m=round(best_distance + uncertainty, 3),
+        alternative_walk_edge_paths=[
+            list(edge_ids)
+            for _, edge_ids, _ in candidates[1 : 1 + params.walk_alternative_limit]
+        ],
+        start_offset_m=round(source_distance, 3),
+        end_offset_m=round(target_distance, 3),
+        distance_min_m=round(
+            max(best_distance - source_distance - target_distance - uncertainty, 0.0),
+            3,
+        ),
+        distance_max_m=round(
+            best_distance + source_distance + target_distance + uncertainty,
+            3,
+        ),
         approximate=(source_distance > 0.1 or target_distance > 0.1),
         source="WALK_GRAPH",
     )

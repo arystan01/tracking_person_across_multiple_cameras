@@ -18,7 +18,6 @@ from javes_contracts import (
 
 from .params import RoutingParams
 from .ground import (
-    deduplicate_points,
     floor_scale,
     nearest_walk_node,
     truncate_polyline,
@@ -169,7 +168,7 @@ def movement_ranges(
     inferred_distances = [
         (transition.geometry.distance_min_m + transition.geometry.distance_max_m)
         / 2.0
-        for transition in hypothesis.transitions
+        for transition in [*hypothesis.transitions, *hypothesis.observed_gaps]
         if transition.geometry is not None
     ]
     inferred_distance = sum(inferred_distances)
@@ -284,14 +283,6 @@ def reachable_area(
                 if progress >= 1.0
                 else truncate_polyline(edge_points, available_m, scale)
             )
-            if depth == 0:
-                visible_points = deduplicate_points(
-                    [
-                        (last_point.x, last_point.y),
-                        graph.walk_graph.nodes[start_node].map_xy,
-                        *visible_points,
-                    ]
-                )
             previous_segment = segment_data.get(edge.id)
             if previous_segment is None:
                 segment_data[edge.id] = {
