@@ -105,6 +105,9 @@ class HttpVideoArchive:
                 else request_id
             ),
             source_uri=self._source_uri(result),
+            content_sha256=(
+                result.source_ref.sha256 if result.source_ref else None
+            ),
         )
 
     def frames(self, window: VideoWindow, sample_fps: float):

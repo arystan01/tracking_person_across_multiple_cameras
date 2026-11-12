@@ -1,6 +1,11 @@
 """Detection, tracking, Re-ID and probe processing."""
 
 from .config import CameraSource, PerceptionSettings
+from .extraction import (
+    ExtractedTrack,
+    ExtractionBundle,
+    FilesystemExtractionCache,
+)
 
 
 def __getattr__(name: str):
@@ -11,4 +16,11 @@ def __getattr__(name: str):
     raise AttributeError(name)
 
 
-__all__ = ["CameraSource", "PerceptionSettings", "PerceptionWorker"]
+__all__ = [
+    "CameraSource",
+    "ExtractedTrack",
+    "ExtractionBundle",
+    "FilesystemExtractionCache",
+    "PerceptionSettings",
+    "PerceptionWorker",
+]

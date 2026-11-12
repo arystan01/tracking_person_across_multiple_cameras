@@ -10,6 +10,10 @@ from javes_contracts.acceptance import check_gallery_result, check_probe_result
 from javes_main.adapters.artifacts import InMemoryArtifactStore
 from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
 from javes_perception.core.models import _byte_tracker_args
+from javes_perception.core.extraction import (
+    FilesystemExtractionCache,
+    extraction_fingerprint,
+)
 from javes_perception.core.worker import trajectory_from_path
 from javes_perception.runtime.state import PerceptionStateStore
 from javes_perception.runtime.video import DecodeError, VideoWindow
@@ -34,7 +38,14 @@ class FakeArchive:
         start = max(t_from, T0)
         if end <= start:
             return None
-        return VideoWindow(camera_id, start, end, (t_to - t_from).total_seconds(), "archive_cam_1")
+        return VideoWindow(
+            camera_id,
+            start,
+            end,
+            (t_to - t_from).total_seconds(),
+            "archive_cam_1",
+            content_sha256="0" * 64,
+        )
 
     def frames(self, window, sample_fps):
         if self.broken:
@@ -312,6 +323,60 @@ def test_retry_gives_same_ids():
     second = worker.execute(probe, T0 + timedelta(minutes=1))
     assert [t.id for t in first.tracklets] == [t.id for t in second.tracklets]
     assert [c.id for c in first.candidates] == [c.id for c in second.candidates]
+
+
+def test_extraction_cache_is_target_independent_and_survives_restart(tmp_path):
+    cache = FilesystemExtractionCache(tmp_path / "extraction-cache")
+    worker, artifacts = make_worker()
+    worker.extraction_cache = cache
+    reference = add_reference(worker, artifacts)
+    probe = job(reference)
+    first = worker.execute(probe, T0 + timedelta(minutes=1))
+    assert worker.extraction_cache_misses == 1
+    assert worker.extraction_cache_hits == 0
+
+    class CacheOnlyDetector(FakeDetector):
+        def track(self, frame):
+            raise AssertionError("cached extraction must not rerun detector")
+
+    restarted = PerceptionWorker(
+        worker.settings,
+        artifacts,
+        detector=CacheOnlyDetector(),
+        embedder=fake_embedder,
+        archive=FakeArchive(),
+        extraction_cache=cache,
+    )
+    second = restarted.execute(probe, T0 + timedelta(minutes=1))
+    assert restarted.extraction_cache_hits == 1
+    assert restarted.extraction_cache_misses == 0
+    assert second == first
+
+
+def test_extraction_fingerprint_excludes_target_but_pins_calibration():
+    common = {
+        "video_sha256": "video",
+        "detector_sha256": "detector",
+        "reid_sha256": "reid",
+        "tracker_sha256": "tracker",
+        "camera_id": "cam_1",
+        "t_from": T0,
+        "t_to": T0 + timedelta(seconds=20),
+        "sample_fps": 5.0,
+        "image_size": 1280,
+        "tracker_config": {"buffer_s": 8.0},
+    }
+    first = extraction_fingerprint(
+        **common, calibration_checksum="calibration-a"
+    )
+    same = extraction_fingerprint(
+        **common, calibration_checksum="calibration-a"
+    )
+    changed = extraction_fingerprint(
+        **common, calibration_checksum="calibration-b"
+    )
+    assert first == same
+    assert changed != first
 
 
 def test_empty_window_is_done_empty():

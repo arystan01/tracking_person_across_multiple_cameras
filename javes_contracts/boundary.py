@@ -26,6 +26,7 @@ class ArtifactRef(ContractModel):
     archive_id: str | None = None
     object_key: str | None = None
     uri: str | None = None
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _has_identity(self) -> ArtifactRef:

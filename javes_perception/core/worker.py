@@ -4,6 +4,8 @@ import hashlib
 import io
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import cv2
 import numpy as np
@@ -19,6 +21,14 @@ from javes_contracts import (
 )
 
 from .config import PerceptionSettings
+from .extraction import (
+    ExtractedTrack,
+    ExtractionBundle,
+    ExtractionCache,
+    FilesystemExtractionCache,
+    content_identity,
+    extraction_fingerprint,
+)
 from .models import normalize
 from ..runtime.video import DecodeError, LocalVideoArchive
 
@@ -203,6 +213,7 @@ class PerceptionWorker:
         embedder=None,
         archive=None,
         state_store=None,
+        extraction_cache: ExtractionCache | None = None,
     ) -> None:
         self.settings = settings
         self.artifacts = artifacts
@@ -210,6 +221,17 @@ class PerceptionWorker:
         self._embedder = embedder
         self.archive = archive or LocalVideoArchive(settings.cameras)
         self.state_store = state_store
+        self.extraction_cache = extraction_cache or (
+            FilesystemExtractionCache(
+                Path(settings.extraction_cache_dir),
+                refresh=settings.refresh_extraction_cache,
+            )
+            if settings.extraction_cache_dir
+            else None
+        )
+        self.extraction_cache_hits = 0
+        self.extraction_cache_misses = 0
+        self._content_identities: dict[str, str] = {}
         self._galleries: dict[str, np.ndarray] = {}
         self._gallery_sources: dict[str, dict[str, np.ndarray]] = {}
         self._gallery_commands: dict[str, tuple[str, TargetGalleryResult]] = {}
@@ -404,15 +426,15 @@ class PerceptionWorker:
             return self._empty(probe.probe_id, ProbeStatus.UNAVAILABLE, "VIDEO_UNAVAILABLE", close)
 
         try:
-            tracks, timestamps = self._track(window)
+            extraction = self.extract(window)
         except DecodeError:
             return self._empty(probe.probe_id, ProbeStatus.FAILED, "DECODE_FAILED", close)
         except Exception:
             return self._empty(probe.probe_id, ProbeStatus.FAILED, "MODEL_FAILED", close)
-        if not timestamps:
+        if not extraction.timestamps:
             return self._empty(probe.probe_id, ProbeStatus.FAILED, "DECODE_FAILED", close)
 
-        result = self._build_result(job, window, tracks, timestamps, gallery, close)
+        result = self.score_extraction(job, extraction, gallery, close)
         if probe.t_to is None and self.state_store is not None and result.status == ProbeStatus.DONE:
             if previous_open is not None:
                 merged_tracklets, remapped = _merge_open_tracklets(
@@ -518,6 +540,111 @@ class PerceptionWorker:
                     track.weights.append(quality)
         return tracks, timestamps
 
+    def _content_identity(self, value: str) -> str:
+        if value not in self._content_identities:
+            self._content_identities[value] = content_identity(value)
+        return self._content_identities[value]
+
+    def _video_identity(self, window) -> tuple[str, bool]:
+        content_sha256 = getattr(window, "content_sha256", None)
+        if content_sha256:
+            return content_sha256, True
+        source_uri = getattr(window, "source_uri", None)
+        if source_uri:
+            parsed = urlparse(source_uri)
+            if parsed.scheme == "file":
+                return self._content_identity(unquote(parsed.path)), True
+            if parsed.scheme == "" and Path(source_uri).is_file():
+                return self._content_identity(source_uri), True
+            # A URL or archive id is not a content digest.  It remains part of
+            # the in-memory bundle identity, but cannot be reused durably.
+            return self._content_identity(source_uri), False
+        source = self.settings.cameras.get(window.camera_id)
+        if source is not None:
+            return self._content_identity(source.path), Path(source.path).is_file()
+        return self._content_identity(window.archive_id), False
+
+    def _extraction_fingerprint(self, window) -> tuple[str, bool]:
+        s = self.settings
+        video_identity, cacheable = self._video_identity(window)
+        tracker_config = {
+            "crop_filter": s.crop_filter,
+            "det_conf": s.det_conf,
+            "edge_margin_px": s.edge_margin_px,
+            "embed_every": s.embed_every,
+            "max_overlap": s.max_overlap,
+            "min_crop_height": s.min_crop_height,
+            "min_embed_conf": s.min_embed_conf,
+            "min_track_frames": s.min_track_frames,
+            "reid_model": s.reid_model,
+            "track_lost_buffer_s": s.track_lost_buffer_s,
+        }
+        return extraction_fingerprint(
+            video_sha256=video_identity,
+            detector_sha256=self._content_identity(s.detector_weights),
+            reid_sha256=self._content_identity(s.reid_weights),
+            tracker_sha256=self._content_identity(s.tracker),
+            camera_id=window.camera_id,
+            t_from=window.t_from,
+            t_to=window.t_to,
+            sample_fps=s.sample_fps,
+            image_size=s.imgsz,
+            tracker_config=tracker_config,
+            calibration_checksum=s.camera_calibration_checksums.get(
+                window.camera_id, "none"
+            ),
+        ), cacheable
+
+    def extract(self, window) -> ExtractionBundle:
+        """Run target-independent detection/tracking/Re-ID, or reuse it."""
+        fingerprint, cacheable = self._extraction_fingerprint(window)
+        if self.extraction_cache is not None and cacheable:
+            cached = self.extraction_cache.get(fingerprint)
+            if cached is not None:
+                self.extraction_cache_hits += 1
+                return cached
+        self.extraction_cache_misses += 1
+        tracks, timestamps = self._track(window)
+        extracted: list[ExtractedTrack] = []
+        for source_track_id, track in sorted(tracks.items()):
+            embedding = (
+                self._track_embedding(track) if track.features else None
+            )
+            best_crop_jpeg = None
+            if track.best_crop is not None:
+                ok, jpeg = cv2.imencode(".jpg", track.best_crop)
+                if ok:
+                    best_crop_jpeg = jpeg.tobytes()
+            extracted.append(
+                ExtractedTrack(
+                    source_track_id=source_track_id,
+                    first_ts=track.first_ts,
+                    last_ts=track.last_ts,
+                    bbox_first=track.bbox_first,
+                    bbox_last=track.bbox_last,
+                    frame_size_px=track.frame_size_px,
+                    frames=track.frames,
+                    good_frames=track.good_frames,
+                    embedding=embedding,
+                    best_crop_jpeg=best_crop_jpeg,
+                    path=tuple(track.path),
+                    path_confidences=tuple(track.path_confidences),
+                )
+            )
+        bundle = ExtractionBundle(
+            fingerprint=fingerprint,
+            camera_id=window.camera_id,
+            t_from=window.t_from,
+            t_to=window.t_to,
+            requested_s=window.requested_s,
+            archive_id=window.archive_id,
+            timestamps=tuple(timestamps),
+            tracks=tuple(extracted),
+        )
+        if self.extraction_cache is not None and cacheable:
+            self.extraction_cache.put(bundle)
+        return bundle
+
     def _crop_quality(self, frame, xyxy, conf, others) -> float:
         s = self.settings
         h, w = frame.shape[:2]
@@ -555,25 +682,41 @@ class PerceptionWorker:
         s = self.settings
         return float(1.0 / (1.0 + np.exp(-(s.calib_a * cosine + s.calib_b))))
 
-    def _build_result(self, job, window, tracks, timestamps, gallery, close) -> ProbeResult:
+    def score_extraction(
+        self,
+        job: PerceptionProbeJob,
+        extraction: ExtractionBundle,
+        gallery: np.ndarray,
+        close: bool,
+    ) -> ProbeResult:
+        """Apply a target gallery without rerunning target-independent CV."""
         s = self.settings
         probe = job.probe
+        timestamps = extraction.timestamps
         if len(timestamps) > 1:
             step = (timestamps[-1] - timestamps[0]).total_seconds() / (len(timestamps) - 1)
         else:
             step = 1.0 / s.sample_fps
-        window_s = (window.t_to - window.t_from).total_seconds()
+        window_s = (extraction.t_to - extraction.t_from).total_seconds()
         processed = min((timestamps[-1] - timestamps[0]).total_seconds() + step, window_s)
-        coverage = min(processed / window.requested_s, 1.0) if window.requested_s > 0 else 0.0
+        coverage = (
+            min(processed / extraction.requested_s, 1.0)
+            if extraction.requested_s > 0
+            else 0.0
+        )
 
-        people = [t for t in tracks.values() if t.frames >= s.min_track_frames]
+        people = [
+            track
+            for track in extraction.tracks
+            if track.frames >= s.min_track_frames
+        ]
         people.sort(key=lambda t: (t.first_ts, t.bbox_first))
         tracklets: list[Tracklet] = []
         candidates: list[Candidate] = []
         for track in people:
-            if not track.features:
+            if track.embedding is None:
                 continue
-            embedding = self._track_embedding(track)
+            embedding = track.embedding
             cosine = float(np.max(gallery @ embedding))
             score = self._score(cosine)
             if score < s.score_floor:
@@ -585,18 +728,20 @@ class PerceptionWorker:
                 self._embedding_key(job.case_id, tracklet_id), _to_npy(embedding), "application/x-npy"
             )
             crop_paths = []
-            if track.best_crop is not None:
-                ok, jpeg = cv2.imencode(".jpg", track.best_crop)
-                if ok:
-                    crop_paths.append(
-                        self._put(
-                            f"cases/{job.case_id}/perception/crops/{tracklet_id}.jpg",
-                            jpeg.tobytes(),
-                            "image/jpeg",
-                        )
+            if track.best_crop_jpeg is not None:
+                crop_paths.append(
+                    self._put(
+                        f"cases/{job.case_id}/perception/crops/{tracklet_id}.jpg",
+                        track.best_crop_jpeg,
+                        "image/jpeg",
                     )
-            at_start = (track.first_ts - window.t_from).total_seconds() <= 1.5 * step
-            at_end = (window.t_to - track.last_ts).total_seconds() <= 1.5 * step
+                )
+            at_start = (
+                track.first_ts - extraction.t_from
+            ).total_seconds() <= 1.5 * step
+            at_end = (
+                extraction.t_to - track.last_ts
+            ).total_seconds() <= 1.5 * step
             tracklets.append(
                 Tracklet(
                     id=tracklet_id,
@@ -612,10 +757,10 @@ class PerceptionWorker:
                     clipped_out=at_end,
                     crop_paths=crop_paths,
                     embedding_path=embedding_key,
-                    clip_ref={"archive_id": window.archive_id},
+                    clip_ref={"archive_id": extraction.archive_id},
                     trajectory=trajectory_from_path(
-                        track.path,
-                        track.path_confidences,
+                        list(track.path),
+                        list(track.path_confidences),
                         frame_size_px=track.frame_size_px,
                     ),
                 )

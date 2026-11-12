@@ -45,3 +45,6 @@ class PerceptionSettings(BaseModel):
     calib_b: float = -15.49
     score_floor: float = 0.1
     calibration_version: str = "osnet-ain-market1501-logit-v1"
+    extraction_cache_dir: str | None = None
+    refresh_extraction_cache: bool = False
+    camera_calibration_checksums: dict[str, str] = Field(default_factory=dict)
