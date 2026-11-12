@@ -58,12 +58,18 @@ def trajectory_from_path(
     confidences: list[float | None] | None = None,
     *,
     limit: int = 256,
+    frame_size_px: tuple[int, int] | None = None,
 ) -> list[TrajectoryPoint]:
     """Convert bbox history to deterministic bottom-centre foot points."""
     confidence_values = confidences or [None] * len(path)
     points: list[TrajectoryPoint] = []
     for index in _downsample_indices(len(path), limit):
         timestamp, (x1, _y1, x2, y2) = path[index]
+        if frame_size_px is not None:
+            width, height = frame_size_px
+            x1 = min(max(x1, 0.0), float(width))
+            x2 = min(max(x2, 0.0), float(width))
+            y2 = min(max(y2, 0.0), float(height))
         confidence = (
             confidence_values[index] if index < len(confidence_values) else None
         )
@@ -176,6 +182,7 @@ class _Track:
     last_ts: datetime
     bbox_first: tuple[float, float, float, float]
     bbox_last: tuple[float, float, float, float]
+    frame_size_px: tuple[int, int]
     frames: int = 0
     good_frames: int = 0
     best_crop: np.ndarray | None = None
@@ -215,7 +222,13 @@ class PerceptionWorker:
 
             s = self.settings
             self._detector = YoloByteTrack(
-                s.detector_weights, s.tracker, pick_device(s.device), s.det_conf, s.imgsz
+                s.detector_weights,
+                s.tracker,
+                pick_device(s.device),
+                s.det_conf,
+                s.imgsz,
+                s.sample_fps,
+                s.track_lost_buffer_s,
             )
         return self._detector
 
@@ -472,7 +485,14 @@ class PerceptionWorker:
                 box = _xywh(xyxy)
                 track = tracks.get(track_id)
                 if track is None:
-                    track = _Track(first_ts=ts, last_ts=ts, bbox_first=box, bbox_last=box)
+                    height, width = frame.shape[:2]
+                    track = _Track(
+                        first_ts=ts,
+                        last_ts=ts,
+                        bbox_first=box,
+                        bbox_last=box,
+                        frame_size_px=(width, height),
+                    )
                     tracks[track_id] = track
                 track.last_ts = ts
                 track.bbox_last = box
@@ -594,7 +614,9 @@ class PerceptionWorker:
                     embedding_path=embedding_key,
                     clip_ref={"archive_id": window.archive_id},
                     trajectory=trajectory_from_path(
-                        track.path, track.path_confidences
+                        track.path,
+                        track.path_confidences,
+                        frame_size_px=track.frame_size_px,
                     ),
                 )
             )

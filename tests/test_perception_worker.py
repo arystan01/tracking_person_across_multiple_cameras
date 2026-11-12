@@ -9,6 +9,7 @@ from javes_contracts import ArtifactRef, PerceptionProbeJob, TargetGalleryComman
 from javes_contracts.acceptance import check_gallery_result, check_probe_result
 from javes_main.adapters.artifacts import InMemoryArtifactStore
 from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
+from javes_perception.core.models import _byte_tracker_args
 from javes_perception.core.worker import trajectory_from_path
 from javes_perception.runtime.state import PerceptionStateStore
 from javes_perception.runtime.video import DecodeError, VideoWindow
@@ -64,6 +65,42 @@ class FakeDetector:
         if frame[100, 230].any():
             found.append((2, (200.0, 20.0, 260.0, 180.0), 0.9))
         return found
+
+
+class EdgeClippedArchive:
+    def has(self, camera_id):
+        return camera_id == "cam_1"
+
+    def window(self, camera_id, t_from, t_to):
+        return VideoWindow(
+            camera_id,
+            t_from,
+            min(t_to, t_from + timedelta(seconds=1)),
+            1.0,
+            "edge-clipped",
+        )
+
+    def frames(self, window, sample_fps):
+        for index in range(6):
+            frame = np.zeros((200, 300, 3), np.uint8)
+            frame[:] = RED
+            yield window.t_from + timedelta(seconds=index / 5), frame
+
+
+class EdgeClippedDetector:
+    def __init__(self):
+        self.index = 0
+
+    def reset(self):
+        self.index = 0
+
+    def detect(self, frame):
+        return [((0.0, 0.0, float(frame.shape[1]), float(frame.shape[0])), 0.9)]
+
+    def track(self, frame):
+        x1 = 0.0 if self.index in {2, 3} else 20.0
+        self.index += 1
+        return [(1, (x1, 20.0, x1 + 60.0, 180.0), 0.9)]
 
 
 def fake_embedder(crops):
@@ -154,6 +191,118 @@ def test_trajectory_downsampling_is_deterministic_and_keeps_endpoints():
     assert [point.timestamp for point in first] == sorted(
         point.timestamp for point in first
     )
+
+
+def test_trajectory_clamps_tracked_foot_point_to_visible_frame_boundary():
+    path = [
+        (T0, (-4.0, 900.0, 36.0, 1081.8)),
+        (T0 + timedelta(milliseconds=200), (1900.0, 910.0, 1932.0, 1083.0)),
+    ]
+
+    trajectory = trajectory_from_path(
+        path,
+        [0.8, 0.7],
+        frame_size_px=(1920, 1080),
+    )
+
+    assert [(point.x_px, point.y_px) for point in trajectory] == [
+        (18.0, 1080.0),
+        (1910.0, 1080.0),
+    ]
+
+
+@pytest.mark.parametrize("sample_fps", [1.5, 5.0])
+def test_bytetrack_lost_buffer_uses_wall_clock_time(sample_fps):
+    pytest.importorskip("ultralytics")
+    from ultralytics.engine.results import Boxes
+    from ultralytics.trackers.byte_tracker import BYTETracker
+
+    def detections(rows):
+        values = np.asarray(rows, dtype=np.float32).reshape(-1, 6)
+        return Boxes(values, (1080, 1920)).cpu().numpy()
+
+    def ids(output):
+        values = np.asarray(output)
+        if values.size == 0:
+            return []
+        return [int(row[4]) for row in np.atleast_2d(values)]
+
+    tracker = BYTETracker(
+        _byte_tracker_args("bytetrack.yaml", sample_fps, 8.0)
+    )
+    first_id = ids(
+        tracker.update(detections([[100, 100, 150, 250, 0.9, 0]]))
+    )[0]
+    for _ in range(int(sample_fps * 7.0)):
+        tracker.update(detections([]))
+    assert ids(
+        tracker.update(detections([[100, 100, 150, 250, 0.9, 0]]))
+    ) == [first_id]
+
+
+@pytest.mark.parametrize("sample_fps", [1.5, 5.0])
+def test_bytetrack_does_not_reuse_id_after_wall_clock_buffer(sample_fps):
+    pytest.importorskip("ultralytics")
+    from ultralytics.engine.results import Boxes
+    from ultralytics.trackers.byte_tracker import BYTETracker
+
+    def detections(rows):
+        values = np.asarray(rows, dtype=np.float32).reshape(-1, 6)
+        return Boxes(values, (1080, 1920)).cpu().numpy()
+
+    def ids(output):
+        values = np.asarray(output)
+        if values.size == 0:
+            return []
+        return [int(row[4]) for row in np.atleast_2d(values)]
+
+    tracker = BYTETracker(
+        _byte_tracker_args("bytetrack.yaml", sample_fps, 8.0)
+    )
+    first_id = ids(
+        tracker.update(detections([[100, 100, 150, 250, 0.9, 0]]))
+    )[0]
+    for _ in range(int(sample_fps * 9.0) + 1):
+        tracker.update(detections([]))
+    tracker.update(detections([[100, 100, 150, 250, 0.9, 0]]))
+    replacement = ids(
+        tracker.update(detections([[100, 100, 150, 250, 0.9, 0]]))
+    )
+    assert replacement and replacement[0] != first_id
+
+
+def test_edge_clipped_detections_stay_in_confirmed_trajectory_not_embedding():
+    settings = PerceptionSettings(
+        cameras={"cam_1": CameraSource(path="unused.mp4", start=T0)},
+        sample_fps=5.0,
+        min_crop_height=10,
+        embed_every=1,
+        score_floor=0.1,
+    )
+    artifacts = InMemoryArtifactStore()
+    embedded_crops = []
+
+    def recording_embedder(crops):
+        embedded_crops.extend(crops)
+        return fake_embedder(crops)
+
+    worker = PerceptionWorker(
+        settings,
+        artifacts,
+        detector=EdgeClippedDetector(),
+        embedder=recording_embedder,
+        archive=EdgeClippedArchive(),
+    )
+    result = worker.execute(
+        job(add_reference(worker, artifacts), t_from=0, t_to=1),
+        T0 + timedelta(seconds=2),
+    )
+    assert result.status == ProbeStatus.DONE
+    assert len(result.tracklets) == 1
+    assert len(result.tracklets[0].trajectory or []) == 6
+    # One reference crop plus four non-edge track crops were embedded.  The
+    # two clipped detections remain geometric evidence but are not Re-ID input.
+    assert len(embedded_crops) == 5
 
 
 def test_retry_gives_same_ids():

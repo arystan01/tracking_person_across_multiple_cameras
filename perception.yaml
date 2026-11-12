@@ -16,6 +16,7 @@ reid_weights: models/osnet_ain_x1_0_msmt17.pt
 model_version: osnet_ain_x1_0_msmt17
 device: auto          # cuda / mps / cpu
 sample_fps: 5
+track_lost_buffer_s: 8  # wall-clock retention; converted to sampled ByteTrack frames
 min_track_frames: 3
 embed_every: 2
 min_embed_conf: 0.4   # crops below this detector confidence are not used for Re-ID

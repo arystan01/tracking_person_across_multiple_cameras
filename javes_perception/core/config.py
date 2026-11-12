@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from javes_contracts.boundary import aware_utc
 
@@ -30,7 +30,8 @@ class PerceptionSettings(BaseModel):
     reid_weights: str = "models/osnet_ain_x1_0_msmt17.pt"
     model_version: str = "osnet_ain_x1_0_msmt17"
     device: str = "auto"
-    sample_fps: float = 5.0
+    sample_fps: float = Field(default=5.0, gt=0.0)
+    track_lost_buffer_s: float = Field(default=8.0, gt=0.0)
     det_conf: float = 0.1
     imgsz: int = 640
     min_track_frames: int = 3
