@@ -31,4 +31,3 @@ def test_report_uses_content_addressed_route_svg(tmp_path) -> None:
     assert (output_root / f"index-{digest}.html").read_text() == page
     assert (output_root / route_filename).read_bytes() == route_svg
     assert (run_root / route_filename).read_bytes() == route_svg
-

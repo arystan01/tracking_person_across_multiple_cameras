@@ -62,24 +62,81 @@ def nvidia_pixel_to_map_homographies(
 ) -> dict[str, list[list[float]]]:
     """Compose NVIDIA world/camera transforms into pixel-to-map matrices."""
 
-    import numpy as np
     import yaml
 
     transforms = yaml.safe_load((fixture / "transforms.yml").read_text())
-    world_to_map = np.asarray(transforms["T_ov2px"], dtype=float).reshape(3, 3)
+    world_to_map = _matrix3(transforms["T_ov2px"])
     result: dict[str, list[list[float]]] = {}
     for camera in camera_ids:
         raw = yaml.safe_load(
             (fixture / "camInfo" / f"Warehouse_Synthetic_{camera}.yml").read_text()
         )
-        projection = np.asarray(
-            raw["projectionMatrix_3x4_w2p"], dtype=float
-        ).reshape(3, 4)
-        ground_plane_to_pixel = projection[:, [0, 1, 3]]
-        pixel_to_map = world_to_map @ np.linalg.inv(ground_plane_to_pixel)
-        pixel_to_map /= pixel_to_map[2, 2]
-        result[camera] = pixel_to_map.tolist()
+        projection_values = [
+            float(value) for value in raw["projectionMatrix_3x4_w2p"]
+        ]
+        if len(projection_values) != 12:
+            raise ValueError(f"invalid projection matrix for {camera}")
+        projection = [
+            projection_values[index : index + 4] for index in range(0, 12, 4)
+        ]
+        ground_plane_to_pixel = [
+            [row[0], row[1], row[3]] for row in projection
+        ]
+        pixel_to_map = _matmul3(world_to_map, _inverse3(ground_plane_to_pixel))
+        scale = pixel_to_map[2][2]
+        if abs(scale) <= 1e-12:
+            raise ValueError(f"singular map homography for {camera}")
+        result[camera] = [
+            [value / scale for value in row] for row in pixel_to_map
+        ]
     return result
+
+
+def _matrix3(values: list[float]) -> list[list[float]]:
+    flattened = [float(value) for value in values]
+    if len(flattened) != 9:
+        raise ValueError("expected a 3x3 matrix")
+    return [flattened[index : index + 3] for index in range(0, 9, 3)]
+
+
+def _matmul3(
+    left: list[list[float]],
+    right: list[list[float]],
+) -> list[list[float]]:
+    return [
+        [
+            sum(left[row][item] * right[item][column] for item in range(3))
+            for column in range(3)
+        ]
+        for row in range(3)
+    ]
+
+
+def _inverse3(matrix: list[list[float]]) -> list[list[float]]:
+    a, b, c = matrix[0]
+    d, e, f = matrix[1]
+    g, h, i = matrix[2]
+    determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    if abs(determinant) <= 1e-12:
+        raise ValueError("singular 3x3 matrix")
+    inverse_determinant = 1.0 / determinant
+    return [
+        [
+            (e * i - f * h) * inverse_determinant,
+            (c * h - b * i) * inverse_determinant,
+            (b * f - c * e) * inverse_determinant,
+        ],
+        [
+            (f * g - d * i) * inverse_determinant,
+            (a * i - c * g) * inverse_determinant,
+            (c * d - a * f) * inverse_determinant,
+        ],
+        [
+            (d * h - e * g) * inverse_determinant,
+            (b * g - a * h) * inverse_determinant,
+            (a * e - b * d) * inverse_determinant,
+        ],
+    ]
 
 
 def project_pixel(
@@ -87,11 +144,12 @@ def project_pixel(
     x: float,
     y: float,
 ) -> tuple[float, float]:
-    import numpy as np
-
-    projected = np.asarray(homography, dtype=float) @ np.asarray([x, y, 1.0])
-    projected /= projected[2]
-    return float(projected[0]), float(projected[1])
+    projected = [
+        row[0] * x + row[1] * y + row[2] for row in homography
+    ]
+    if abs(projected[2]) <= 1e-12:
+        raise ValueError("pixel projects to infinity")
+    return projected[0] / projected[2], projected[1] / projected[2]
 
 
 def clip_video_window(
