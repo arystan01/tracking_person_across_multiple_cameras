@@ -1,14 +1,13 @@
 """Detection, tracking, Re-ID and probe processing."""
 
 from .config import CameraSource, PerceptionSettings
-from .extraction import (
-    ExtractedTrack,
-    ExtractionBundle,
-    FilesystemExtractionCache,
-)
 
 
 def __getattr__(name: str):
+    if name in {"ExtractedTrack", "ExtractionBundle", "FilesystemExtractionCache"}:
+        from . import extraction
+
+        return getattr(extraction, name)
     if name == "PerceptionWorker":
         from .worker import PerceptionWorker
 
