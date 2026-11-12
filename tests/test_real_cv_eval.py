@@ -47,6 +47,7 @@ def _manifest() -> dict:
                         "camera_id": camera,
                         "time_s": 1,
                         "bbox_xyxy": [10, 10, 30, 70],
+                        "coordinate_frame_px": [1920, 1080],
                     },
                     "last_known_camera": camera,
                     "last_known_time_s": 1,
@@ -64,6 +65,7 @@ def _manifest() -> dict:
                             "camera_id": camera,
                             "time_s": 1,
                             "foot_point_px": [20, 70],
+                            "coordinate_frame_px": [1920, 1080],
                         }
                     ],
                     "branch_outcomes": (

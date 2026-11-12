@@ -44,13 +44,33 @@ class ReferenceCrop(EvalModel):
     camera_id: str
     time_s: float = Field(ge=0.0)
     bbox_xyxy: tuple[int, int, int, int]
+    coordinate_frame_px: tuple[int, int]
 
     @model_validator(mode="after")
     def _ordered_bbox(self) -> ReferenceCrop:
         x1, y1, x2, y2 = self.bbox_xyxy
+        width, height = self.coordinate_frame_px
+        if width <= 0 or height <= 0:
+            raise ValueError("reference coordinate frame must be positive")
         if x2 <= x1 or y2 <= y1:
             raise ValueError("reference bbox must have positive area")
+        if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+            raise ValueError("reference bbox must fit its coordinate frame")
         return self
+
+    def bbox_for_frame(
+        self, frame_size_px: tuple[int, int]
+    ) -> tuple[int, int, int, int]:
+        source_width, source_height = self.coordinate_frame_px
+        target_width, target_height = frame_size_px
+        sx, sy = target_width / source_width, target_height / source_height
+        x1, y1, x2, y2 = self.bbox_xyxy
+        return (
+            round(x1 * sx),
+            round(y1 * sy),
+            round(x2 * sx),
+            round(y2 * sy),
+        )
 
 
 class ScenarioSystemInput(EvalModel):
@@ -96,14 +116,30 @@ class OracleCheckpoint(EvalModel):
     time_s: float = Field(ge=0.0)
     bbox_xyxy: tuple[int, int, int, int] | None = None
     foot_point_px: tuple[float, float]
+    coordinate_frame_px: tuple[int, int]
     hidden_from_system: bool = False
     calibration_error_m: float = Field(default=0.5, ge=0.0)
+
+    @model_validator(mode="after")
+    def _valid_coordinate_frame(self) -> OracleCheckpoint:
+        width, height = self.coordinate_frame_px
+        if width <= 0 or height <= 0:
+            raise ValueError("checkpoint coordinate frame must be positive")
+        x, y = self.foot_point_px
+        if x < 0 or y < 0 or x > width or y > height:
+            raise ValueError("checkpoint foot point must fit its coordinate frame")
+        return self
 
 
 class OracleBranchOutcome(EvalModel):
     lost_at_s: float = Field(ge=0.0)
     checkpoint_times_s: list[float]
-    true_edge_ids: list[str]
+    true_edge_ids: list[str] = Field(
+        description=(
+            "Permitted first walk-graph edges after the last observed position; "
+            "downstream edges on the same route are not separate branch choices."
+        )
+    )
     kind: Literal["BLIND_GAP", "NO_RETURN", "REENTRY", "OUTSIDE"]
 
 
@@ -206,7 +242,10 @@ def checkpoint_map_position(
     calibration = camera.calibration
     if calibration is None:
         raise ValueError(f"{checkpoint.camera_id} has no immutable calibration")
-    x_px, y_px = checkpoint.foot_point_px
+    source_width, source_height = checkpoint.coordinate_frame_px
+    target_width, target_height = calibration.frame_size_px
+    x_px = checkpoint.foot_point_px[0] * target_width / source_width
+    y_px = checkpoint.foot_point_px[1] * target_height / source_height
     matrix = calibration.homography
     denominator = matrix[2][0] * x_px + matrix[2][1] * y_px + matrix[2][2]
     if abs(denominator) < 1e-12:
@@ -225,6 +264,15 @@ def checkpoint_in_reachable_area(
     scale = floor_scale(graph, floor_id)
     if scale is None:
         return False
+    floor = next(
+        (item for item in graph.map.floors if item.id == floor_id),
+        None,
+    ) if graph.map is not None else None
+    if floor is not None and any(
+        _point_in_polygon((x, y), polygon)
+        for polygon in floor.blocked_polygons
+    ):
+        return False
     for segment in estimate.reachable_segments:
         if segment.floor_id != floor_id:
             continue
@@ -232,6 +280,23 @@ def checkpoint_in_reachable_area(
         if distance is not None and distance <= segment.width_m / 2.0 + error_m:
             return True
     return False
+
+
+def _point_in_polygon(
+    point: tuple[float, float], polygon: list[tuple[float, float]]
+) -> bool:
+    x, y = point
+    inside = False
+    previous = polygon[-1]
+    for current in polygon:
+        x1, y1 = previous
+        x2, y2 = current
+        if (y1 > y) != (y2 > y):
+            boundary_x = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < boundary_x:
+                inside = not inside
+        previous = current
+    return inside
 
 
 def evaluate_reachability(
@@ -361,7 +426,8 @@ def _reference_jpeg(video: Path, reference: ReferenceCrop) -> bytes:
     capture.release()
     if not ok:
         raise AssertionError(f"cannot read reference from {video}")
-    x1, y1, x2, y2 = reference.bbox_xyxy
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = reference.bbox_for_frame((width, height))
     crop = frame[y1:y2, x1:x2]
     if crop.size == 0:
         raise AssertionError(f"empty reference crop for {reference.camera_id}")
@@ -381,8 +447,21 @@ def _route_checkpoint_errors(
     if best is None:
         return [math.inf] * len(scenario.oracle.checkpoints), 0, 0
     errors: list[float] = []
-    false_associations = 0
-    associations = 0
+    route_visits = [
+        visit for visit in best.visits if visit.tracklet_ids
+    ]
+    associations = len(route_visits)
+    false_associations = sum(
+        not any(
+            sighting.camera_id == visit.camera
+            and visit.t_out
+            >= base + timedelta(seconds=sighting.t_in_s - 0.25)
+            and visit.t_in
+            <= base + timedelta(seconds=sighting.t_out_s + 0.25)
+            for sighting in scenario.oracle.sightings
+        )
+        for visit in route_visits
+    )
     for checkpoint in scenario.oracle.checkpoints:
         if checkpoint.hidden_from_system:
             continue
@@ -397,15 +476,11 @@ def _route_checkpoint_errors(
             and abs((point.timestamp - base).total_seconds() - checkpoint.time_s)
             <= 2.0
         ]
-        associations += 1
         if not candidates or scale is None:
             errors.append(math.inf)
-            false_associations += 1
             continue
         error = min(math.hypot(point.x - x, point.y - y) * scale for point in candidates)
         errors.append(error)
-        if error > 1.5:
-            false_associations += 1
     return errors, false_associations, associations
 
 
@@ -436,6 +511,7 @@ def run_real_cv_evaluation(
     from javes_perception.core.extraction import FilesystemExtractionCache
     from javes_perception.runtime.video import LocalVideoArchive
     from javes_routing.core.params import RoutingParams
+    from javes_routing.core.predict import compute_estimate
     from javes_routing.core.render import render_route_maps
     from javes_routing.core.site import parse_site
     from javes_routing.core.step import init_state, step
@@ -515,16 +591,18 @@ def run_real_cv_evaluation(
                 model_version=settings.model_version,
             )
         )
-        reference_bbox = system.reference.bbox_xyxy
+        calibration = graph.cameras[system.reference.camera_id].calibration
+        if calibration is None:
+            raise AssertionError("reference camera requires immutable calibration")
+        reference_bbox = system.reference.bbox_for_frame(calibration.frame_size_px)
         footpoint = (
             (reference_bbox[0] + reference_bbox[2]) / 2.0,
             float(reference_bbox[3]),
         )
         case = CaseInfo(
             case_id=case_id,
+            target_id=scenario.oracle.global_identity,
             start_time=base + timedelta(seconds=system.window_start_s),
-            site_version=graph.version,
-            params_version=params.version,
             window_start=base + timedelta(seconds=system.window_start_s),
             window_end=base + timedelta(seconds=system.window_end_s),
             last_known_camera=system.last_known_camera,
@@ -539,6 +617,7 @@ def run_real_cv_evaluation(
         )
         now = base + timedelta(seconds=system.window_end_s)
         result = step(state, [], graph, anchors, params, now)
+        result_history = [result]
         all_probe_results: list[ProbeResult] = []
         failures: list[str] = []
         for _round in range(80):
@@ -546,6 +625,7 @@ def run_real_cv_evaluation(
                 break
             if not result.probes:
                 result = step(result.state, [], graph, anchors, params, now)
+                result_history.append(result)
                 continue
             round_results: list[ProbeResult] = []
             for probe in result.probes:
@@ -570,8 +650,36 @@ def run_real_cv_evaluation(
                 )
                 probe_result = worker.execute(job, now)
                 round_results.append(probe_result)
+            # Main may trigger Routing after each independent worker callback.
+            # Replay the same immutable results on a throw-away state in
+            # observation-completion order so the evaluator can inspect the
+            # transient search area before a later sighting closes it.  The
+            # authoritative E2E state below still consumes the original batch.
+            callback_result = result
+            for callback in sorted(
+                round_results,
+                key=lambda item: (
+                    min(
+                        (tracklet.t_out for tracklet in item.tracklets),
+                        default=now + timedelta(days=1),
+                    ),
+                    item.probe_id,
+                ),
+            ):
+                if callback_result.done:
+                    break
+                callback_result = step(
+                    callback_result.state,
+                    [callback],
+                    graph,
+                    anchors,
+                    params,
+                    now,
+                )
+                result_history.append(callback_result)
             all_probe_results.extend(round_results)
             result = step(result.state, round_results, graph, anchors, params, now)
+            result_history.append(result)
         else:
             failures.append("routing exceeded 80 rounds")
 
@@ -579,6 +687,8 @@ def run_real_cv_evaluation(
             result, scenario, graph, base
         )
         reachability_metrics = []
+        reachability_snapshots = []
+        reachability_debug = []
         if result.estimate is not None:
             hidden = [
                 item for item in scenario.oracle.checkpoints if item.hidden_from_system
@@ -594,23 +704,138 @@ def run_real_cv_evaluation(
                     for item in hidden
                     if any(abs(item.time_s - value) <= 0.51 for value in outcome.checkpoint_times_s)
                 ]
-                reachability_metrics.append(
-                    evaluate_reachability(
-                        result.estimate,
-                        graph,
-                        matching,
-                        hidden_negative,
-                        true_edge_ids=outcome.true_edge_ids,
+                matching_negative = [
+                    item
+                    for item in hidden_negative
+                    if any(
+                        abs(item.time_s - value) <= 0.51
+                        for value in outcome.checkpoint_times_s
                     )
+                ]
+                candidates = [
+                    snapshot
+                    for snapshot in result_history
+                    if snapshot.estimate is not None
+                    and snapshot.estimate.reachable_segments
+                    and snapshot.estimate.last_observed_time is not None
+                ]
+                snapshot = min(
+                    candidates,
+                    key=lambda item: (
+                        abs(
+                            (
+                                item.estimate.last_observed_time
+                                - (base + timedelta(seconds=outcome.lost_at_s))
+                            ).total_seconds()
+                        ),
+                        item.state.state_version,
+                    ),
+                    default=None,
                 )
+                if snapshot is None:
+                    failures.append(
+                        f"no reachable snapshot for {outcome.kind} at {outcome.lost_at_s:.1f}s"
+                    )
+                    continue
+                snapshot_delta_s = abs(
+                    (
+                        snapshot.estimate.last_observed_time
+                        - (base + timedelta(seconds=outcome.lost_at_s))
+                    ).total_seconds()
+                )
+                if snapshot_delta_s > 0.6:
+                    failures.append(
+                        f"no reachable snapshot aligned with {outcome.kind} "
+                        f"loss at {outcome.lost_at_s:.1f}s"
+                    )
+                    continue
+                if not matching:
+                    failures.append(
+                        f"{outcome.kind} at {outcome.lost_at_s:.1f}s has no hidden oracle checkpoint"
+                    )
+                    continue
+                checkpoint_now = base + timedelta(
+                    seconds=max(outcome.checkpoint_times_s)
+                )
+                timed_estimate = compute_estimate(
+                    snapshot.state.hypotheses,
+                    graph,
+                    checkpoint_now,
+                    snapshot.state,
+                    params,
+                )
+                timed_snapshot = snapshot.model_copy(
+                    update={"estimate": timed_estimate}
+                )
+                reachability_snapshots.append(timed_snapshot)
+                reachability_debug.append(
+                    {
+                        "kind": outcome.kind,
+                        "lost_at_s": outcome.lost_at_s,
+                        "checkpoint_times_s": outcome.checkpoint_times_s,
+                        "snapshot_last_observed_time": (
+                            timed_estimate.last_observed_time.isoformat()
+                            if timed_estimate.last_observed_time
+                            else None
+                        ),
+                        "top_segments": [
+                            {
+                                "edge_id": segment.edge_id,
+                                "probability": segment.probability,
+                                "progress": segment.progress,
+                            }
+                            for segment in sorted(
+                                timed_estimate.reachable_segments,
+                                key=lambda item: (-item.probability, item.edge_id),
+                            )[:8]
+                        ],
+                    }
+                )
+                metric = evaluate_reachability(
+                    timed_estimate,
+                    graph,
+                    matching,
+                    matching_negative,
+                    true_edge_ids=outcome.true_edge_ids,
+                )
+                reachability_metrics.append(metric)
+                if metric.containment_ratio < 0.90:
+                    failures.append(
+                        f"hidden checkpoint outside reachable area at {outcome.checkpoint_times_s}"
+                    )
+                if metric.true_branch_rank is None or metric.true_branch_rank > 2:
+                    failures.append(
+                        f"true branch is not top-2 at {outcome.checkpoint_times_s}"
+                    )
+                if metric.negative_rejected != metric.negative_total:
+                    failures.append(
+                        f"negative checkpoint included at {outcome.checkpoint_times_s}"
+                    )
         finite_errors = [item for item in errors if math.isfinite(item)]
         if len(finite_errors) != len(errors):
             failures.append("one or more oracle checkpoints were not associated")
         if finite_errors and median(finite_errors) > 0.75:
             failures.append("median positional error exceeds 0.75 m")
+        expects_real_tracklet = any(
+            sighting.camera_id in system.available_cameras
+            and sighting.t_out_s > system.last_known_time_s + 0.5
+            for sighting in scenario.oracle.sightings
+        )
+        if expects_real_tracklet and association_count == 0:
+            failures.append("best route contains no real Perception tracklet")
         if false_count / association_count > 0.05 if association_count else False:
             failures.append("false identity association exceeds 5%")
-        rendered = render_route_maps(result, graph, {"warehouse": map_bytes})
+        presentation_result = (
+            max(
+                reachability_snapshots,
+                key=lambda item: item.estimate.last_observed_time,
+            )
+            if reachability_snapshots
+            else result
+        )
+        rendered = render_route_maps(
+            presentation_result, graph, {"warehouse": map_bytes}
+        )
         route_svg = rendered.maps[0].svg.encode()
         scenario_output = output / scenario.id
         run_root = scenario_output / "runs" / "evaluation"
@@ -623,6 +848,12 @@ def run_real_cv_evaluation(
             "cache_hits": worker.extraction_cache_hits - before_hits,
             "cache_misses_total": worker.extraction_cache_misses,
             "positional_errors_m": errors,
+            "reachability_snapshot_state_version": (
+                presentation_result.state.state_version
+                if presentation_result is not result
+                else None
+            ),
+            "reachability_outcomes": reachability_debug,
             "failures": failures,
         }
         report_videos = [
@@ -641,7 +872,7 @@ def run_real_cv_evaluation(
             scenario_output,
             run_root,
             route_svg=route_svg,
-            case_view=result.model_dump(mode="json"),
+            case_view=presentation_result.model_dump(mode="json"),
             probe_results=[item.model_dump(mode="json") for item in all_probe_results],
             report=report,
             videos=report_videos,
