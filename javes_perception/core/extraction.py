@@ -207,6 +207,9 @@ class FilesystemExtractionCache:
     def __init__(self, root: Path, *, refresh: bool = False) -> None:
         self.root = root
         self.refresh = refresh
+        # A cold evaluation must ignore bundles left by earlier runs, while still
+        # sharing each freshly extracted bundle between targets in this process.
+        self._written_this_run: set[str] = set()
 
     def _path(self, fingerprint: str) -> Path:
         if len(fingerprint) != 64 or any(c not in "0123456789abcdef" for c in fingerprint):
@@ -214,7 +217,7 @@ class FilesystemExtractionCache:
         return self.root / fingerprint[:2] / f"{fingerprint}.zip"
 
     def get(self, fingerprint: str) -> ExtractionBundle | None:
-        if self.refresh:
+        if self.refresh and fingerprint not in self._written_this_run:
             return None
         path = self._path(fingerprint)
         if not path.is_file():
@@ -226,9 +229,12 @@ class FilesystemExtractionCache:
 
     def put(self, bundle: ExtractionBundle) -> None:
         path = self._path(bundle.fingerprint)
-        if path.is_file() and not self.refresh:
+        if path.is_file() and (
+            not self.refresh or bundle.fingerprint in self._written_this_run
+        ):
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(f".{os.getpid()}.tmp")
         temporary.write_bytes(bundle.to_bytes())
         temporary.replace(path)
+        self._written_this_run.add(bundle.fingerprint)

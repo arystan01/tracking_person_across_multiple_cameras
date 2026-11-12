@@ -326,7 +326,8 @@ def test_retry_gives_same_ids():
 
 
 def test_extraction_cache_is_target_independent_and_survives_restart(tmp_path):
-    cache = FilesystemExtractionCache(tmp_path / "extraction-cache")
+    cache_root = tmp_path / "extraction-cache"
+    cache = FilesystemExtractionCache(cache_root)
     worker, artifacts = make_worker()
     worker.extraction_cache = cache
     reference = add_reference(worker, artifacts)
@@ -351,6 +352,14 @@ def test_extraction_cache_is_target_independent_and_survives_restart(tmp_path):
     assert restarted.extraction_cache_hits == 1
     assert restarted.extraction_cache_misses == 0
     assert second == first
+
+    fingerprint = next(cache_root.rglob("*.zip")).stem
+    bundle = cache.get(fingerprint)
+    assert bundle is not None
+    refreshed = FilesystemExtractionCache(cache_root, refresh=True)
+    assert refreshed.get(fingerprint) is None
+    refreshed.put(bundle)
+    assert refreshed.get(fingerprint).fingerprint == fingerprint
 
 
 def test_extraction_fingerprint_excludes_target_but_pins_calibration():
