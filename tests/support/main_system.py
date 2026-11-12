@@ -3,29 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from javes_contracts import FakeObservation, SiteGraph
-from javes_fakes import (
+from javes_contracts import SiteGraph
+from tests.support.fakes import (
     ArchiveWindow,
     FakeClipWorker,
+    FakeObservation,
     FakePerceptionWorker,
     FakeRetentionWorker,
     FakeVideoArchive,
 )
 from javes_routing.core.params import RoutingParams
 
-from .adapters import (
-    FakeClipAdapter,
-    FakePerceptionAdapter,
-    FakeRetentionAdapter,
+from javes_main.adapters import (
     InMemoryArtifactStore,
     InMemoryLiveFeedStore,
     InMemorySiteConfig,
     LocalRoutingAdapter,
 )
-from .adapters.system import ContentIdGenerator, FixedClock, SystemClock
-from .application import AuthService, CaseManager, DEFAULT_RETENTION_TTL_S
-from .domain import UserAccount
-from .ports import (
+from javes_main.adapters.system import ContentIdGenerator, FixedClock, SystemClock
+from javes_main.application import AuthService, CaseManager, DEFAULT_RETENTION_TTL_S
+from javes_main.domain import UserAccount
+from javes_main.ports import (
     ArtifactStore,
     CaseRepository,
     ClipPort,
@@ -37,8 +35,13 @@ from .ports import (
     RoutingPort,
     SiteConfigPort,
 )
-from .persistence import InMemoryRepository
-from .scheduler import OutboxDispatcher, RoutingTriggerDispatcher, SchedulerRunner
+from javes_main.persistence import InMemoryRepository
+from javes_main.scheduler import OutboxDispatcher, RoutingTriggerDispatcher, SchedulerRunner
+from tests.support.fake_workers import (
+    FakeClipAdapter,
+    FakePerceptionAdapter,
+    FakeRetentionAdapter,
+)
 
 
 @dataclass

@@ -126,17 +126,6 @@ class Candidate(ContractModel):
     cosine: float | None = None
     calibration_version: str | None = None
     association_id: str | None = None
-    # Legacy convenience only. Tracklet is authoritative on the wire.
-    camera: str | None = Field(default=None, exclude=True)
-    t_in: datetime | None = Field(default=None, exclude=True)
-    t_out: datetime | None = Field(default=None, exclude=True)
-
-    @field_validator("t_in", "t_out", mode="after")
-    @classmethod
-    def _aware_optional_times(cls, value: datetime | None) -> datetime | None:
-        return _utc(value)
-
-
 class ProbeStatus(str, Enum):
     DONE = "DONE"
     FAILED = "FAILED"

@@ -463,8 +463,8 @@ def test_real_retention_plugs_into_main_and_deletes_route_bytes(tmp_path):
         event.payload != {"redacted": True}
         for event in app.repository.list_events("case-1")
     )
-    # Legacy fake galleries have no bytes. Production Perception galleries use
-    # shared-store object_key manifests and never synthetic gallery: URIs.
+    # This isolated Main test double has no gallery bytes. Production
+    # Perception uses shared-store object_key manifests.
     assert gallery_deletes == []
     assert all(key in app.artifacts.keys() for key in latest_route_keys)
     assert all(key in app.artifacts.keys() for key in superseded_route_keys)

@@ -5,15 +5,17 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
-from javes_contracts import Candidate, ProbeResult, ProbeStatus, Tracklet
-
-from .contracts import (
-    FakeObservation,
+from javes_contracts import (
+    Candidate,
     PerceptionProbeJob,
+    ProbeResult,
+    ProbeStatus,
     TargetGalleryCommand,
     TargetGalleryResult,
-    aware_utc,
+    Tracklet,
 )
+
+from .models import FakeObservation, aware_utc
 
 
 def _stable_id(prefix: str, *parts: object) -> str:
@@ -84,7 +86,7 @@ class FakePerceptionWorker:
         now: datetime,
         close_stream: bool = False,
     ) -> ProbeResult:
-        now = aware_utc(now)  # type: ignore[assignment]
+        now = aware_utc(now)
         probe = job.probe
         status = self.forced_status_by_probe.get(probe.probe_id)
         if probe.camera in self.unavailable_cameras:

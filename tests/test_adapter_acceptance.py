@@ -28,14 +28,15 @@ from javes_contracts.acceptance import (
     check_site_snapshot,
     check_video_segment_result,
 )
-from javes_fakes import (
+from tests.support.fakes import (
     ArchiveWindow,
     FakeClipWorker,
+    FakeObservation,
     FakePerceptionWorker,
     FakeRetentionWorker,
     FakeVideoArchive,
 )
-from javes_fakes.contracts import FakeObservation, RetentionClass, RetentionResource
+from javes_contracts import RetentionClass, RetentionResource
 from javes_routing.core.site import parse_site
 
 

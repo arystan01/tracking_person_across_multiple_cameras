@@ -180,13 +180,12 @@ def parse_site(
     raw: dict[str, Any],
     params: RoutingParams | None = None,
 ) -> SiteGraph:
-    """Parse both the canonical architecture YAML and the legacy test form."""
+    """Parse and validate a canonical Site Config mapping."""
 
     params = params or RoutingParams()
     allowed_root = {
         "site", "site_id", "version", "timezone", "cameras", "edges",
-        "blind_nodes", "outside", "map", "max_gap_s", "gate_speed",
-        "max_speed", "walk_speed", "tmax_over_ttyp", "walk_graph",
+        "blind_nodes", "outside", "map", "max_gap_s", "walk_graph",
     }
     unknown_root = sorted(set(raw) - allowed_root)
     if unknown_root:
@@ -208,15 +207,6 @@ def parse_site(
     gate_speed = params.gate_speed
     walk_speed = params.walk_speed
     tmax_factor = params.tmax_over_ttyp
-    if "gate_speed" in raw or "max_speed" in raw:
-        logger.warning("site-level gate/max_speed is deprecated; move it to params.yaml")
-        gate_speed = float(raw.get("gate_speed", raw.get("max_speed")))
-    if "walk_speed" in raw:
-        logger.warning("site-level walk_speed is deprecated; move it to params.yaml")
-        walk_speed = float(raw["walk_speed"])
-    if "tmax_over_ttyp" in raw:
-        logger.warning("site-level tmax_over_ttyp is deprecated; move it to params.yaml")
-        tmax_factor = float(raw["tmax_over_ttyp"])
 
     for item in edges_raw:
         if not isinstance(item, dict):

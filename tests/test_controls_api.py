@@ -11,17 +11,11 @@ from javes_contracts import (
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
-    FakeObservation,
     LastKnown,
     LiveFeedUpdate,
     ReviewDecisionBody,
 )
-from javes_fakes import FakeClipWorker, FakePerceptionWorker, FakeRetentionWorker
-from javes_main import assemble_system, build_in_memory_system
 from javes_main.adapters import (
-    FakeClipAdapter,
-    FakePerceptionAdapter,
-    FakeRetentionAdapter,
     FileArtifactStore,
     InMemoryLiveFeedStore,
     InMemorySiteConfig,
@@ -32,6 +26,18 @@ from javes_main.domain import JobState
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
 from javes_routing.core.params import RoutingParams
+from tests.support.fake_workers import (
+    FakeClipAdapter,
+    FakePerceptionAdapter,
+    FakeRetentionAdapter,
+)
+from tests.support.fakes import (
+    FakeClipWorker,
+    FakeObservation,
+    FakePerceptionWorker,
+    FakeRetentionWorker,
+)
+from tests.support.main_system import assemble_system, build_in_memory_system
 
 
 UTC = timezone.utc
@@ -418,7 +424,7 @@ async def test_worker_result_endpoint_requires_token_and_is_idempotent():
             auth=system.auth,
             scheduler=system.scheduler,
             run_fake_jobs_inline=False,
-            worker_token="secret",
+            worker_tokens={"perception": "secret"},
         )
     )
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -465,7 +471,7 @@ async def test_worker_result_endpoint_requires_token_and_is_idempotent():
         replay = await client.post(
             f"/internal/v1/jobs/{job.job_id}/results",
             json=payload,
-            headers={"x-worker-token": "secret"},
+            headers={"authorization": "Bearer secret"},
         )
         assert replay.status_code == 200
         assert replay.json()["revision"] == revision
@@ -479,7 +485,7 @@ async def test_live_feed_metadata_is_worker_only_and_stream_is_case_authorised()
             system.manager,
             auth=system.auth,
             scheduler=system.scheduler,
-            worker_token="worker-secret",
+            worker_tokens={"perception": "worker-secret"},
         )
     )
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -510,7 +516,7 @@ async def test_live_feed_metadata_is_worker_only_and_stream_is_case_authorised()
         accepted = await client.post(
             "/internal/v1/cases/api-case/live",
             json=update.model_dump(mode="json"),
-            headers={"x-worker-token": "worker-secret"},
+            headers={"authorization": "Bearer worker-secret"},
         )
         assert accepted.status_code == 200, accepted.text
         assert accepted.json()["live"]["stream_url"] == "/v1/cases/api-case/live"

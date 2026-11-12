@@ -148,7 +148,7 @@ def test_5_re_entry():
     now += timedelta(seconds=2000)
     pr = ProbeResult(probe_id='px', status=ProbeStatus.DONE, tracklets=[
         Tracklet(id='tx', camera='cam_1', t_in=now, t_out=now+timedelta(seconds=10), bbox_first=(0,0,10,10), bbox_last=(0,0,10,10))
-    ], candidates=[Candidate(tracklet_id='tx', score=0.9, camera='cam_1', t_in=now, t_out=now+timedelta(seconds=10))])
+    ], candidates=[Candidate(tracklet_id='tx', score=0.9)])
 
     res = step(state, [pr], graph, Anchors(), params, now)
     # Check it merged or created new

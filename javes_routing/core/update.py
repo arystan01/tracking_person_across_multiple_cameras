@@ -55,10 +55,6 @@ def _make_id(prefix: str, *parts: object) -> str:
     return f"{prefix}_{hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]}"
 
 
-def _reset_counter() -> None:
-    """Compatibility no-op retained for old callers."""
-
-
 def _point_in_polygon(px: float, py: float, polygon: list[tuple[float, float]]) -> bool:
     if len(polygon) < 3:
         return False

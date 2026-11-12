@@ -77,8 +77,7 @@ class WorkerTaskService:
         self.repository = repository
         self.manager = manager
         self.clock = clock
-        # Hashing produces a fixed-strength HMAC key while retaining backwards
-        # compatibility with short tokens in the legacy in-memory test setup.
+        # Hashing produces a fixed-strength HMAC key from the configured secret.
         self._secret = hashlib.sha256(lease_secret.encode("utf-8")).digest()
 
     @staticmethod

@@ -522,7 +522,7 @@ def test_gap_without_walk_graph_stays_unmapped_and_never_draws_a_line() -> None:
     assert "Estimated between sightings" not in svg
 
 
-def test_renderer_rejects_legacy_endpoint_interpolation_from_saved_state() -> None:
+def test_renderer_rejects_unsupported_endpoint_interpolation_from_saved_state() -> None:
     graph = _graph()
     first = _visit("A", "track-A")
     later = _visit("A", "track-later").model_copy(
@@ -557,7 +557,7 @@ def test_renderer_rejects_legacy_endpoint_interpolation_from_saved_state() -> No
         ),
     )
     hypothesis = Hypothesis(
-        id="h-legacy-gap",
+        id="h-unsupported-gap",
         visits=[first, later],
         transitions=[transition],
         current_node="A",

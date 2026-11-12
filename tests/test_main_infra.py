@@ -11,20 +11,14 @@ from javes_contracts import (
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
-    FakeObservation,
     LastKnown,
     ProbeRequest,
     ProbeResult,
     ProbeStatus,
     ReviewDecisionBody,
 )
-from javes_fakes import FakeClipWorker, FakePerceptionWorker, FakeRetentionWorker
-from javes_main import assemble_system, build_in_memory_system
 from javes_main.application import MetricsService
 from javes_main.adapters import (
-    FakeClipAdapter,
-    FakePerceptionAdapter,
-    FakeRetentionAdapter,
     FileArtifactStore,
     InMemoryLiveFeedStore,
     InMemorySiteConfig,
@@ -35,6 +29,18 @@ from javes_main.persistence import RevisionConflict
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
 from javes_routing.core.params import RoutingParams
+from tests.support.fake_workers import (
+    FakeClipAdapter,
+    FakePerceptionAdapter,
+    FakeRetentionAdapter,
+)
+from tests.support.fakes import (
+    FakeClipWorker,
+    FakeObservation,
+    FakePerceptionWorker,
+    FakeRetentionWorker,
+)
+from tests.support.main_system import assemble_system, build_in_memory_system
 
 
 UTC = timezone.utc

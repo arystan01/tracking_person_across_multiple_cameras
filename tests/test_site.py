@@ -82,16 +82,6 @@ def test_6_edge_compute_t_min():
     edge = next(e for e in site.edges if e.id == "C_to_A")
     assert edge.t_min == 2.0
 
-    # Also test max_speed fallback
-    config_fallback = valid_config()
-    config_fallback["max_speed"] = 2.0
-    config_fallback["edges"].append({
-        "id": "C_to_A", "source": "cam_C", "target": "cam_A", "t_typ": 10, "t_max": 30, "d_m": 8.0
-    })
-    site_fallback = parse_site(config_fallback)
-    edge_fallback = next(e for e in site_fallback.edges if e.id == "C_to_A")
-    assert edge_fallback.t_min == 4.0
-
 def test_7_full_site_yaml_load_from_file(tmp_path):
     # Test 7: Full site.yaml load from file (create temp file)
     fixture_path = Path(__file__).parent / "fixtures" / "simple_site.yaml"

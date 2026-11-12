@@ -12,9 +12,9 @@ def test_settings_require_explicit_storage_and_hide_worker_secret(monkeypatch, t
         MainSettings.from_env("TEST_")
     monkeypatch.setenv("TEST_DATABASE_URL", "sqlite:///main.sqlite")
     monkeypatch.setenv("TEST_ARTIFACT_ROOT", str(tmp_path))
-    monkeypatch.setenv("TEST_WORKER_TOKEN", "top-secret")
+    monkeypatch.setenv("TEST_PERCEPTION_WORKER_TOKEN", "top-secret")
     monkeypatch.setenv("TEST_JOB_LEASE_S", "45")
     settings = MainSettings.from_env("TEST_")
     assert settings.job_lease_s == 45
-    assert settings.worker_token.get_secret_value() == "top-secret"
+    assert settings.perception_worker_token.get_secret_value() == "top-secret"
     assert "top-secret" not in repr(settings)

@@ -65,7 +65,6 @@ def create_app(
     auth: AuthService,
     scheduler: SchedulerRunner | None = None,
     run_fake_jobs_inline: bool = False,
-    worker_token: str | None = None,
     worker_tokens: dict[str, str] | None = None,
     worker_lease_secret: str | None = None,
 ) -> FastAPI:
@@ -73,25 +72,17 @@ def create_app(
     current_actor = BearerAuthenticator(auth)
     metrics = MetricsService(manager.repository, manager.clock)
     configured_worker_tokens = dict(worker_tokens or {})
-    if worker_token is not None:
-        for component in ("perception", "clip", "retention"):
-            configured_worker_tokens.setdefault(component, worker_token)
     task_service = WorkerTaskService(
         repository=manager.repository,
         manager=manager,
         clock=manager.clock,
-        lease_secret=(
-            worker_lease_secret
-            or worker_token
-            or "development-only-worker-lease-secret"
-        ),
+        lease_secret=worker_lease_secret or "development-only-worker-lease-secret",
     )
     if run_fake_jobs_inline and scheduler is None:
         raise ValueError("run_fake_jobs_inline requires a SchedulerRunner")
 
     def require_worker(
         component: str,
-        x_worker_token: str | None,
         authorization: str | None,
         *,
         allow_service_actor: bool = False,
@@ -102,11 +93,8 @@ def create_app(
             bearer_token = authorization[7:].strip()
         authenticated = (
             component_token is not None
-            and any(
-                candidate is not None
-                and secrets.compare_digest(candidate, component_token)
-                for candidate in (x_worker_token, bearer_token)
-            )
+            and bearer_token is not None
+            and secrets.compare_digest(bearer_token, component_token)
         )
         if not authenticated and authorization and allow_service_actor:
             try:
@@ -504,12 +492,10 @@ def create_app(
     async def worker_result(
         job_id: str,
         result: ProbeResult,
-        x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> CaseView:
         require_worker(
             "perception",
-            x_worker_token,
             authorization,
             allow_service_actor=True,
         )
@@ -525,10 +511,9 @@ def create_app(
     async def worker_live_update(
         case_id: str,
         update: LiveFeedUpdate,
-        x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> CaseView:
-        require_worker("perception", x_worker_token, authorization)
+        require_worker("perception", authorization)
         if update.case_id != case_id:
             raise HTTPException(
                 status_code=422,
@@ -543,10 +528,9 @@ def create_app(
     async def claim_worker_tasks(
         component: str,
         body: WorkerClaimRequest,
-        x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> WorkerClaimResponse:
-        require_worker(component, x_worker_token, authorization)
+        require_worker(component, authorization)
         return task_service.claim(component, body)
 
     @app.post(
@@ -557,10 +541,9 @@ def create_app(
         component: str,
         task_id: str,
         body: WorkerHeartbeatRequest,
-        x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> WorkerHeartbeatResponse:
-        require_worker(component, x_worker_token, authorization)
+        require_worker(component, authorization)
         return task_service.heartbeat(component, task_id, body)
 
     @app.post(
@@ -571,10 +554,9 @@ def create_app(
         component: str,
         task_id: str,
         body: WorkerTaskResultRequest,
-        x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> WorkerTaskAck:
-        require_worker(component, x_worker_token, authorization)
+        require_worker(component, authorization)
         return task_service.complete(component, task_id, body)
 
     @app.post(
@@ -585,10 +567,9 @@ def create_app(
         component: str,
         task_id: str,
         body: WorkerTaskFailureRequest,
-        x_worker_token: str | None = Header(default=None),
         authorization: str | None = Header(default=None),
     ) -> WorkerTaskAck:
-        require_worker(component, x_worker_token, authorization)
+        require_worker(component, authorization)
         return task_service.fail(component, task_id, body)
 
     return app

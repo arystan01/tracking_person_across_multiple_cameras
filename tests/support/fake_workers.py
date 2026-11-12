@@ -16,7 +16,7 @@ from javes_contracts import (
     TargetGalleryCommand,
     TargetGalleryResult,
 )
-from javes_fakes import FakeClipWorker, FakePerceptionWorker, FakeRetentionWorker
+from tests.support.fakes import FakeClipWorker, FakePerceptionWorker, FakeRetentionWorker
 
 
 class FakePerceptionAdapter:
