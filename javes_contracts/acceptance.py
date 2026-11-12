@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from routing.contracts import ProbeStatus, SiteGraph
+from .routing import ProbeStatus, SiteGraph
 
 from .boundary import (
     ClipLifecycleState,
@@ -29,7 +29,7 @@ from .boundary import (
     VideoSegmentRequest,
     VideoSegmentResult,
 )
-from routing.contracts import ProbeResult
+from .routing import ProbeResult
 
 
 class ContractViolation(ValueError):

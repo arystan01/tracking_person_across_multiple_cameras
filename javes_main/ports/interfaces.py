@@ -24,8 +24,8 @@ from javes_contracts import (
     VideoSegmentRequest,
     VideoSegmentResult,
 )
-from routing.contracts import Anchors
-from routing.contracts.params import RoutingParams
+from javes_contracts import Anchors
+from javes_routing.core.params import RoutingParams
 
 from javes_main.domain.models import (
     AuditEvent,

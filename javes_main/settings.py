@@ -13,7 +13,6 @@ class MainSettings(BaseModel):
 
     database_url: str
     artifact_root: Path
-    worker_token: SecretStr | None = None
     perception_worker_token: SecretStr | None = None
     clip_worker_token: SecretStr | None = None
     retention_worker_token: SecretStr | None = None
@@ -39,7 +38,6 @@ class MainSettings(BaseModel):
         values = {
             "database_url": database_url,
             "artifact_root": artifact_root,
-            "worker_token": os.environ.get(f"{prefix}WORKER_TOKEN"),
             "perception_worker_token": os.environ.get(
                 f"{prefix}PERCEPTION_WORKER_TOKEN"
             ),

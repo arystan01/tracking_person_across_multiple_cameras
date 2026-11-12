@@ -1,8 +1,14 @@
 import pytest
 import yaml
 from pathlib import Path
-from routing.site import load_site, parse_site
-from routing.contracts import SiteGraph
+from javes_routing.core.site import parse_site
+from javes_routing.service.site_loader import load_site
+from javes_contracts import SiteGraph
+from tests.support.nvidia_12cam_site import (
+    CAMERAS as NVIDIA_CAMERAS,
+    calibration_checksums,
+    canonical_site,
+)
 
 # Helpers to generate valid configs
 def valid_config():
@@ -76,16 +82,6 @@ def test_6_edge_compute_t_min():
     edge = next(e for e in site.edges if e.id == "C_to_A")
     assert edge.t_min == 2.0
 
-    # Also test max_speed fallback
-    config_fallback = valid_config()
-    config_fallback["max_speed"] = 2.0
-    config_fallback["edges"].append({
-        "id": "C_to_A", "source": "cam_C", "target": "cam_A", "t_typ": 10, "t_max": 30, "d_m": 8.0
-    })
-    site_fallback = parse_site(config_fallback)
-    edge_fallback = next(e for e in site_fallback.edges if e.id == "C_to_A")
-    assert edge_fallback.t_min == 4.0
-
 def test_7_full_site_yaml_load_from_file(tmp_path):
     # Test 7: Full site.yaml load from file (create temp file)
     fixture_path = Path(__file__).parent / "fixtures" / "simple_site.yaml"
@@ -117,3 +113,85 @@ def test_10_get_node_ids():
     site = parse_site(config)
     nodes = site.get_node_ids()
     assert set(nodes) == {"cam_A", "cam_B", "cam_C", "stairwell", "OUTSIDE"}
+
+
+def _polygon_site() -> dict:
+    config = valid_config()
+    for camera in config["cameras"].values():
+        camera["floor"] = "1F"
+    config["map"] = {
+        "floors": [
+            {
+                "id": "1F",
+                "size_px": [100, 100],
+                "m_per_px": 0.1,
+                "walkable_polygons": [[[0, 0], [100, 0], [100, 100], [0, 100]]],
+                "blocked_polygons": [[[45, 20], [55, 20], [55, 80], [45, 80]]],
+            }
+        ]
+    }
+    config["walk_graph"] = {
+        "nodes": {
+            "left": {"floor_id": "1F", "map_xy": [20, 10]},
+            "right": {"floor_id": "1F", "map_xy": [80, 10]},
+        },
+        "edges": [
+            {
+                "id": "safe",
+                "from": "left",
+                "to": "right",
+                "floor_id": "1F",
+                "width_m": 1.0,
+                "branch_prior": 2.0,
+                "bidirectional": True,
+            }
+        ],
+    }
+    return config
+
+
+def test_walk_graph_accepts_corridor_inside_walkable_area() -> None:
+    site = parse_site(_polygon_site())
+    assert site.walk_graph is not None
+    edge = site.walk_graph.edges[0]
+    assert edge.width_m == 1.0
+    assert edge.branch_prior == 2.0
+
+
+def test_walk_graph_rejects_corridor_crossing_blocked_area() -> None:
+    config = _polygon_site()
+    config["walk_graph"]["nodes"]["left"]["map_xy"] = [20, 50]
+    config["walk_graph"]["nodes"]["right"]["map_xy"] = [80, 50]
+    with pytest.raises(ValueError, match="crosses a blocked area"):
+        parse_site(config)
+
+
+def test_walk_graph_validates_full_corridor_width() -> None:
+    config = _polygon_site()
+    config["walk_graph"]["nodes"]["left"]["map_xy"] = [20, 14]
+    config["walk_graph"]["nodes"]["right"]["map_xy"] = [80, 14]
+    config["walk_graph"]["edges"][0]["width_m"] = 2.0
+    with pytest.raises(ValueError, match="crosses a blocked area"):
+        parse_site(config)
+
+
+def test_canonical_nvidia_site_has_all_cameras_and_obstacle_safe_walk_graph():
+    repository_root = Path(__file__).resolve().parents[1]
+    raw = canonical_site(repository_root)
+    graph = parse_site(raw)
+    assert set(graph.cameras) == set(NVIDIA_CAMERAS)
+    assert graph.walk_graph is not None
+    assert len(graph.walk_graph.edges) >= 24
+    assert all(edge.bidirectional for edge in graph.walk_graph.edges)
+    assert all(edge.width_m == pytest.approx(0.6) for edge in graph.walk_graph.edges)
+    assert len(calibration_checksums(raw)) == 12
+
+
+def test_canonical_calibration_checksum_changes_with_homography():
+    repository_root = Path(__file__).resolve().parents[1]
+    raw = canonical_site(repository_root)
+    original = calibration_checksums(raw)
+    raw["cameras"]["Cam001"]["calibration"]["homography"][0][0] += 0.001
+    changed = calibration_checksums(raw)
+    assert changed["Cam001"] != original["Cam001"]
+    assert changed["Cam002"] == original["Cam002"]

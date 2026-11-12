@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import pytest
 
-from routing.contracts import (
+from javes_contracts import (
     Anchors,
     Candidate,
     CaseInfo,
@@ -20,11 +20,11 @@ from routing.contracts import (
     Tracklet,
     Visit,
 )
-from routing.contracts.params import RoutingParams
-from routing.sim.generator import generate_ring_graph
-from routing.site import parse_site
-from routing.step import init_state, step
-from routing.update import _bbox_center, _edges_for_bbox, bbox_to_xyxy, gate_visit_to_hypothesis
+from javes_routing.core.params import RoutingParams
+from javes_routing.core.sim.generator import generate_ring_graph
+from javes_routing.core.site import parse_site
+from javes_routing.core.step import init_state, step
+from javes_routing.core.update import _bbox_center, _edges_for_bbox, bbox_to_xyxy, gate_visit_to_hypothesis
 
 
 def test_b2_child_profile() -> None:
@@ -283,8 +283,9 @@ def test_b6_empty_call_triggers_dormant() -> None:
     assert dormant_hyp.status == HypothesisStatus.DORMANT
     assert dormant_hyp.current_node == "OUTSIDE"
 
-    # Mode should change to WAITING
-    assert res.mode == SearchMode.WAITING
+    # Historical time is searched with finite probes before live WAITING.
+    assert res.mode == SearchMode.CATCHING_UP
+    assert res.probes and all(probe.t_to is not None for probe in res.probes)
 
 
 def test_b6_idempotent_same_now() -> None:

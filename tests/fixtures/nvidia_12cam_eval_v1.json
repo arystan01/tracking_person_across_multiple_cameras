@@ -1,0 +1,189 @@
+{
+  "manifest_version": "nvidia-12cam-eval.v1",
+  "dataset": "NVIDIA-MTMC-12cam",
+  "profile": {
+    "sample_fps": 5.0,
+    "image_size": 1280,
+    "detector_weights": "models/yolo26n.pt",
+    "reid_weights": "models/osnet_ain_x1_0_msmt17.pt",
+    "tracker": "bytetrack.yaml",
+    "track_lost_buffer_s": 8.0
+  },
+  "scenarios": [
+    {
+      "id": "cam001-local-person",
+      "split": "development",
+      "system_input": {
+        "reference": {"camera_id": "Cam001", "time_s": 0.0, "bbox_xyxy": [323, 214, 422, 478], "coordinate_frame_px": [1920, 1080]},
+        "last_known_camera": "Cam001", "last_known_time_s": 0.0,
+        "window_start_s": 0.0, "window_end_s": 20.0,
+        "available_cameras": ["Cam001"]
+      },
+      "oracle": {
+        "global_identity": "nvidia-cam001-person-a",
+        "sightings": [
+          {"camera_id": "Cam001", "t_in_s": 0.0, "t_out_s": 4.0}
+        ],
+        "checkpoints": [
+          {"camera_id": "Cam001", "time_s": 0.0, "bbox_xyxy": [323, 214, 422, 478], "foot_point_px": [372.5, 478.0], "coordinate_frame_px": [1920, 1080]},
+          {"camera_id": "Cam001", "time_s": 2.0, "bbox_xyxy": [477, 114, 573, 344], "foot_point_px": [525.0, 344.0], "coordinate_frame_px": [1920, 1080]}
+        ],
+        "negative_checkpoints": [
+          {"camera_id": "Cam001", "time_s": 10.0, "bbox_xyxy": [493, 776, 649, 1080], "foot_point_px": [571.0, 1080.0], "coordinate_frame_px": [1920, 1080]}
+        ],
+        "branch_outcomes": []
+      },
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "cam002-local-person",
+      "split": "development",
+      "system_input": {
+        "reference": {"camera_id": "Cam002", "time_s": 0.0, "bbox_xyxy": [1247, 61, 1305, 224], "coordinate_frame_px": [1920, 1080]},
+        "last_known_camera": "Cam002", "last_known_time_s": 0.0,
+        "window_start_s": 0.0, "window_end_s": 20.0,
+        "available_cameras": ["Cam002"]
+      },
+      "oracle": {
+        "global_identity": "nvidia-cam002-person-a",
+        "sightings": [
+          {"camera_id": "Cam002", "t_in_s": 0.0, "t_out_s": 18.0}
+        ],
+        "checkpoints": [
+          {"camera_id": "Cam002", "time_s": 0.0, "bbox_xyxy": [1247, 61, 1305, 224], "foot_point_px": [1276.0, 224.0], "coordinate_frame_px": [1920, 1080]},
+          {"camera_id": "Cam002", "time_s": 4.0, "bbox_xyxy": [1173, 254, 1247, 466], "foot_point_px": [1210.0, 466.0], "coordinate_frame_px": [1920, 1080]},
+          {"camera_id": "Cam002", "time_s": 8.0, "bbox_xyxy": [1084, 611, 1174, 892], "foot_point_px": [1129.0, 892.0], "coordinate_frame_px": [1920, 1080]}
+        ],
+        "negative_checkpoints": [
+          {"camera_id": "Cam002", "time_s": 10.0, "bbox_xyxy": [1281, 705, 1394, 978], "foot_point_px": [1337.5, 978.0], "coordinate_frame_px": [1920, 1080]}
+        ],
+        "branch_outcomes": []
+      },
+      "tags": ["single-camera", "similar-people"]
+    },
+    {
+      "id": "cam003-local-person",
+      "split": "development",
+      "system_input": {
+        "reference": {"camera_id": "Cam003", "time_s": 2.0, "bbox_xyxy": [1492, 583, 1664, 942], "coordinate_frame_px": [1920, 1080]},
+        "last_known_camera": "Cam003", "last_known_time_s": 2.0,
+        "window_start_s": 0.0, "window_end_s": 20.0,
+        "available_cameras": ["Cam003"]
+      },
+      "oracle": {
+        "global_identity": "nvidia-cam003-person-a",
+        "sightings": [
+          {"camera_id": "Cam003", "t_in_s": 2.0, "t_out_s": 12.0}
+        ],
+        "checkpoints": [
+          {"camera_id": "Cam003", "time_s": 2.0, "bbox_xyxy": [1492, 583, 1664, 942], "foot_point_px": [1578.0, 942.0], "coordinate_frame_px": [1920, 1080]},
+          {"camera_id": "Cam003", "time_s": 6.0, "bbox_xyxy": [1258, 196, 1347, 440], "foot_point_px": [1302.5, 440.0], "coordinate_frame_px": [1920, 1080]},
+          {"camera_id": "Cam003", "time_s": 10.0, "bbox_xyxy": [1140, 7, 1202, 197], "foot_point_px": [1171.0, 197.0], "coordinate_frame_px": [1920, 1080]}
+        ],
+        "negative_checkpoints": [],
+        "branch_outcomes": []
+      },
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "pink-overall-worker",
+      "split": "development",
+      "system_input": {
+        "reference": {"camera_id": "Cam009", "time_s": 2.0, "bbox_xyxy": [494, 82, 542, 233], "coordinate_frame_px": [960, 540]},
+        "last_known_camera": "Cam009", "last_known_time_s": 2.0,
+        "window_start_s": 0.0, "window_end_s": 20.0,
+        "available_cameras": ["Cam006", "Cam008", "Cam009"],
+        "unavailable_cameras": ["Cam007", "Cam011"]
+      },
+      "oracle": {
+        "global_identity": "nvidia-pink-overall-worker",
+        "sightings": [
+          {"camera_id": "Cam009", "t_in_s": 2.0, "t_out_s": 3.0},
+          {"camera_id": "Cam011", "t_in_s": 2.0, "t_out_s": 18.8},
+          {"camera_id": "Cam006", "t_in_s": 6.2, "t_out_s": 17.6},
+          {"camera_id": "Cam007", "t_in_s": 17.0, "t_out_s": 20.0}
+        ],
+        "checkpoints": [
+          {"camera_id": "Cam009", "time_s": 2.0, "bbox_xyxy": [494, 82, 542, 233], "foot_point_px": [518.0, 233.0], "coordinate_frame_px": [960, 540]},
+          {"camera_id": "Cam011", "time_s": 3.5, "bbox_xyxy": [1160, 390, 1245, 700], "foot_point_px": [1202.0, 700.0], "coordinate_frame_px": [1920, 1080], "calibration_error_m": 1.0, "hidden_from_system": true},
+          {"camera_id": "Cam011", "time_s": 4.0, "bbox_xyxy": [1145, 405, 1230, 680], "foot_point_px": [1188.0, 680.0], "coordinate_frame_px": [1920, 1080], "calibration_error_m": 1.0, "hidden_from_system": true},
+          {"camera_id": "Cam011", "time_s": 5.0, "bbox_xyxy": [1060, 385, 1140, 610], "foot_point_px": [1100.0, 610.0], "coordinate_frame_px": [1920, 1080], "calibration_error_m": 1.0, "hidden_from_system": true},
+          {"camera_id": "Cam011", "time_s": 6.0, "bbox_xyxy": [1020, 365, 1100, 590], "foot_point_px": [1060.0, 590.0], "coordinate_frame_px": [1920, 1080], "calibration_error_m": 1.0, "hidden_from_system": true},
+          {"camera_id": "Cam006", "time_s": 12.7, "bbox_xyxy": [526, 124, 612, 389], "foot_point_px": [569.0, 389.0], "coordinate_frame_px": [1920, 1080]},
+          {"camera_id": "Cam006", "time_s": 16.7, "bbox_xyxy": [179, 485, 310, 861], "foot_point_px": [244.5, 861.0], "coordinate_frame_px": [1920, 1080]},
+          {"camera_id": "Cam007", "time_s": 20.0, "bbox_xyxy": [943, 330, 1055, 635], "foot_point_px": [999.0, 635.0], "coordinate_frame_px": [1920, 1080], "hidden_from_system": true}
+        ],
+        "negative_checkpoints": [
+          {"camera_id": "Cam007", "time_s": 20.0, "foot_point_px": [800.0, 500.0], "coordinate_frame_px": [1920, 1080], "hidden_from_system": true}
+        ],
+        "branch_outcomes": [
+          {"lost_at_s": 3.0, "checkpoint_times_s": [3.5], "true_edge_ids": ["walk-south-310-480::reverse"], "kind": "BLIND_GAP"},
+          {"lost_at_s": 3.0, "checkpoint_times_s": [4.0], "true_edge_ids": ["walk-south-310-480::reverse"], "kind": "BLIND_GAP"},
+          {"lost_at_s": 3.0, "checkpoint_times_s": [5.0], "true_edge_ids": ["walk-south-310-480::reverse"], "kind": "BLIND_GAP"},
+          {"lost_at_s": 3.0, "checkpoint_times_s": [6.0], "true_edge_ids": ["walk-south-310-480::reverse"], "kind": "BLIND_GAP"},
+          {"lost_at_s": 3.0, "checkpoint_times_s": [6.0], "true_edge_ids": ["walk-south-310-480::reverse"], "kind": "REENTRY"},
+          {"lost_at_s": 17.6, "checkpoint_times_s": [20.0], "true_edge_ids": ["walk-aisle-310::reverse"], "kind": "NO_RETURN"},
+          {"lost_at_s": 17.6, "checkpoint_times_s": [20.0], "true_edge_ids": ["walk-aisle-310::reverse"], "kind": "REENTRY"}
+        ]
+      },
+      "tags": ["blind-gap", "hidden-camera", "reentry"]
+    },
+    {
+      "id": "cam004-local-person", "split": "development",
+      "system_input": {"reference": {"camera_id": "Cam004", "time_s": 0.0, "bbox_xyxy": [501, 364, 604, 622], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam004", "last_known_time_s": 0.0, "window_start_s": 0.0, "window_end_s": 20.0, "available_cameras": ["Cam004"], "unavailable_cameras": ["Cam001"]},
+      "oracle": {"global_identity": "nvidia-cam004-person-a", "sightings": [{"camera_id": "Cam004", "t_in_s": 0.0, "t_out_s": 3.533333}, {"camera_id": "Cam001", "t_in_s": 12.7, "t_out_s": 20.0}], "checkpoints": [{"camera_id": "Cam004", "time_s": 0.0, "bbox_xyxy": [501, 364, 604, 622], "foot_point_px": [552.5, 622.0], "coordinate_frame_px": [1920, 1080]}, {"camera_id": "Cam004", "time_s": 1.933333, "bbox_xyxy": [284, 540, 410, 851], "foot_point_px": [346.8, 851.3], "coordinate_frame_px": [1920, 1080]}, {"camera_id": "Cam001", "time_s": 15.0, "bbox_xyxy": [354, 239, 452, 492], "foot_point_px": [402.9, 492.0], "coordinate_frame_px": [1920, 1080], "hidden_from_system": true}], "negative_checkpoints": [], "branch_outcomes": [{"lost_at_s": 3.533333, "checkpoint_times_s": [15.0], "true_edge_ids": ["walk-aisle-650::reverse"], "kind": "NO_RETURN"}]},
+      "tags": ["no-return", "hidden-camera"]
+    },
+    {
+      "id": "cam005-local-person", "split": "development",
+      "system_input": {"reference": {"camera_id": "Cam005", "time_s": 0.0, "bbox_xyxy": [1211, 335, 1310, 595], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam005", "last_known_time_s": 0.0, "window_start_s": 0.0, "window_end_s": 20.0, "available_cameras": ["Cam005"]},
+      "oracle": {"global_identity": "nvidia-cam005-person-a", "sightings": [{"camera_id": "Cam005", "t_in_s": 0.0, "t_out_s": 13.833333}], "checkpoints": [{"camera_id": "Cam005", "time_s": 0.0, "bbox_xyxy": [1211, 335, 1310, 595], "foot_point_px": [1260.5, 595.0], "coordinate_frame_px": [1920, 1080]}, {"camera_id": "Cam005", "time_s": 4.033333, "bbox_xyxy": [1458, 690, 1701, 1044], "foot_point_px": [1579.5, 1044.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["single-camera", "appearance-change"]
+    },
+    {
+      "id": "cam008-local-person", "split": "development",
+      "system_input": {"reference": {"camera_id": "Cam008", "time_s": 5.0, "bbox_xyxy": [791, 346, 864, 553], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam008", "last_known_time_s": 5.0, "window_start_s": 0.0, "window_end_s": 20.0, "available_cameras": ["Cam008"]},
+      "oracle": {"global_identity": "nvidia-cam008-person-a", "sightings": [{"camera_id": "Cam008", "t_in_s": 5.0, "t_out_s": 15.0}], "checkpoints": [{"camera_id": "Cam008", "time_s": 5.0, "bbox_xyxy": [791, 346, 864, 553], "foot_point_px": [827.5, 553.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "cam010-local-person", "split": "development",
+      "system_input": {"reference": {"camera_id": "Cam010", "time_s": 0.0, "bbox_xyxy": [808, 283, 892, 493], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam010", "last_known_time_s": 0.0, "window_start_s": 0.0, "window_end_s": 20.0, "available_cameras": ["Cam010"]},
+      "oracle": {"global_identity": "nvidia-cam010-person-a", "sightings": [{"camera_id": "Cam010", "t_in_s": 0.0, "t_out_s": 10.0}], "checkpoints": [{"camera_id": "Cam010", "time_s": 0.0, "bbox_xyxy": [808, 283, 892, 493], "foot_point_px": [850.0, 493.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "cam011-local-person", "split": "holdout",
+      "system_input": {"reference": {"camera_id": "Cam011", "time_s": 0.0, "bbox_xyxy": [254, 419, 343, 645], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam011", "last_known_time_s": 0.0, "window_start_s": 0.0, "window_end_s": 20.0, "available_cameras": ["Cam011"]},
+      "oracle": {"global_identity": "nvidia-cam011-person-a", "sightings": [{"camera_id": "Cam011", "t_in_s": 0.0, "t_out_s": 10.0}], "checkpoints": [{"camera_id": "Cam011", "time_s": 0.0, "bbox_xyxy": [254, 419, 343, 645], "foot_point_px": [298.5, 645.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "cam012-local-person", "split": "holdout",
+      "system_input": {"reference": {"camera_id": "Cam012", "time_s": 0.0, "bbox_xyxy": [1103, 688, 1172, 921], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam012", "last_known_time_s": 0.0, "window_start_s": 0.0, "window_end_s": 20.0, "available_cameras": ["Cam012"]},
+      "oracle": {"global_identity": "nvidia-cam012-person-a", "sightings": [{"camera_id": "Cam012", "t_in_s": 0.0, "t_out_s": 10.0}], "checkpoints": [{"camera_id": "Cam012", "time_s": 0.0, "bbox_xyxy": [1103, 688, 1172, 921], "foot_point_px": [1137.5, 921.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "cam006-local-person", "split": "holdout",
+      "system_input": {"reference": {"camera_id": "Cam006", "time_s": 15.0, "bbox_xyxy": [360, 302, 467, 611], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam006", "last_known_time_s": 15.0, "window_start_s": 10.0, "window_end_s": 25.0, "available_cameras": ["Cam006"]},
+      "oracle": {"global_identity": "nvidia-cam006-person-b", "sightings": [{"camera_id": "Cam006", "t_in_s": 15.0, "t_out_s": 20.0}], "checkpoints": [{"camera_id": "Cam006", "time_s": 15.0, "bbox_xyxy": [360, 302, 467, 611], "foot_point_px": [413.5, 611.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "cam007-local-person", "split": "holdout",
+      "system_input": {"reference": {"camera_id": "Cam007", "time_s": 20.0, "bbox_xyxy": [943, 330, 1055, 635], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam007", "last_known_time_s": 20.0, "window_start_s": 15.0, "window_end_s": 25.0, "available_cameras": ["Cam007"]},
+      "oracle": {"global_identity": "nvidia-cam007-person-b", "sightings": [{"camera_id": "Cam007", "t_in_s": 20.0, "t_out_s": 25.0}], "checkpoints": [{"camera_id": "Cam007", "time_s": 20.0, "bbox_xyxy": [943, 330, 1055, 635], "foot_point_px": [999.0, 635.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["single-camera"]
+    },
+    {
+      "id": "yellow-top-woman",
+      "split": "development",
+      "system_input": {"reference": {"camera_id": "Cam001", "time_s": 30.0, "bbox_xyxy": [805, 755, 890, 1010], "coordinate_frame_px": [1920, 1080]}, "last_known_camera": "Cam001", "last_known_time_s": 16.0, "window_start_s": 0.0, "window_end_s": 60.0, "available_cameras": ["Cam001", "Cam002"]},
+      "oracle": {"global_identity": "known-invalid-yellow-target", "sightings": [{"camera_id": "Cam001", "t_in_s": 16.0, "t_out_s": 34.0}], "checkpoints": [{"camera_id": "Cam001", "time_s": 30.0, "bbox_xyxy": [820, 776, 876, 987], "foot_point_px": [848.0, 987.0], "coordinate_frame_px": [1920, 1080]}], "negative_checkpoints": [], "branch_outcomes": []},
+      "tags": ["known-invalid"],
+      "quarantined": true,
+      "quarantine_reason": "current target association is known to be wrong and is excluded from acceptance"
+    }
+  ]
+}

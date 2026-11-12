@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from routing.contracts import (
+from javes_contracts import (
     Anchors,
     CameraDef,
     BlindNodeDef,
@@ -23,21 +23,29 @@ from routing.contracts import (
     ProbeResult,
     ProbeStatus,
     ProbedWindow,
+    ProjectedTrajectoryPoint,
+    SearchFrontier,
     SearchMode,
+    SearchState,
     SiteGraph,
     StepResult,
     Tracklet,
     Transition,
+    TransitionGeometry,
     Visit,
+    WalkEdgeDef,
+    WalkGraphDef,
+    WalkNodeDef,
 )
-from routing.contracts.params import RoutingParams
-from routing.render import render_route_maps
-from routing.worker import step_and_render
-from routing.demo import _write_viewer
-from routing.sim.generator import generate_ring_graph
-from routing.site import parse_site
-from routing.step import init_state, step
-from routing.update import gate_visit_to_hypothesis
+from javes_routing.core.params import RoutingParams
+from javes_routing.core.expand import expand_dormant_watch_probes
+from javes_routing.core.render import render_route_maps
+from javes_routing.core.facade import step_and_render
+from javes_routing.service.demo import _write_viewer
+from javes_routing.core.sim.generator import generate_ring_graph
+from javes_routing.core.site import parse_site
+from javes_routing.core.step import init_state, step
+from javes_routing.core.update import gate_visit_to_hypothesis
 
 
 UTC = timezone.utc
@@ -134,6 +142,51 @@ def test_retry_limit_and_unobserved_window() -> None:
     assert third.estimate and third.estimate.unobserved_windows[0]["reason"] == "FAILED"
 
 
+def test_terminal_unavailable_open_watch_is_not_reissued() -> None:
+    graph = SiteGraph(
+        site="watch",
+        version="v1",
+        cameras={"A": CameraDef(id="A")},
+        edges=[],
+        blind_nodes=[BlindNodeDef(id="blind", borders=["A"])],
+    )
+    visit = Visit(
+        visit_id="v1",
+        camera_id="A",
+        t_in=T0,
+        t_out=T0,
+        score=0.9,
+    )
+    state = SearchState(
+        case_id="case",
+        site_version="v1",
+        params_version="1",
+        hypotheses=[
+            Hypothesis(
+                id="h1",
+                visits=[visit],
+                current_node="blind",
+                status=HypothesisStatus.DORMANT,
+            )
+        ],
+        probed_windows=[
+            ProbedWindow(
+                camera="A",
+                t_from=T0,
+                t_to=None,
+                probe_id="watch-A",
+                status=ProbeStatus.UNAVAILABLE,
+                coverage_ratio=0.0,
+                found=False,
+            )
+        ],
+    )
+
+    assert expand_dormant_watch_probes(
+        state, graph, RoutingParams(), T0 + timedelta(seconds=30)
+    ) == []
+
+
 def test_non_empty_step_is_byte_deterministic_and_does_not_mutate_input() -> None:
     graph = generate_ring_graph(3)
     params = RoutingParams()
@@ -188,6 +241,29 @@ def test_long_gap_requires_confirmation() -> None:
     assert len(confirmed.hypotheses) == 1
     assert not confirmed.hypotheses[0].requires_confirmation
 
+    closed_state = candidate.state.model_copy(
+        update={
+            "done": True,
+            "mode": SearchMode.PAST_SUMMARY,
+            "stop_reason": "MAX_GAP",
+        },
+        deep=True,
+    )
+    reviewed_closed = step(
+        closed_state,
+        [],
+        graph,
+        Anchors(confirm_tracklet_ids=["reentry"], review_only=True),
+        params,
+        sighting_time + timedelta(seconds=12),
+    )
+    assert reviewed_closed.done
+    assert reviewed_closed.mode == SearchMode.PAST_SUMMARY
+    assert reviewed_closed.stop_reason.value == "MAX_GAP"
+    assert reviewed_closed.probes == []
+    assert len(reviewed_closed.hypotheses) == 1
+    assert not reviewed_closed.hypotheses[0].requires_confirmation
+
 
 def test_open_upsert_and_explicit_stream_close() -> None:
     graph = generate_ring_graph(3)
@@ -223,7 +299,7 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
         site="two-floor",
         version="v1",
         map=MapDef(floors=[
-            MapFloor(id="1F", image="one.png", size_px=(400, 300)),
+            MapFloor(id="1F", image="one.png", size_px=(400, 300), m_per_px=0.1),
             MapFloor(id="2F", size_px=(500, 350)),
         ]),
         cameras={
@@ -236,25 +312,91 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
             EdgeDef(id="A-B-alt", source="A", target="B", t_min=6, t_typ=12, t_max=24),
             EdgeDef(id="B-C", source="B", target="C", t_min=20, t_typ=30, t_max=60),
         ],
+        walk_graph=WalkGraphDef(
+            nodes={
+                "wa": WalkNodeDef(id="wa", floor_id="1F", map_xy=(20, 30)),
+                "wb": WalkNodeDef(id="wb", floor_id="1F", map_xy=(300, 80)),
+            },
+            edges=[
+                WalkEdgeDef(
+                    id="walk-main",
+                    source="wa",
+                    target="wb",
+                    floor_id="1F",
+                    map_path=[(150, 40)],
+                ),
+                WalkEdgeDef(
+                    id="walk-alt",
+                    source="wa",
+                    target="wb",
+                    floor_id="1F",
+                    map_path=[(180, 130)],
+                ),
+            ],
+        ),
     )
     visits = [
-        Visit(id="vA", camera="A", t_in=T0, t_out=T0, score=0.7),
-        Visit(id="vB", camera="B", t_in=T0 + timedelta(seconds=10), t_out=T0 + timedelta(seconds=12), score=0.8),
+        Visit(
+            id="vA", camera="A", t_in=T0, t_out=T0, score=0.7,
+            projected_trajectory=[ProjectedTrajectoryPoint(timestamp=T0, x=20, y=30, floor_id="1F")],
+            trajectory_approximate=False,
+        ),
+        Visit(
+            id="vB", camera="B", t_in=T0 + timedelta(seconds=10), t_out=T0 + timedelta(seconds=12), score=0.8,
+            projected_trajectory=[ProjectedTrajectoryPoint(timestamp=T0 + timedelta(seconds=10), x=300, y=80, floor_id="1F")],
+            trajectory_approximate=False,
+        ),
         Visit(id="vC", camera="C", t_in=T0 + timedelta(seconds=45), t_out=T0 + timedelta(seconds=50), score=0.8, flags=["LONG_GAP"]),
     ]
     hypothesis = Hypothesis(
         id="h1", visits=visits,
         transitions=[
-            Transition(from_visit_id="vA", to_visit_id="vB", edge_ids=["A-B"], alternative_edge_paths=[["A-B-alt"]]),
+            Transition(
+                from_visit_id="vA", to_visit_id="vB", edge_ids=["A-B"], alternative_edge_paths=[["A-B-alt"]],
+                geometry=TransitionGeometry(
+                    floor_id="1F",
+                    points=[(20, 30), (150, 40), (300, 80)],
+                    alternative_paths=[[(20, 30), (180, 130), (300, 80)]],
+                    walk_edge_ids=["walk-main"],
+                    alternative_walk_edge_paths=[["walk-alt"]],
+                    distance_min_m=10,
+                    distance_max_m=12,
+                ),
+            ),
             Transition(from_visit_id="vB", to_visit_id="vC", edge_ids=["B-C"], kind="VERTICAL", flags=["LONG_GAP"]),
         ],
         current_node="C", status=HypothesisStatus.ALIVE, score=1.0,
     )
+    competing = hypothesis.model_copy(
+        update={
+            "id": "h2",
+            "score": 0.5,
+            "visits": visits[:2],
+            "transitions": [
+                hypothesis.transitions[0].model_copy(
+                    update={
+                        "geometry": hypothesis.transitions[0].geometry.model_copy(
+                            update={
+                                "points": [(20, 30), (100, 300), (300, 80)],
+                                "alternative_paths": [],
+                            }
+                        )
+                    }
+                )
+            ],
+            "current_node": "B",
+        }
+    )
     state = init_state(
         CaseInfo(case_id="c", target_id="t", start_time=T0), graph, RoutingParams()
-    ).model_copy(update={"hypotheses": [hypothesis], "state_version": 12})
+    ).model_copy(
+        update={"hypotheses": [hypothesis, competing], "state_version": 12}
+    )
     result = StepResult(
-        state=state, probes=[], hypotheses=[hypothesis], best=hypothesis,
+        state=state,
+        probes=[],
+        hypotheses=[hypothesis, competing],
+        best=hypothesis,
         estimate=Estimate(zones=[]), mode=SearchMode.CATCHING_UP,
     )
     assets = {"1F": b"\x89PNG\r\n\x1a\nplaceholder"}
@@ -272,7 +414,8 @@ def test_renderer_is_safe_deterministic_multifloor_svg() -> None:
     assert 'data-approximate="false"' in floor_one
     assert 'data-role="alternative-path"' in floor_one
     assert 'stroke-dasharray="5 7"' in floor_one
-    assert 'data-role="inter-floor"' in floor_one
+    assert "100.00,300.00" not in floor_one
+    assert 'data-role="inter-floor"' not in floor_one
     floor_two = next(item.svg for item in first.maps if item.floor_id == "2F")
     assert "LONG_GAP" in floor_two
 
@@ -353,6 +496,10 @@ def test_stop_priority_operator_then_budget_then_gap() -> None:
     budget = step(state, [], graph, Anchors(), params, T0 + timedelta(seconds=20))
     assert budget.stop_reason.value == "BUDGET_SPENT"
     state.camera_minutes_used = 0
+    state.search_frontier = SearchFrontier(
+        last_observed_at=T0,
+        reached_at=T0 + timedelta(seconds=10),
+    )
     gap = step(state, [], graph, Anchors(), params, T0 + timedelta(seconds=20))
     assert gap.stop_reason.value == "MAX_GAP"
 
@@ -419,6 +566,77 @@ def test_later_confirm_creates_gate_override_from_saved_review_evidence() -> Non
     assert "GATE_OVERRIDE" in override.visits[-1].flags
 
 
+def test_candidate_below_probe_beam_remains_confirmable() -> None:
+    graph = SiteGraph(cameras={"A": CameraDef(id="A")}, edges=[])
+    params = RoutingParams(cands_per_probe=1)
+    state = init_state(
+        CaseInfo(
+            case_id="c",
+            target_id="t",
+            start_time=T0,
+            last_known_camera="A",
+            last_known_time=T0,
+        ),
+        graph,
+        params,
+    )
+    high = _tracklet("high", "A", T0 + timedelta(seconds=5)).model_copy(
+        update={"probe_id": "p"}
+    )
+    low = _tracklet("low", "A", T0 + timedelta(seconds=30)).model_copy(
+        update={"probe_id": "p"}
+    )
+    result = ProbeResult(
+        probe_id="p",
+        status="DONE",
+        tracklets=[high, low],
+        candidates=[
+            Candidate(
+                candidate_id="high-c",
+                tracklet_id="high",
+                appearance_score=0.95,
+            ),
+            Candidate(
+                candidate_id="low-c",
+                tracklet_id="low",
+                appearance_score=0.2,
+            ),
+        ],
+    )
+
+    automatic = step(
+        state,
+        [result],
+        graph,
+        Anchors(),
+        params,
+        T0 + timedelta(seconds=50),
+    )
+    assert all(
+        "low" not in visit.tracklet_ids
+        for hypothesis in automatic.hypotheses
+        for visit in hypothesis.visits
+    )
+    assert any(
+        "low" in visit.tracklet_ids
+        for visit in automatic.state.pending_review_visits
+    )
+
+    confirmed = step(
+        automatic.state,
+        [],
+        graph,
+        Anchors(confirm_tracklet_ids=["low"]),
+        params,
+        T0 + timedelta(seconds=51),
+    )
+    assert any(
+        "low" in visit.tracklet_ids
+        for hypothesis in confirmed.hypotheses
+        for visit in hypothesis.visits
+    )
+
+
 def test_malformed_runtime_result_is_logged_and_skipped() -> None:
     graph = generate_ring_graph(3)
     params = RoutingParams()
@@ -451,10 +669,23 @@ def test_blind_zone_last_known_immediately_opens_border_watch() -> None:
         graph,
         RoutingParams(),
     )
-    result = step(state, [], graph, Anchors(), RoutingParams(), T0 + timedelta(seconds=1))
-    assert result.mode == SearchMode.WAITING
+    now = T0 + timedelta(seconds=1)
+    result = step(state, [], graph, Anchors(), RoutingParams(), now)
+    assert result.mode == SearchMode.CATCHING_UP
     assert {probe.camera for probe in result.probes} == {"A", "B"}
-    assert all(probe.t_to is None for probe in result.probes)
+    assert all(probe.t_to is not None for probe in result.probes)
+
+    live = step(
+        result.state,
+        [ProbeResult(probe_id=probe.probe_id, status="DONE") for probe in result.probes],
+        graph,
+        Anchors(),
+        RoutingParams(),
+        now,
+    )
+    assert live.mode == SearchMode.WAITING
+    assert {probe.camera for probe in live.probes} == {"A", "B"}
+    assert all(probe.t_to is None for probe in live.probes)
 
 
 def test_direct_route_keeps_ring_path_alternative_and_probes_divergence() -> None:

@@ -291,10 +291,16 @@ class CaseManager:
             )
         ):
             return self.repository.get(trigger.case_id)
+        anchors = trigger.anchors
+        if (
+            trigger.trigger_type == "OPERATOR_DECISION"
+            and current_case.lifecycle == CaseLifecycle.CLOSED
+        ):
+            anchors = anchors.model_copy(update={"review_only": True})
         return self._routing_tick(
             trigger.case_id,
             probe_results=trigger.probe_results,
-            anchors=trigger.anchors,
+            anchors=anchors,
             trigger_id=trigger.trigger_id,
             trigger_type=trigger.trigger_type,
         )
@@ -325,6 +331,9 @@ class CaseManager:
             last_known_camera=body.last_known.camera_id,
             last_known_zone=body.last_known.zone_id,
             last_known_time=body.last_known.time,
+            last_known_bbox_xywh=body.last_known.bbox_xywh,
+            last_known_footpoint_px=body.last_known.footpoint_px,
+            last_known_map_position=body.last_known.map_position,
         )
         state = self.routing.initialise(
             case_info,
@@ -334,6 +343,9 @@ class CaseManager:
                 last_known_camera=body.last_known.camera_id,
                 last_known_zone=body.last_known.zone_id,
                 last_known_time=body.last_known.time,
+                last_known_bbox_xywh=body.last_known.bbox_xywh,
+                last_known_footpoint_px=body.last_known.footpoint_px,
+                last_known_map_position=body.last_known.map_position,
             ),
             now,
         )
@@ -483,13 +495,20 @@ class CaseManager:
             ),
         )
         step = worker_result.step_result
+        if case.lifecycle != CaseLifecycle.SEARCHING and step.probes:
+            step = step.model_copy(update={"probes": []}, deep=True)
         case.routing_state = step.state
         route_revision = worker_result.rendered_route.route_revision
         previous_route = case.latest_route
+        route_changed = (
+            previous_route is None or previous_route.revision != route_revision
+        )
         route_resources: list[RetentionResource] = []
         superseded_route_resources: list[RetentionResource] = []
         route_artifacts: list[dict[str, Any]] = []
         for rendered in worker_result.rendered_route.maps:
+            if not route_changed:
+                continue
             key = (
                 f"cases/{case_id}/routes/{route_revision}/"
                 f"{rendered.floor_id}.svg"
@@ -526,7 +545,7 @@ class CaseManager:
                     artifact_ref=ArtifactRef(object_key=key),
                 )
             )
-        if previous_route is not None and previous_route.revision != route_revision:
+        if previous_route is not None and route_changed:
             for rendered in previous_route.rendered.maps:
                 old_key = (
                     f"cases/{case_id}/routes/{previous_route.revision}/"
@@ -554,7 +573,11 @@ class CaseManager:
             created_at=now,
         )
         case.updated_at = now
-        case.next_heartbeat_at = now + timedelta(seconds=params.heartbeat_s)
+        case.next_heartbeat_at = (
+            now + timedelta(seconds=params.heartbeat_s)
+            if case.lifecycle == CaseLifecycle.SEARCHING and not step.done
+            else None
+        )
         automatic_retention_command: RetentionCommand | None = None
         if step.done and case.lifecycle == CaseLifecycle.SEARCHING:
             case.lifecycle = CaseLifecycle.CLOSED
@@ -575,7 +598,8 @@ class CaseManager:
         clip_commands = self._clip_hold_commands(case, probe_results)
         with self.repository.transaction():
             saved = self.repository.save(case, expected_revision)
-            self._create_probe_jobs(saved, step.probes)
+            if saved.lifecycle == CaseLifecycle.SEARCHING:
+                self._create_probe_jobs(saved, step.probes)
             for resource in route_resources:
                 self._enqueue(
                     case_id,
@@ -614,13 +638,14 @@ class CaseManager:
                         "reason": step.stop_reason,
                     },
                 )
-            for artifact in route_artifacts:
-                self._record_case_data(
-                    case_id,
-                    CaseDataKind.ARTIFACT,
-                    artifact["artifact_id"],
-                    artifact,
-                )
+            if route_changed:
+                for artifact in route_artifacts:
+                    self._record_case_data(
+                        case_id,
+                        CaseDataKind.ARTIFACT,
+                        artifact["artifact_id"],
+                        artifact,
+                    )
             for result in probe_results:
                 for tracklet in result.tracklets:
                     self._record_case_data(
@@ -640,28 +665,29 @@ class CaseManager:
             self._record_case_data(
                 case_id,
                 CaseDataKind.ROUTING_STATE,
-                f"{case_id}:state:{route_revision}",
+                f"{case_id}:state:{step.state.state_version}",
                 step.state.model_dump(mode="json"),
             )
-            self._record_case_data(
-                case_id,
-                CaseDataKind.ROUTE_REVISION,
-                f"{case_id}:route:{route_revision}",
-                {
-                    "revision": route_revision,
-                    "step_result": step.model_dump(mode="json"),
-                    "maps": [
-                        {
-                            "floor_id": item.floor_id,
-                            "mime_type": item.mime_type,
-                            "width": item.width,
-                            "height": item.height,
-                            "alt_text": item.alt_text,
-                        }
-                        for item in worker_result.rendered_route.maps
-                    ],
-                },
-            )
+            if route_changed:
+                self._record_case_data(
+                    case_id,
+                    CaseDataKind.ROUTE_REVISION,
+                    f"{case_id}:route:{route_revision}",
+                    {
+                        "revision": route_revision,
+                        "step_result": step.model_dump(mode="json"),
+                        "maps": [
+                            {
+                                "floor_id": item.floor_id,
+                                "mime_type": item.mime_type,
+                                "width": item.width,
+                                "height": item.height,
+                                "alt_text": item.alt_text,
+                            }
+                            for item in worker_result.rendered_route.maps
+                        ],
+                    },
+                )
             run_id = trigger_id or self.ids.new(
                 "routing_run",
                 case_id,
@@ -1087,6 +1113,7 @@ class CaseManager:
                 if body.decision == "REJECT"
                 else [],
             )
+            searching = case.lifecycle == CaseLifecycle.SEARCHING
             expected = case.revision
             pending = (
                 case.pending_confirm_tracklet_ids
@@ -1104,7 +1131,7 @@ class CaseManager:
                 f"decision:{body.decision_id}",
                 anchors=anchors,
             )
-            if body.decision == "CONFIRM":
+            if body.decision == "CONFIRM" and searching:
                 gallery_command = TargetGalleryCommand(
                     command_id=self.ids.new(
                         "gallery_cmd", case_id, "confirmed", body.tracklet_id

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from javes_contracts import SiteGraph
-from routing.contracts.params import RoutingParams
+from javes_routing.core.params import RoutingParams
 
 
 class InMemorySiteConfig:

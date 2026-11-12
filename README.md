@@ -151,18 +151,22 @@ python -m pip install -e '.[test,infra,perception]'
 JAVES_RUN_REAL_CV=1 python -m pytest -q tests/test_perception_real_smoke.py
 ```
 
-Run the inspectable API-first E2E (real NVIDIA video -> real Perception ->
-Main worker API -> Routing API -> Controls SVG) with:
+Run the two inspectable API-first E2E scenarios (real NVIDIA video -> real
+Perception -> Main worker API -> Routing API -> Controls SVG) with:
 
 ```bash
 JAVES_RUN_REAL_CV=1 python -m pytest -q -s tests/test_real_cv_e2e.py
+JAVES_RUN_REAL_CV=1 python -m pytest -q -s tests/test_real_cv_blind_gap_e2e.py
 ```
 
-Open `artifacts/real-cv-e2e/index.html` or
-`artifacts/real-cv-e2e/route.svg` afterwards. The standalone SVG embeds the
-tracked NVIDIA warehouse map. `case-view.json`, `probe-results.json`, and
-`report.json` are saved beside it; `LATEST.txt` points to the immutable run
-directory. Set `JAVES_REAL_CV_E2E_OUT` to publish these files elsewhere.
+Open `artifacts/real-cv-e2e/full-minute/index.html` for the complete 60-second
+Cam001/Cam003 scenario, or `artifacts/real-cv-e2e/blind-gap/index.html` for the
+Cam009 -> Cam006 blind-corridor and `MAX_GAP` scenario. Each synchronized report
+contains the source videos, final Routing SVG, event timeline, candidate review
+decisions, and links to the generated JSON. Videos are symlinked rather than
+copied. `LATEST.txt` points to the immutable run directory. Set
+`JAVES_REAL_CV_E2E_OUT` or `JAVES_REAL_CV_BLIND_GAP_OUT` to publish a scenario
+elsewhere.
 
 CI keeps fast contract/unit tests and the real-CV job separate. The real-CV job
 is available through manual workflow dispatch because model execution is much
@@ -217,8 +221,8 @@ javes-clip-worker --main-url http://127.0.0.1:8080 \
 ```
 
 Run API and scheduler as separate processes against the same migrated database.
-Do not use `build_in_memory_system`, `javes_fakes`, or local Routing adapters in
-a production composition.
+Production composition is API-first. Deterministic doubles and in-memory
+assembly helpers live only under `tests/support`.
 
 ## Perception
 
@@ -243,7 +247,7 @@ javes-perception-probe --config perception.yaml --reference target.jpg \
 
 ## Routing ownership
 
-The algorithm under `routing/` remains deterministic and pure:
+The algorithm under `javes_routing/core/` remains deterministic and pure:
 
 ```python
 state = init_state(case, site_graph, params)
@@ -260,13 +264,11 @@ durable Routing trigger is retried.
 
 - `javes_main/`: Controls API, IAM, cases, durable jobs/outbox/triggers and scheduler.
 - `javes_contracts/`: public business and HTTP transport contracts.
-- `javes_routing_api/`: stateless Routing service shell.
+- `javes_routing/core/`: pure Routing algorithm, renderer and simulator.
+- `javes_routing/service/`: stateless Routing HTTP service shell.
 - `javes_site_config/`: immutable filesystem-backed Site Config service.
 - `javes_perception/`: real CV worker and durable HTTP runtime.
 - `javes_retention/`: durable inventory, deletion journal and HTTP runtime.
 - `javes_clip/`: Clip transport boundary and explicit unavailable runner.
-- `routing/`: pure Routing algorithm, renderer and simulator.
-- `tests/`: unit, contract, HTTP, persistence, restart and integration tests.
-
-The legacy `javes_fakes` package is retained temporarily for existing unit
-fixtures. It is not used by `build_api_first_system` or any production command.
+- `tests/`: unit, contract, HTTP, persistence, restart and integration tests;
+  test doubles are isolated in `tests/support`.

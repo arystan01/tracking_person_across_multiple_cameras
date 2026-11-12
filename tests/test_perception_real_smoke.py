@@ -26,8 +26,8 @@ def test_tracked_models_produce_real_probe_result(tmp_path):
     from javes_contracts import ArtifactRef, PerceptionProbeJob, TargetGalleryCommand
     from javes_main.adapters.artifacts import FileArtifactStore
     from javes_perception import PerceptionWorker
-    from javes_perception.config import load_settings
-    from routing.contracts import ProbeRequest, ProbeStatus
+    from javes_perception.runtime.config_loader import load_settings
+    from javes_contracts import ProbeRequest, ProbeStatus
 
     root = Path(__file__).resolve().parents[1]
     assert (root / "models/yolo26n.pt").is_file()

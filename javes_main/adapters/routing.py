@@ -10,9 +10,9 @@ from javes_contracts import (
     SearchState,
     SiteGraph,
 )
-from routing.contracts.params import RoutingParams
-from routing.step import init_state
-from routing.worker import step_and_render
+from javes_routing.core.params import RoutingParams
+from javes_routing.core.step import init_state
+from javes_routing.core.facade import step_and_render
 
 
 class LocalRoutingAdapter:
@@ -32,6 +32,17 @@ class LocalRoutingAdapter:
                 ),
                 "last_known_zone": anchors.last_known_zone or case.last_known_zone,
                 "last_known_time": anchors.last_known_time or case.last_known_time,
+                "last_known_bbox_xywh": (
+                    anchors.last_known_bbox_xywh or case.last_known_bbox_xywh
+                ),
+                "last_known_footpoint_px": (
+                    anchors.last_known_footpoint_px
+                    or case.last_known_footpoint_px
+                ),
+                "last_known_map_position": (
+                    anchors.last_known_map_position
+                    or case.last_known_map_position
+                ),
             },
             deep=True,
         )

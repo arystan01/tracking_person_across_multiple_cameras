@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from routing.contracts import ContractModel, ProbeRequest
+from .routing import ContractModel, MapPosition, ProbeRequest
 
 
 def aware_utc(value: datetime | None) -> datetime | None:
@@ -25,6 +26,7 @@ class ArtifactRef(ContractModel):
     archive_id: str | None = None
     object_key: str | None = None
     uri: str | None = None
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _has_identity(self) -> ArtifactRef:
@@ -156,30 +158,6 @@ class PerceptionProbeJob(ContractModel):
         return aware_utc(value)
 
 
-class FakeObservation(ContractModel):
-    observation_id: str
-    camera_id: str
-    t_start: datetime
-    t_end: datetime
-    appearance_score: float = Field(ge=0.0, le=1.0)
-    bbox_first: tuple[float, float, float, float] = (0.0, 0.0, 10.0, 10.0)
-    bbox_last: tuple[float, float, float, float] = (10.0, 10.0, 10.0, 10.0)
-    cosine: float | None = None
-    association_id: str | None = None
-    clip_ref: ArtifactRef | None = None
-
-    @field_validator("t_start", "t_end", mode="after")
-    @classmethod
-    def _aware_times(cls, value: datetime) -> datetime:
-        return aware_utc(value)  # type: ignore[return-value]
-
-    @model_validator(mode="after")
-    def _ordered(self) -> FakeObservation:
-        if self.t_end < self.t_start:
-            raise ValueError("observation t_end must not precede t_start")
-        return self
-
-
 class ClipProcessingStatus(str, Enum):
     PENDING = "PENDING"
     READY = "READY"
@@ -242,8 +220,6 @@ class ClipRecord(ContractModel):
     @classmethod
     def _aware_times(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
-
-
 class ClipStateCommand(ContractModel):
     contract_version: Literal["clip-state-command.v1"] = "clip-state-command.v1"
     command_id: str
@@ -257,7 +233,6 @@ class ClipStateCommand(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
-
 
 class ExportClipsCommand(ContractModel):
     contract_version: Literal["clip-export.v1"] = "clip-export.v1"
@@ -357,6 +332,9 @@ class LastKnown(ContractModel):
     camera_id: str | None = None
     zone_id: str | None = None
     time: datetime
+    bbox_xywh: tuple[float, float, float, float] | None = None
+    footpoint_px: tuple[float, float] | None = None
+    map_position: MapPosition | None = None
 
     @field_validator("time", mode="after")
     @classmethod
@@ -367,6 +345,20 @@ class LastKnown(ContractModel):
     def _one_location(self) -> LastKnown:
         if bool(self.camera_id) == bool(self.zone_id):
             raise ValueError("last_known requires exactly one camera_id or zone_id")
+        if self.zone_id and (
+            self.bbox_xywh is not None or self.footpoint_px is not None
+        ):
+            raise ValueError("pixel last-known data requires camera_id")
+        for value in [
+            *(self.bbox_xywh or ()),
+            *(self.footpoint_px or ()),
+        ]:
+            if not math.isfinite(value):
+                raise ValueError("last-known pixel coordinates must be finite")
+        if self.bbox_xywh is not None and (
+            self.bbox_xywh[2] <= 0 or self.bbox_xywh[3] <= 0
+        ):
+            raise ValueError("last-known bbox dimensions must be positive")
         return self
 
 
@@ -406,15 +398,3 @@ class CaseCommandBody(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
-
-
-class FakeHttpRequest(ContractModel):
-    request_id: str
-    method: Literal["GET", "POST"]
-    path: str
-    headers: dict[str, str] = Field(default_factory=dict)
-    body: dict[str, Any] | None = Field(
-        default=None,
-        validation_alias="json",
-        serialization_alias="json",
-    )

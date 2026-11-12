@@ -16,7 +16,7 @@ from javes_contracts import (
     SiteGraph,
 )
 from javes_site_config.registry import model_checksum
-from routing.contracts.params import RoutingParams
+from javes_routing.core.params import RoutingParams
 
 
 class HttpRoutingAdapter:

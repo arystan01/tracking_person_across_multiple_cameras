@@ -1,9 +1,6 @@
-"""Adapters with fake-only dependencies loaded lazily."""
+"""Main Infra storage, site, and Routing adapters."""
 
 __all__ = [
-    "FakeClipAdapter",
-    "FakePerceptionAdapter",
-    "FakeRetentionAdapter",
     "FileArtifactStore",
     "InMemoryArtifactStore",
     "InMemoryLiveFeedStore",
@@ -18,10 +15,6 @@ def __getattr__(name: str):
         from . import artifacts
 
         return getattr(artifacts, name)
-    if name in {"FakeClipAdapter", "FakePerceptionAdapter", "FakeRetentionAdapter"}:
-        from . import fake_workers
-
-        return getattr(fake_workers, name)
     if name == "InMemorySiteConfig":
         from .site_config import InMemorySiteConfig
 

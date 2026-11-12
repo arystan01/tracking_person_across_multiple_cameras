@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "javes-ai-routing"
 version = "0.1.0"
-description = "JAVES-AI routing, Main Infra controls, durable Retention, contracts, and integration fakes"
+description = "JAVES-AI routing, Main Infra controls, durable Retention, and shared contracts"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2,<3", "PyYAML>=6,<7", "argon2-cffi>=21.3,<26"]
 
@@ -36,25 +36,23 @@ perception = [
 ]
 
 [project.scripts]
-javes-routing-demo = "routing.demo:main"
-javes-routing-bench = "routing.sim.bench:main"
-javes-contract-fakes = "javes_fakes.demo:main"
+javes-routing-demo = "javes_routing.service.demo:main"
+javes-routing-bench = "javes_routing.service.bench:main"
 javes-main-migrate = "javes_main.persistence.migrate:main"
 javes-main-bootstrap-root = "javes_main.application.auth_cli:main"
 javes-contract-schemas = "javes_contracts.schema:main"
-javes-main-demo = "javes_main.demo:main"
-javes-retention-inspect = "javes_retention.cli:main"
-javes-perception-probe = "javes_perception.cli:main"
+javes-retention-inspect = "javes_retention.runtime.cli:main"
+javes-perception-probe = "javes_perception.runtime.cli:main"
 javes-main-api = "javes_main.api_cli:main"
 javes-main-scheduler = "javes_main.scheduler_cli:main"
-javes-routing-api = "javes_routing_api.cli:main"
+javes-routing-api = "javes_routing.service.cli:main"
 javes-site-config-api = "javes_site_config.cli:main"
-javes-perception-worker = "javes_perception.worker_cli:main"
-javes-retention-worker = "javes_retention.worker_cli:main"
+javes-perception-worker = "javes_perception.runtime.worker_cli:main"
+javes-retention-worker = "javes_retention.runtime.worker_cli:main"
 javes-clip-worker = "javes_clip.worker_cli:main"
 
 [tool.setuptools.packages.find]
-include = ["routing*", "javes_contracts*", "javes_fakes*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_routing_api*", "javes_workers*", "javes_clip*"]
+include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*"]
 
 [tool.setuptools.package-data]
 "javes_main.persistence.migrations" = ["script.py.mako"]
