@@ -337,6 +337,22 @@ class MapFloor(ContractModel):
     image: str | None = None
     size_px: tuple[int, int]
     m_per_px: float | None = Field(default=None, gt=0.0)
+    walkable_polygons: list[list[tuple[float, float]]] = Field(
+        default_factory=list
+    )
+    blocked_polygons: list[list[tuple[float, float]]] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _valid_floor_polygons(self) -> MapFloor:
+        for kind, polygons in (
+            ("walkable", self.walkable_polygons),
+            ("blocked", self.blocked_polygons),
+        ):
+            if any(len(polygon) < 3 for polygon in polygons):
+                raise ValueError(f"{kind} floor polygons require at least three points")
+        return self
 
 
 class MapDef(ContractModel):
@@ -363,6 +379,8 @@ class WalkEdgeDef(ContractModel):
     floor_id: str
     map_path: list[tuple[float, float]] = Field(default_factory=list)
     d_m: float | None = Field(default=None, gt=0.0)
+    width_m: float = Field(default=1.5, gt=0.0)
+    branch_prior: float | None = Field(default=None, gt=0.0)
     bidirectional: bool = Field(
         default=False,
         exclude_if=lambda value: value is False,
@@ -672,6 +690,7 @@ class ReachableSegment(ContractModel):
     probability: float = Field(ge=0.0, le=1.0)
     floor_id: str | None = None
     points: list[tuple[float, float]] = Field(default_factory=list)
+    width_m: float = Field(default=1.5, gt=0.0)
     progress: float = Field(default=1.0, ge=0.0, le=1.0)
     approximate: bool = False
 
@@ -693,10 +712,18 @@ class Estimate(ContractModel):
     distance_range: RangeEstimate | None = None
     reachable_segments: list[ReachableSegment] = Field(default_factory=list)
     reachable_nodes: list[ReachableNode] = Field(default_factory=list)
+    reachable_origin: MapPosition | None = None
+    reachable_as_of: datetime | None = None
+    reachable_horizon_s: float | None = Field(default=None, ge=0.0)
+    reachable_method_version: str | None = None
     calculated_at: datetime | None = None
 
     @field_validator(
-        "valid_until", "last_observed_time", "calculated_at", mode="after"
+        "valid_until",
+        "last_observed_time",
+        "reachable_as_of",
+        "calculated_at",
+        mode="after",
     )
     @classmethod
     def _aware_estimate_times(cls, value: datetime | None) -> datetime | None:
