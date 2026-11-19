@@ -11,10 +11,12 @@ from javes_contracts import (
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
+    CreateLegalHoldBody,
     LastKnown,
     LiveFeedUpdate,
     ReviewDecisionBody,
     RevokeDecisionBody,
+    ReleaseLegalHoldBody,
 )
 from javes_main.adapters import (
     FileArtifactStore,
@@ -23,7 +25,7 @@ from javes_main.adapters import (
 )
 from javes_main.adapters.system import FixedClock
 from javes_main.api import create_app
-from javes_main.domain import JobState
+from javes_main.domain import JobState, ROLE_PERMISSIONS, UserRole
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
 from javes_routing.core.params import RoutingParams
@@ -422,6 +424,83 @@ async def test_controls_decision_history_and_revoke_api():
             f"/v1/cases/api-case/decisions/{decision.decision_id}/revoke",
             json=revoke.model_dump(mode="json"),
             headers=headers("api-revocation", root_token),
+        )
+        assert duplicate.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_controls_legal_hold_is_root_only_ticketed_and_idempotent():
+    assert "case.legal_hold.manage" not in ROLE_PERMISSIONS[UserRole.ADMIN]
+    assert "case.legal_hold.manage" not in ROLE_PERMISSIONS[UserRole.OPERATOR]
+    system = make_system()
+    transport = httpx.ASGITransport(
+        app=create_app(
+            system.manager,
+            auth=system.auth,
+            scheduler=system.scheduler,
+            run_fake_jobs_inline=True,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        root_token = await login(client, "root", "root-password-for-tests")
+        me = await client.get(
+            "/v1/auth/me", headers={"authorization": f"Bearer {root_token}"}
+        )
+        root_id = me.json()["user_id"]
+        created = await client.post(
+            "/v1/cases",
+            json=body(root_id).model_dump(mode="json"),
+            headers=headers("legal-api-create", root_token),
+        )
+        assert created.status_code == 201
+        hold = CreateLegalHoldBody(
+            hold_id="api-hold",
+            external_ticket_id="LEGAL-9001",
+            reason="court preservation request",
+            operator_id=root_id,
+            occurred_at=BASE + timedelta(seconds=70),
+            expected_case_revision=created.json()["revision"],
+        )
+        held = await client.post(
+            "/v1/cases/api-case/legal-holds",
+            json=hold.model_dump(mode="json"),
+            headers=headers("api-hold", root_token),
+        )
+        assert held.status_code == 201, held.text
+        assert held.json()["active"] is True
+        assert held.json()["external_ticket_id"] == "LEGAL-9001"
+        listed = await client.get(
+            "/v1/cases/api-case/legal-holds",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        assert listed.status_code == 200
+        assert [item["hold_id"] for item in listed.json()] == ["api-hold"]
+
+        current = await client.get(
+            "/v1/cases/api-case/view",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        release = ReleaseLegalHoldBody(
+            release_id="api-hold-release",
+            hold_id="api-hold",
+            external_ticket_id="LEGAL-9001",
+            reason="court preservation request closed",
+            operator_id=root_id,
+            occurred_at=BASE + timedelta(seconds=80),
+            expected_case_revision=current.json()["revision"],
+        )
+        released = await client.post(
+            "/v1/cases/api-case/legal-holds/api-hold/release",
+            json=release.model_dump(mode="json"),
+            headers=headers("api-hold-release", root_token),
+        )
+        assert released.status_code == 200, released.text
+        assert released.json()["active"] is False
+        assert released.json()["release_pending"] is False
+        duplicate = await client.post(
+            "/v1/cases/api-case/legal-holds/api-hold/release",
+            json=release.model_dump(mode="json"),
+            headers=headers("api-hold-release", root_token),
         )
         assert duplicate.status_code == 200
 

@@ -8,6 +8,8 @@ from javes_contracts import (
     RetentionClass,
     RetentionCommand,
     RetentionDeletionReceipt,
+    RetentionHoldCommand,
+    RetentionHoldResult,
     RetentionResource,
     RetentionResult,
 )
@@ -34,6 +36,8 @@ class FakeRetentionWorker:
         self.deleted_cases: set[str] = set()
         self.expired_cases: set[str] = set()
         self.closed_cases: set[str] = set()
+        self.active_holds: dict[str, set[str]] = {}
+        self._hold_commands: dict[str, tuple[str, RetentionHoldResult]] = {}
         for resource in resources or []:
             self.register(resource)
 
@@ -56,10 +60,35 @@ class FakeRetentionWorker:
         if (
             resource.case_id in self.deleted_cases | self.expired_cases
             and not resource.legal_hold
+            and not self.active_holds.get(resource.case_id)
             and resource.retention_class != RetentionClass.AUDIT
         ):
             value.deleted = True
         self.resources[resource.resource_id] = value
+
+    def apply_hold(self, command: RetentionHoldCommand) -> RetentionHoldResult:
+        fingerprint = command.model_dump_json()
+        previous = self._hold_commands.get(command.command_id)
+        if previous is not None:
+            if previous[0] != fingerprint:
+                raise ValueError("same legal-hold command_id used with different payload")
+            return previous[1].model_copy(deep=True)
+        active = self.active_holds.setdefault(command.case_id, set())
+        if command.action == "SET":
+            active.add(command.hold_id)
+        else:
+            if command.hold_id not in active:
+                raise KeyError(f"unknown active legal hold {command.hold_id!r}")
+            active.remove(command.hold_id)
+        result = RetentionHoldResult(
+            command_id=command.command_id,
+            case_id=command.case_id,
+            hold_id=command.hold_id,
+            action=command.action,
+            active_hold_ids=sorted(active),
+        )
+        self._hold_commands[command.command_id] = (fingerprint, result)
+        return result.model_copy(deep=True)
 
     def process(self, command: RetentionCommand) -> RetentionResult:
         fingerprint = command.model_dump_json()
@@ -89,6 +118,7 @@ class FakeRetentionWorker:
             should_delete = False
             if (
                 not resource.legal_hold
+                and not self.active_holds.get(command.case_id)
                 and resource.retention_class != RetentionClass.AUDIT
             ):
                 if command.action == "DELETE_CASE":
@@ -112,6 +142,15 @@ class FakeRetentionWorker:
             action=command.action,
             deleted_resource_ids=deleted,
             preserved_resource_ids=preserved,
+            held_resource_ids=[
+                resource_id
+                for resource_id in preserved
+                if self.resources[resource_id].retention_class != RetentionClass.AUDIT
+                and (
+                    self.active_holds.get(command.case_id)
+                    or self.resources[resource_id].legal_hold
+                )
+            ],
             audit_tombstone_id=_tombstone(command),
             receipts=[
                 RetentionDeletionReceipt(

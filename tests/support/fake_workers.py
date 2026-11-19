@@ -11,6 +11,8 @@ from javes_contracts import (
     PerceptionProbeJob,
     ProbeResult,
     RetentionCommand,
+    RetentionHoldCommand,
+    RetentionHoldResult,
     RetentionResource,
     RetentionResult,
     TargetGalleryCommand,
@@ -56,3 +58,6 @@ class FakeRetentionAdapter:
 
     def process(self, command: RetentionCommand) -> RetentionResult:
         return self.worker.process(command)
+
+    def apply_hold(self, command: RetentionHoldCommand) -> RetentionHoldResult:
+        return self.worker.apply_hold(command)
