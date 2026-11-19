@@ -1,0 +1,31 @@
+cameras:
+  Cam001: {path: /nvidia/videos/Warehouse_Synthetic_Cam001.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam002: {path: /nvidia/videos/Warehouse_Synthetic_Cam002.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam003: {path: /nvidia/videos/Warehouse_Synthetic_Cam003.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam004: {path: /nvidia/videos/Warehouse_Synthetic_Cam004.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam005: {path: /nvidia/videos/Warehouse_Synthetic_Cam005.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam006: {path: /nvidia/videos/Warehouse_Synthetic_Cam006.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam007: {path: /nvidia/videos/Warehouse_Synthetic_Cam007.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam008: {path: /nvidia/videos/Warehouse_Synthetic_Cam008.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam009: {path: /nvidia/videos/Warehouse_Synthetic_Cam009.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam010: {path: /nvidia/videos/Warehouse_Synthetic_Cam010.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam011: {path: /nvidia/videos/Warehouse_Synthetic_Cam011.mp4, start: "2026-01-01T00:00:00Z"}
+  Cam012: {path: /nvidia/videos/Warehouse_Synthetic_Cam012.mp4, start: "2026-01-01T00:00:00Z"}
+detector_weights: /models/yolo26n.pt
+tracker: bytetrack.yaml
+reid_model: osnet_ain_x1_0
+reid_weights: /models/osnet_ain_x1_0_msmt17.pt
+model_version: osnet_ain_x1_0_msmt17
+device: cpu
+sample_fps: 5
+track_lost_buffer_s: 8
+min_track_frames: 3
+embed_every: 2
+min_embed_conf: 0.4
+edge_margin_px: 2
+max_overlap: 0.3
+calib_a: 26.0
+calib_b: -15.49
+score_floor: 0.1
+calibration_version: osnet-ain-market1501-logit-v1
+extraction_cache_dir: /state/extraction-cache

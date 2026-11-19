@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from javes_site_config import HttpSiteConfigClient
 
@@ -11,11 +12,17 @@ from javes_telemetry import configure_telemetry, shutdown_telemetry
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the JAVES-AI Routing API")
     parser.add_argument("--site-config-url", required=True)
-    parser.add_argument("--site-config-token", required=True)
-    parser.add_argument("--token", required=True)
+    parser.add_argument(
+        "--site-config-token", default=os.environ.get("JAVES_SITE_CONFIG_SERVICE_TOKEN")
+    )
+    parser.add_argument(
+        "--token", default=os.environ.get("JAVES_ROUTING_SERVICE_TOKEN")
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)
     args = parser.parse_args()
+    if not args.site_config_token or not args.token:
+        parser.error("service tokens are required through arguments or environment")
     configure_telemetry("javes-routing-api")
     import uvicorn
 

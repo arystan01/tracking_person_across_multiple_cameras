@@ -13,6 +13,7 @@ class MainSettings(BaseModel):
 
     database_url: str
     artifact_root: Path
+    environment: str = "development"
     perception_worker_token: SecretStr | None = None
     perception_worker_token_previous: SecretStr | None = None
     clip_worker_token: SecretStr | None = None
@@ -49,6 +50,7 @@ class MainSettings(BaseModel):
         values = {
             "database_url": database_url,
             "artifact_root": artifact_root,
+            "environment": os.environ.get(f"{prefix}ENVIRONMENT", "development"),
             "perception_worker_token": os.environ.get(
                 f"{prefix}PERCEPTION_WORKER_TOKEN"
             ),
@@ -59,9 +61,7 @@ class MainSettings(BaseModel):
             "clip_worker_token_previous": os.environ.get(
                 f"{prefix}CLIP_WORKER_TOKEN_PREVIOUS"
             ),
-            "retention_worker_token": os.environ.get(
-                f"{prefix}RETENTION_WORKER_TOKEN"
-            ),
+            "retention_worker_token": os.environ.get(f"{prefix}RETENTION_WORKER_TOKEN"),
             "retention_worker_token_previous": os.environ.get(
                 f"{prefix}RETENTION_WORKER_TOKEN_PREVIOUS"
             ),
@@ -77,7 +77,9 @@ class MainSettings(BaseModel):
             in {"1", "true", "yes"},
             "trusted_proxy_cidrs": [
                 item.strip()
-                for item in os.environ.get(f"{prefix}TRUSTED_PROXY_CIDRS", "").split(",")
+                for item in os.environ.get(f"{prefix}TRUSTED_PROXY_CIDRS", "").split(
+                    ","
+                )
                 if item.strip()
             ],
             "cors_origins": [
@@ -101,4 +103,21 @@ class MainSettings(BaseModel):
             value = os.environ.get(f"{prefix}{field.upper()}")
             if value is not None:
                 values[field] = converter(value)
-        return cls.model_validate(values)
+        settings = cls.model_validate(values)
+        if settings.environment.lower() in {"staging", "production"}:
+            forbidden = ("development", "change-me", "changeme", "example", "secret")
+            required_secrets = {
+                "perception worker token": settings.perception_worker_token,
+                "clip worker token": settings.clip_worker_token,
+                "retention worker token": settings.retention_worker_token,
+                "worker lease secret": settings.worker_lease_secret,
+                "routing token": settings.routing_token,
+                "site config token": settings.site_config_token,
+            }
+            for label, value in required_secrets.items():
+                raw = value.get_secret_value() if value is not None else ""
+                if len(raw) < 32 or any(marker in raw.lower() for marker in forbidden):
+                    raise ValueError(
+                        f"{label} must be a non-development value of at least 32 characters"
+                    )
+        return settings
