@@ -143,7 +143,7 @@ def test_ttl_deletes_due_and_inherited_but_preserves_future_audit_and_hold(tmp_p
     assert retention.sweep_expired(BASE + timedelta(days=2)) == []
 
 
-def test_late_resource_and_released_legal_hold_cannot_resurrect_deleted_case(tmp_path):
+def test_late_resource_and_unauthorised_hold_release_cannot_resurrect_case(tmp_path):
     store = InMemoryArtifactStore()
     repo = SQLiteRetentionRepository(tmp_path / "retention.db")
     retention = worker(repo, store)
@@ -163,9 +163,10 @@ def test_late_resource_and_released_legal_hold_cannot_resurrect_deleted_case(tmp
     assert late_stored.resource.artifact_ref is None
     assert "late.svg" not in store.keys()
 
-    retention.register(held.model_copy(update={"legal_hold": False}))
-    assert retention.get_resource("held").state == "DELETED"  # type: ignore[union-attr]
-    assert store.keys() == []
+    with pytest.raises(ValueError, match="authority workflow"):
+        retention.register(held.model_copy(update={"legal_hold": False}))
+    assert retention.get_resource("held").state == "ACTIVE"  # type: ignore[union-attr]
+    assert store.keys() == ["held.mp4"]
 
 
 def test_already_missing_object_is_a_proven_idempotent_delete(tmp_path):
@@ -178,8 +179,10 @@ def test_already_missing_object_is_a_proven_idempotent_delete(tmp_path):
     assert stored is not None
     assert stored.resource.artifact_ref is None
     assert stored.resource.kind == "DELETED"
-    assert stored.proof[0]["already_absent"] is True
-    assert stored.proof[0]["locator"]["value"].startswith("sha256:")
+    assert stored.proof[0]["status"] == "ALREADY_MISSING"
+    assert stored.proof[0]["locator_hash"].startswith("sha256:")
+    assert "absent" not in str(stored.proof)
+    assert result.receipts[0].status == "ALREADY_MISSING"
 
 
 def test_stale_registration_cannot_resurrect_terminal_resource_class(tmp_path):
@@ -240,7 +243,118 @@ def test_partial_failure_is_durable_and_resumes_after_restart(tmp_path):
     result = restarted.process(command("ttl-1", "TTL_EXPIRED"))
     assert result.deleted_resource_ids == ["a", "b"]
     assert calls == ["a", "b", "b"]
+    b_receipts = [item for item in result.receipts if item.resource_id == "b"]
+    assert [(item.attempt, item.status) for item in b_receipts] == [
+        (1, "FAILED"),
+        (2, "DELETED"),
+    ]
+    assert all(item.locator_hash.startswith("sha256:") for item in b_receipts)
     assert restarted.process(command("ttl-1", "TTL_EXPIRED")) == result
+
+
+def test_crash_after_journal_resumes_without_losing_command(tmp_path):
+    database = tmp_path / "retention.db"
+    store = InMemoryArtifactStore()
+    store.put("journalled", b"payload", "application/octet-stream")
+    first = worker(SQLiteRetentionRepository(database), store)
+    first.register(
+        resource("journalled", RetentionClass.EPHEMERAL, key="journalled")
+    )
+
+    def crash_before_delete(_: str):
+        raise SystemExit("simulated process crash after command journal")
+
+    first._delete_resource = crash_before_delete  # type: ignore[method-assign]
+    with pytest.raises(SystemExit):
+        first.process(command("crash-after-journal", "TTL_EXPIRED"))
+    stored_command = first.repository.get_command("crash-after-journal")
+    assert stored_command is not None and stored_command.state == "PROCESSING"
+    first.close()
+
+    restarted = worker(SQLiteRetentionRepository(database), store)
+    result = restarted.process(command("crash-after-journal", "TTL_EXPIRED"))
+    assert result.deleted_resource_ids == ["journalled"]
+    assert store.keys() == []
+
+
+def test_delete_before_receipt_retries_as_already_missing(tmp_path):
+    database = tmp_path / "retention.db"
+    store = InMemoryArtifactStore()
+    store.put("crash-window", b"payload", "application/octet-stream")
+
+    class CrashAfterDeleteBackend:
+        name = "crash-after-delete"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def delete(self, locator: StorageLocator) -> DeletionReceipt:
+            self.calls += 1
+            existed = store.delete(locator.value)
+            if self.calls == 1:
+                raise RuntimeError("simulated crash before backend receipt")
+            return DeletionReceipt(
+                locator=locator,
+                deleted=existed,
+                already_absent=not existed,
+                backend=self.name,
+            )
+
+    backend = CrashAfterDeleteBackend()
+    first = RetentionWorker(
+        SQLiteRetentionRepository(database),
+        DeletionRouter({"object_key": backend}),
+        clock=lambda: BASE,
+    )
+    first.register(
+        resource("crash-window", RetentionClass.EPHEMERAL, key="crash-window")
+    )
+    with pytest.raises(RetentionDeletionError, match="RUNTIME_ERROR"):
+        first.process(command("crash-after-delete", "TTL_EXPIRED"))
+    failed = first.get_resource("crash-window")
+    assert failed is not None
+    assert failed.proof[0]["status"] == "FAILED"
+    assert "locator" not in failed.proof[0]
+    assert failed.proof[0]["locator_hash"].startswith("sha256:")
+    first.close()
+
+    restarted = RetentionWorker(
+        SQLiteRetentionRepository(database),
+        DeletionRouter({"object_key": backend}),
+        clock=lambda: BASE + timedelta(seconds=1),
+    )
+    result = restarted.process(command("crash-after-delete", "TTL_EXPIRED"))
+    assert [(item.attempt, item.status) for item in result.receipts] == [
+        (1, "FAILED"),
+        (2, "ALREADY_MISSING"),
+    ]
+    assert backend.calls == 2
+
+
+def test_callback_ack_crash_replays_cached_result_without_second_delete(tmp_path):
+    calls = 0
+
+    def delete_once(_: StorageLocator) -> bool:
+        nonlocal calls
+        calls += 1
+        return True
+
+    retention = RetentionWorker(
+        SQLiteRetentionRepository(tmp_path / "retention.db"),
+        DeletionRouter(
+            {"object_key": CallbackDeletionBackend(delete_once, name="counted")}
+        ),
+        clock=lambda: BASE,
+    )
+    retention.register(
+        resource("callback", RetentionClass.EPHEMERAL, key="callback")
+    )
+    command_value = command("callback-before-ack", "TTL_EXPIRED")
+    result_before_ack = retention.process(command_value)
+    # Main ACK is deliberately absent here: at-least-once transport redelivers.
+    replayed = retention.process(command_value)
+    assert replayed == result_before_ack
+    assert calls == 1
 
 
 def test_unknown_storage_scheme_fails_closed_until_backend_is_attached(tmp_path):
@@ -254,7 +368,7 @@ def test_unknown_storage_scheme_fails_closed_until_backend_is_attached(tmp_path)
             artifact_ref=ArtifactRef(uri="gallery:case-1/target"),
         )
     )
-    with pytest.raises(RetentionDeletionError, match="uri:gallery"):
+    with pytest.raises(RetentionDeletionError, match="UNSUPPORTED_STORAGE_LOCATOR"):
         retention.process(command("ttl-gallery", "TTL_EXPIRED"))
     assert retention.get_resource("gallery").state == "DELETE_FAILED"  # type: ignore[union-attr]
 
@@ -362,6 +476,40 @@ def test_local_factory_deletes_live_buffer_and_artifact_files(tmp_path):
     assert artifacts.keys() == []
     with pytest.raises(KeyError):
         live.get("case/camera/frame")
+
+
+def test_all_current_product_artifact_kinds_delete_with_path_free_receipts(tmp_path):
+    store = InMemoryArtifactStore()
+    retention = worker(SQLiteRetentionRepository(tmp_path / "retention.db"), store)
+    resources = {
+        "reference": "cases/case-1/reference/reference.jpg",
+        "crop": "cases/case-1/perception/crop.jpg",
+        "embedding": "cases/case-1/perception/embedding.npy",
+        "gallery": "cases/case-1/perception/gallery.npy",
+        "live_jpeg": "cases/case-1/live/frame.jpg",
+        "route_svg": "cases/case-1/routes/1/warehouse.svg",
+    }
+    for kind, key in resources.items():
+        store.put(key, kind.encode(), "application/octet-stream")
+        retention.register(
+            RetentionResource(
+                resource_id=kind,
+                case_id="case-1",
+                kind=kind.upper(),
+                retention_class=RetentionClass.CASE_RESULT,
+                artifact_ref=ArtifactRef(object_key=key),
+            )
+        )
+    retention.register(resource("audit", RetentionClass.AUDIT))
+
+    result = retention.process(command("delete-artifact-matrix", "DELETE_CASE"))
+    assert result.deleted_resource_ids == sorted(resources)
+    assert result.preserved_resource_ids == ["audit"]
+    assert store.keys() == []
+    assert len(result.receipts) == len(resources)
+    assert {item.status for item in result.receipts} == {"DELETED"}
+    serialized = result.model_dump_json()
+    assert not any(key in serialized for key in resources.values())
 
 
 def test_real_retention_plugs_into_main_and_deletes_route_bytes(tmp_path):
