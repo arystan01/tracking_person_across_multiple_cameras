@@ -50,9 +50,11 @@ javes-site-config-api = "javes_site_config.cli:main"
 javes-perception-worker = "javes_perception.runtime.worker_cli:main"
 javes-retention-worker = "javes_retention.runtime.worker_cli:main"
 javes-clip-worker = "javes_clip.worker_cli:main"
+javes-nvidia-archive-api = "javes_archive.cli:api_main"
+javes-nvidia-archive-inspect = "javes_archive.cli:inspect_main"
 
 [tool.setuptools.packages.find]
-include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*"]
+include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*"]
 
 [tool.setuptools.package-data]
 "javes_main.persistence.migrations" = ["script.py.mako"]
