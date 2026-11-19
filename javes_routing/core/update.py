@@ -269,11 +269,15 @@ def merge_tracklets_to_visits(
 
 def _scale_edge(edge: EdgeDef, params: RoutingParams, profile: str = "ADULT") -> EdgeDef:
     factors = params.profiles.get(profile, params.profiles["ADULT"])
+    timing = params.edge_timing_overrides.get(edge.id)
+    t_min = edge.t_min if timing is None else float(timing["t_min"])
+    t_typ = edge.t_typ if timing is None else float(timing["t_typ"])
+    t_max = edge.t_max if timing is None else float(timing["t_max"])
     return edge.model_copy(
         update={
-            "t_min": edge.t_min * factors["tmin_k"],
-            "t_typ": edge.t_typ * factors["ttyp_k"],
-            "t_max": edge.t_max * factors["tmax_k"],
+            "t_min": t_min * factors["tmin_k"],
+            "t_typ": t_typ * factors["ttyp_k"],
+            "t_max": t_max * factors["tmax_k"],
         }
     )
 
