@@ -545,7 +545,17 @@ def reachable_area(
     for node, _, probability, _, _ in frontier:
         node_probability[node] += probability
 
-    node_total = sum(node_probability.values()) or 1.0
+    canonical_node_probability: dict[str, float] = defaultdict(float)
+    for node_id, probability in node_probability.items():
+        node = graph.walk_graph.nodes.get(node_id)
+        canonical_id = (
+            "OUTSIDE"
+            if node is not None and node.kind == "OUTSIDE"
+            else node_id
+        )
+        canonical_node_probability[canonical_id] += probability
+
+    node_total = sum(canonical_node_probability.values()) or 1.0
     segments = [
         ReachableSegment(
             edge_id=edge_id,
@@ -566,7 +576,7 @@ def reachable_area(
     nodes = [
         ReachableNode(node_id=node, probability=round(value / node_total, 12))
         for node, value in sorted(
-            node_probability.items(), key=lambda item: (-item[1], item[0])
+            canonical_node_probability.items(), key=lambda item: (-item[1], item[0])
         )
     ]
     return segments, nodes
