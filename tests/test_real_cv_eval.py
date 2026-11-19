@@ -8,13 +8,29 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from javes_contracts import (
+    CameraCalibration,
+    CameraDef,
+    Estimate,
+    MapDef,
+    MapFloor,
+    MapPosition,
+    ReachableNode,
+    ReachableSegment,
+    SiteGraph,
+)
+
 from tests.support.real_cv_eval import (
+    EVALUATION_REPORT_SCHEMA_VERSION,
     EvaluationManifest,
+    OracleCheckpoint,
     ScenarioEvaluation,
     aggregate_evaluation,
+    evaluate_reachability,
     load_evaluation_manifest,
     run_real_cv_evaluation,
     system_payload,
+    write_evaluation_report,
 )
 
 
@@ -169,6 +185,145 @@ def test_aggregate_acceptance_thresholds_are_automatic():
         update={"positional_errors_m": [2.0], "passed": False}
     )
     assert not aggregate_evaluation([failed, *results[1:]]).passed
+
+    invalid_geometry = results[0].model_copy(
+        update={
+            "reachability": [
+                results[0].reachability[0].model_copy(
+                    update={"geometry_errors": ["crosses blocked area"]}
+                )
+            ]
+        },
+        deep=True,
+    )
+    assert not aggregate_evaluation([invalid_geometry, *results[1:]]).passed
+
+
+def test_reachability_oracle_rejects_blocked_and_early_geometry() -> None:
+    graph = SiteGraph(
+        site="oracle",
+        version="v1",
+        map=MapDef(
+            floors=[
+                MapFloor(
+                    id="1F",
+                    size_px=(100, 100),
+                    m_per_px=0.1,
+                    walkable_polygons=[
+                        [(0, 0), (100, 0), (100, 100), (0, 100)]
+                    ],
+                    blocked_polygons=[
+                        [(40, 40), (60, 40), (60, 60), (40, 60)]
+                    ],
+                )
+            ]
+        ),
+        cameras={
+            "Cam001": CameraDef(
+                id="Cam001",
+                floor="1F",
+                calibration=CameraCalibration(
+                    frame_size_px=(100, 100),
+                    homography=((1, 0, 0), (0, 1, 0), (0, 0, 1)),
+                    floor_id="1F",
+                    error_m=0.0,
+                ),
+            )
+        },
+        edges=[],
+    )
+    checkpoint = OracleCheckpoint(
+        camera_id="Cam001",
+        time_s=1.0,
+        foot_point_px=(90, 10),
+        coordinate_frame_px=(100, 100),
+        calibration_error_m=0.0,
+        hidden_from_system=True,
+    )
+    early = Estimate(
+        zones=[],
+        reachable_segments=[
+            ReachableSegment(
+                edge_id="safe-but-early",
+                source="a",
+                target="b",
+                probability=1.0,
+                floor_id="1F",
+                points=[(10, 10), (90, 10)],
+                width_m=1.0,
+            )
+        ],
+        reachable_nodes=[ReachableNode(node_id="b", probability=1.0)],
+        reachable_origin=MapPosition(x=10, y=10, floor_id="1F", error_m=0.0),
+        reachable_horizon_s=1.0,
+    )
+    early_metric = evaluate_reachability(
+        early, graph, [checkpoint], [], max_speed_mps=1.0
+    )
+    assert early_metric.contained == 1
+    assert early_metric.geometry_errors == []
+    assert len(early_metric.early_arrival_errors) == 1
+
+    blocked = early.model_copy(
+        update={
+            "reachable_segments": [
+                early.reachable_segments[0].model_copy(
+                    update={
+                        "edge_id": "blocked",
+                        "points": [(10, 50), (90, 50)],
+                    }
+                )
+            ],
+            "reachable_horizon_s": 10.0,
+        },
+        deep=True,
+    )
+    blocked_metric = evaluate_reachability(blocked, graph, [], [])
+    assert len(blocked_metric.geometry_errors) == 1
+    assert "crosses a blocked area" in blocked_metric.geometry_errors[0]
+
+
+def test_evaluation_summary_is_machine_readable_and_counts_failures(tmp_path):
+    passing = ScenarioEvaluation(
+        scenario_id="passing",
+        split="development",
+        passed=True,
+        positional_errors_m=[0.5],
+        route_associations=1,
+        cache_hit=True,
+        cache_hits=1,
+        duration_s=1.25,
+    )
+    failing = ScenarioEvaluation(
+        scenario_id="failing",
+        split="holdout",
+        passed=False,
+        positional_errors_m=[2.0],
+        route_associations=1,
+        failures=["positional gate"],
+        cache_misses=1,
+        duration_s=2.75,
+    )
+    summary = aggregate_evaluation(
+        [passing, failing],
+        quarantined_scenarios=1,
+    )
+    assert summary.schema_version == EVALUATION_REPORT_SCHEMA_VERSION
+    assert summary.active_scenarios == 2
+    assert summary.passed_scenarios == 1
+    assert summary.failed_scenarios == 1
+    assert summary.quarantined_scenarios == 1
+    assert summary.extraction_cache_hits == 1
+    assert summary.extraction_cache_misses == 1
+    assert summary.duration_s == pytest.approx(4.0)
+    assert not summary.passed
+
+    write_evaluation_report(tmp_path, summary)
+    report = (tmp_path / "report.json").read_text(encoding="utf-8")
+    assert EVALUATION_REPORT_SCHEMA_VERSION in report
+    assert '"failed_scenarios": 1' in report
+    assert '"quarantined_scenarios": 1' in report
+    assert "positional gate" in report
 
 
 @pytest.mark.real_cv

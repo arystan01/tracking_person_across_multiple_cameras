@@ -17,6 +17,7 @@ from javes_contracts import (
 )
 from javes_main.application import CaseManager
 from javes_main.domain import OutboxRecord, OutboxState, OutboxTopic
+from javes_main.observability import redact
 from javes_main.ports import CaseRepository, ClipPort, Clock, PerceptionPort, RetentionPort
 
 
@@ -98,7 +99,7 @@ class OutboxDispatcher:
                     continue
                 current.lease_owner = None
                 current.lease_expires_at = None
-                current.last_error = f"{type(exc).__name__}: {exc}"
+                current.last_error = str(redact(f"{type(exc).__name__}: {exc}"))
                 current.updated_at = self.clock.now()
                 if current.attempt >= current.max_attempts:
                     current.state = OutboxState.FAILED

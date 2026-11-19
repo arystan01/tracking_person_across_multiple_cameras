@@ -3,14 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from collections.abc import Iterable
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from javes_contracts import (
     CaseCommandBody,
     CreateCaseBody,
     LiveFeedUpdate,
+    ProblemDetails,
     ProbeResult,
     ReviewDecisionBody,
     WorkerClaimRequest,
@@ -21,6 +24,7 @@ from javes_contracts import (
     WorkerTaskFailureRequest,
     WorkerTaskResultRequest,
 )
+from javes_contracts.conventions import classify_problem
 from javes_main.application import (
     Actor,
     AuthenticationError,
@@ -33,6 +37,7 @@ from javes_main.application import (
 )
 from javes_main.domain import CaseLifecycle, CaseSummary, CaseView
 from javes_main.persistence import RevisionConflict
+from javes_main.observability import redact
 from javes_main.scheduler import SchedulerRunner
 
 from .auth import (
@@ -48,6 +53,7 @@ from .auth import (
     require_same_actor,
     user_view,
 )
+from .middleware import install_boundary_middleware
 
 
 async def _idempotency(value: str | None = Header(default=None, alias="idempotency-key")) -> str:
@@ -65,10 +71,27 @@ def create_app(
     auth: AuthService,
     scheduler: SchedulerRunner | None = None,
     run_fake_jobs_inline: bool = False,
-    worker_tokens: dict[str, str] | None = None,
+    worker_tokens: dict[str, str | Iterable[str]] | None = None,
     worker_lease_secret: str | None = None,
+    require_https: bool = False,
+    trusted_proxies: Iterable[str] = (),
+    cors_origins: Iterable[str] = (),
 ) -> FastAPI:
     app = FastAPI(title="JAVES-AI Controls", version="1.0.0-alpha")
+    origins = tuple(cors_origins)
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PUT"],
+            allow_headers=["authorization", "content-type", "idempotency-key", "x-request-id", "traceparent"],
+            expose_headers=["x-request-id", "traceparent"],
+            max_age=600,
+        )
+    install_boundary_middleware(
+        app, require_https=require_https, trusted_proxies=trusted_proxies
+    )
     current_actor = BearerAuthenticator(auth)
     metrics = MetricsService(manager.repository, manager.clock)
     configured_worker_tokens = dict(worker_tokens or {})
@@ -87,14 +110,22 @@ def create_app(
         *,
         allow_service_actor: bool = False,
     ) -> None:
-        component_token = configured_worker_tokens.get(component)
+        configured = configured_worker_tokens.get(component)
+        component_tokens = (
+            (configured,)
+            if isinstance(configured, str)
+            else tuple(configured or ())
+        )
         bearer_token = None
         if authorization and authorization.lower().startswith("bearer "):
             bearer_token = authorization[7:].strip()
         authenticated = (
-            component_token is not None
+            bool(component_tokens)
             and bearer_token is not None
-            and secrets.compare_digest(bearer_token, component_token)
+            and any(
+                secrets.compare_digest(bearer_token, token)
+                for token in component_tokens
+            )
         )
         if not authenticated and authorization and allow_service_actor:
             try:
@@ -126,15 +157,18 @@ def create_app(
             return response
 
     def problem(status: int, title: str, detail: str, problem_type: str) -> JSONResponse:
+        policy = classify_problem(problem_type, status)
         return JSONResponse(
             status_code=status,
             media_type="application/problem+json",
-            content={
-                "type": f"urn:javes:problem:{problem_type}",
-                "title": title,
-                "status": status,
-                "detail": detail,
-            },
+            content=ProblemDetails(
+                type=f"urn:javes:problem:{problem_type}",
+                title=title,
+                status=status,
+                detail=str(redact(detail)),
+                code=policy.code,
+                retryable=policy.retryable,
+            ).model_dump(mode="json", exclude_none=True),
         )
 
     @app.exception_handler(KeyError)
@@ -163,7 +197,12 @@ def create_app(
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_: Request, exc: HTTPException):
-        return problem(exc.status_code, "HTTP Error", str(exc.detail), "http")
+        problem_type = {
+            429: "rate-limit",
+            503: "service-unavailable",
+            504: "timeout",
+        }.get(exc.status_code, "http")
+        return problem(exc.status_code, "HTTP Error", str(exc.detail), problem_type)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_: Request, exc: RequestValidationError):
@@ -175,7 +214,16 @@ def create_app(
                 "title": "Validation Error",
                 "status": 422,
                 "detail": "request payload is invalid",
-                "errors": exc.errors(),
+                "code": "VALIDATION_FAILED",
+                "retryable": False,
+                "errors": [
+                    {
+                        "type": item.get("type"),
+                        "loc": item.get("loc"),
+                        "msg": item.get("msg"),
+                    }
+                    for item in exc.errors()
+                ],
             },
         )
 

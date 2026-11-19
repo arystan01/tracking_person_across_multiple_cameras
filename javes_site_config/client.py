@@ -6,6 +6,7 @@ import httpx
 
 from javes_contracts import RoutingParamsResponse, SiteVersionResponse
 from javes_routing.core.params import RoutingParams
+from javes_contracts.trace import outbound_trace_headers
 
 
 class HttpSiteConfigClient:
@@ -27,12 +28,15 @@ class HttpSiteConfigClient:
         self._sites: dict[tuple[str, str], SiteVersionResponse] = {}
         self._params: dict[str, RoutingParamsResponse] = {}
 
+    def _request_headers(self) -> dict[str, str]:
+        return {**self._headers, **outbound_trace_headers()}
+
     def site_snapshot(self, site_id: str, version: str) -> SiteVersionResponse:
         key = (site_id, version)
         if key not in self._sites:
             response = self._client.get(
                 f"{self.base_url}/internal/v1/sites/{quote(site_id, safe='')}/versions/{quote(version, safe='')}",
-                headers=self._headers,
+                headers=self._request_headers(),
             )
             response.raise_for_status()
             self._sites[key] = SiteVersionResponse.model_validate(response.json())
@@ -42,7 +46,7 @@ class HttpSiteConfigClient:
         if version not in self._params:
             response = self._client.get(
                 f"{self.base_url}/internal/v1/routing-params/{quote(version, safe='')}",
-                headers=self._headers,
+                headers=self._request_headers(),
             )
             response.raise_for_status()
             self._params[version] = RoutingParamsResponse.model_validate(response.json())
@@ -57,7 +61,7 @@ class HttpSiteConfigClient:
         for item in snapshot.assets:
             response = self._client.get(
                 f"{self.base_url}/internal/v1/sites/{quote(site_id, safe='')}/versions/{quote(version, safe='')}/assets/{quote(item.asset_id, safe='')}",
-                headers=self._headers,
+                headers=self._request_headers(),
             )
             response.raise_for_status()
             data = response.content

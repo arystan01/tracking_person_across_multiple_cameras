@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from javes_main.application import CaseManager
 from javes_main.domain import RoutingTriggerState
+from javes_main.observability import redact
 from javes_main.persistence import RevisionConflict
 from javes_main.ports import CaseRepository, Clock
 
@@ -71,7 +72,7 @@ class RoutingTriggerDispatcher:
                     continue
                 current.lease_owner = None
                 current.lease_expires_at = None
-                current.last_error = f"{type(exc).__name__}: {exc}"
+                current.last_error = str(redact(f"{type(exc).__name__}: {exc}"))
                 current.updated_at = self.clock.now()
                 if current.attempt >= current.max_attempts:
                     current.state = RoutingTriggerState.FAILED

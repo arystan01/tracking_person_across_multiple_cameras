@@ -35,7 +35,7 @@ from javes_main.adapters.remote_only import RemoteWorkerOnlyPort
 from javes_main.adapters.system import ContentIdGenerator, FixedClock
 from javes_main.application import AuthService, CaseManager
 from javes_main.persistence import InMemoryRepository
-from javes_main.domain import JobRecord, JobState
+from javes_main.domain import CaseLifecycle, JobRecord, JobState
 from javes_main.scheduler import RoutingTriggerDispatcher
 from javes_retention.core.worker import RetentionWorker
 from javes_retention.runtime.repository import SQLiteRetentionRepository
@@ -612,6 +612,10 @@ async def test_real_retention_core_claims_and_completes_through_http(tmp_path):
         result = retention.process(
             RetentionCommand.model_validate(delete_task.payload)
         )
+        pending_callback = app_system.repository.get("case-1")
+        assert pending_callback.lifecycle == CaseLifecycle.DELETE_REQUESTED
+        assert not pending_callback.content_redacted
+        assert result.receipts
         completed = await client.post(
             f"/internal/v1/workers/retention/tasks/{delete_task.task_id}/result",
             headers=headers,
