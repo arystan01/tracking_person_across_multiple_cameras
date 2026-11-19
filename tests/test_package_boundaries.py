@@ -85,6 +85,7 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         "javes-routing-bench": "javes_routing.service.bench:main",
         "javes-perception-worker": "javes_perception.runtime.worker_cli:main",
         "javes-retention-worker": "javes_retention.runtime.worker_cli:main",
+        "javes-nvidia-acceptance": "javes_release.cli:main",
     }
     configuration = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -106,6 +107,7 @@ def test_setuptools_discovers_new_packages_only() -> None:
         "javes_perception.runtime",
         "javes_retention.core",
         "javes_retention.runtime",
+        "javes_release",
     } <= packages
     assert "routing" not in packages
     assert "javes_routing_api" not in packages
