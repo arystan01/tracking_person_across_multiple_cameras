@@ -465,7 +465,11 @@ def gate_visit_details(
                 max(dt, minimum), minimum, typical, maximum
             )
             intermediate_nodes = tuple(edge.target for edge in path[:-1])
-            miss_factor = (1.0 - params.p_det) ** len(intermediate_nodes)
+            miss_cameras = [
+                node for node in intermediate_nodes if node in graph.cameras
+            ]
+            miss_groups = _overlap_components(miss_cameras, graph)
+            miss_factor = (1.0 - params.p_det) ** len(miss_groups)
             candidates.append(
                 (
                     max(likelihood * miss_factor, 1e-12),
@@ -1021,6 +1025,31 @@ def compute_miss_log_lik(p_det: float, f_mass: float = 1.0) -> float:
     return math.log(max(1.0 - p_det * min(max(f_mass, 0.0), 1.0), 1e-12))
 
 
+def _overlap_components(camera_ids: list[str], graph: SiteGraph) -> list[list[str]]:
+    """Connected overlap cameras represent one physical detection opportunity."""
+
+    remaining = set(camera_ids)
+    components: list[list[str]] = []
+    while remaining:
+        seed = min(remaining)
+        stack = [seed]
+        component: set[str] = set()
+        while stack:
+            camera_id = stack.pop()
+            if camera_id in component:
+                continue
+            component.add(camera_id)
+            remaining.discard(camera_id)
+            camera = graph.cameras[camera_id]
+            stack.extend(
+                other
+                for other in camera.overlap_camera_ids
+                if other in remaining
+            )
+        components.append(sorted(component))
+    return components
+
+
 def _arrival_mass(
     t_out: datetime,
     edge: EdgeDef,
@@ -1078,15 +1107,24 @@ def recompute_hypothesis_score(
     if hypothesis.visits and hypothesis.status == HypothesisStatus.ALIVE:
         last = hypothesis.visits[-1]
         if not last.open:
+            edges_by_camera: dict[str, list[EdgeDef]] = {}
             for edge in graph.get_edges_from(last.camera):
-                if edge.target not in graph.cameras:
-                    continue
-                scaled = _scale_edge(edge, params, profile)
-                covered = _arrival_mass(last.t_out, scaled, probed_windows, now)
-                if covered:
-                    camera_p_det = graph.cameras[edge.target].p_det
+                if edge.target in graph.cameras:
+                    edges_by_camera.setdefault(edge.target, []).append(edge)
+            for component in _overlap_components(list(edges_by_camera), graph):
+                # Correlated overlapping views cannot multiply one absence into
+                # several independent misses. Use only the strongest covered
+                # detection opportunity in the physical overlap group.
+                effective_detection = 0.0
+                for camera_id in component:
+                    camera_p_det = graph.cameras[camera_id].p_det
                     p_det = params.p_det if camera_p_det is None else camera_p_det
-                    score += compute_miss_log_lik(p_det, covered)
+                    for edge in edges_by_camera[camera_id]:
+                        scaled = _scale_edge(edge, params, profile)
+                        covered = _arrival_mass(last.t_out, scaled, probed_windows, now)
+                        effective_detection = max(effective_detection, p_det * covered)
+                if effective_detection:
+                    score += math.log(max(1.0 - effective_detection, 1e-12))
     return score
 
 
@@ -1172,8 +1210,9 @@ def _process_probe_results(
                 miss_coverage *= 0.5
             if result.status == ProbeStatus.DONE and effective_coverage < 1.0:
                 low_coverage = effective_coverage < params.min_coverage
-                if low_coverage:
-                    miss_coverage = 0.0
+                # Partial archive/decode coverage is an outage region, never
+                # reliable negative evidence, regardless of its percentage.
+                miss_coverage = 0.0
                 state.unobserved_windows.append(
                     {
                         "camera_id": matching.camera,
