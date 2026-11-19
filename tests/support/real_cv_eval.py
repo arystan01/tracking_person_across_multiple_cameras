@@ -506,6 +506,7 @@ def run_real_cv_evaluation(
         ProbeStatus,
         TargetGalleryCommand,
     )
+    from javes_archive import NvidiaArchiveRegistry
     from javes_main.adapters.artifacts import InMemoryArtifactStore
     from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
     from javes_perception.core.extraction import FilesystemExtractionCache
@@ -523,15 +524,16 @@ def run_real_cv_evaluation(
     from tests.support.real_cv_e2e import ReportVideo, publish_inspectable_report
 
     fixture = repository_root / "data/nvidia_mtmc/mtmc_12cam"
+    archive_registry = NvidiaArchiveRegistry(fixture)
     video_paths = {
-        camera: fixture / "videos" / f"Warehouse_Synthetic_{camera}.mp4"
+        camera: fixture / archive_registry.manifest.cameras[camera].relative_path
         for camera in ALL_NVIDIA_CAMERAS
     }
     if not all(path.is_file() for path in video_paths.values()):
         raise AssertionError("NVIDIA 12-camera videos are incomplete")
     site_raw = canonical_site(repository_root)
     graph = parse_site(site_raw)
-    base = datetime(2026, 11, 12, 0, 0, tzinfo=timezone.utc)
+    base = archive_registry.manifest.timeline_origin
     cameras = {
         camera: CameraSource(path=str(path), start=base, archive_id=f"nvidia:{camera}")
         for camera, path in video_paths.items()
