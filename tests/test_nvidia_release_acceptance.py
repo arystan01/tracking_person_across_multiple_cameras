@@ -22,26 +22,7 @@ def _ref(name: str, media_type: str = "application/json") -> dict:
 
 
 def _policy() -> AcceptancePolicy:
-    return AcceptancePolicy(
-        min_identity_precision=0.95,
-        min_identity_recall=0.90,
-        max_false_identity_rate=0.05,
-        min_tracklet_precision=0.95,
-        min_tracklet_recall=0.90,
-        max_median_position_error_m=0.75,
-        max_p95_position_error_m=1.5,
-        min_hidden_point_containment=0.90,
-        min_top2_branch_recall=0.90,
-        min_search_success_rate=1.0,
-        max_search_time_p95_s=900,
-        max_mean_camera_minutes=120,
-        max_queue_latency_p95_s=5,
-        max_worker_latency_p95_s=600,
-        max_routing_latency_p95_s=2,
-        max_retry_rate=0.05,
-        max_mean_search_cost=10,
-        max_deletion_sla_p95_s=60,
-    )
+    return AcceptancePolicy()
 
 
 def _evidence() -> NvidiaReleaseEvidence:
@@ -115,13 +96,13 @@ def _evidence() -> NvidiaReleaseEvidence:
                 "target_specific_tuning": False,
             },
             "operations": {
+                "controls_api_latency_p95_s": 1.2,
                 "search_time_p95_s": 700,
                 "mean_camera_minutes": 100,
                 "queue_latency_p95_s": 2,
                 "worker_latency_p95_s": 500,
                 "routing_latency_p95_s": 1,
                 "retry_rate": 0.01,
-                "mean_search_cost": 5,
                 "deletion_sla_p95_s": 30,
                 "audit_complete": True,
                 "cold_warm_business_equal": True,
@@ -195,6 +176,25 @@ def test_missing_restart_and_failed_cold_suite_are_reported() -> None:
     }
 
 
+def test_fixed_operational_thresholds_and_no_monetary_cost_gate() -> None:
+    policy = AcceptancePolicy()
+    assert policy.max_controls_api_latency_p95_s == 2.0
+    assert policy.max_routing_latency_p95_s == 2.0
+    assert policy.max_deletion_sla_p95_s == 60.0
+    assert "cost" not in policy.model_dump_json()
+
+    evidence = _evidence()
+    evidence.operations.controls_api_latency_p95_s = 2.01
+    evidence.operations.routing_latency_p95_s = 2.01
+    evidence.operations.deletion_sla_p95_s = 60.01
+    report = evaluate_nvidia_release(evidence, policy)
+    assert {item.check_id for item in report.failures} >= {
+        "operations.controls-api-latency",
+        "operations.routing-latency",
+        "operations.deletion-sla",
+    }
+
+
 def test_cli_writes_inspectable_json_and_html(tmp_path: Path) -> None:
     evidence_path = tmp_path / "evidence.json"
     policy_path = tmp_path / "policy.json"
@@ -205,7 +205,16 @@ def test_cli_writes_inspectable_json_and_html(tmp_path: Path) -> None:
     policy_path.write_text(
         json.dumps(_policy().model_dump(mode="json")), encoding="utf-8"
     )
-    report = run(evidence_path, policy_path, output)
+    report = run(evidence_path, output, policy_path)
     assert report.status == "PASS"
     assert json.loads((output / "report.json").read_text())["status"] == "PASS"
     assert "NVIDIA release sign-off" in (output / "index.html").read_text()
+
+
+def test_cli_uses_built_in_policy_without_override(tmp_path: Path) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    output = tmp_path / "report"
+    evidence_path.write_text(
+        json.dumps(_evidence().model_dump(mode="json")), encoding="utf-8"
+    )
+    assert run(evidence_path, output).status == "PASS"

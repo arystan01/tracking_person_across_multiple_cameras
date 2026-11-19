@@ -20,7 +20,14 @@ def build_parser() -> argparse.ArgumentParser:
         description="Evaluate an immutable JAVES-AI NVIDIA release evidence bundle"
     )
     parser.add_argument("evidence", type=Path, help="release evidence JSON")
-    parser.add_argument("policy", type=Path, help="pre-approved thresholds JSON")
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        help=(
+            "optional policy override JSON; the built-in NVIDIA policy uses "
+            "2 s p95 for Controls/Routing and 60 s deletion SLA"
+        ),
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -50,12 +57,18 @@ def _html_report(report: NvidiaReleaseReport) -> str:
 </body></html>"""
 
 
-def run(evidence_path: Path, policy_path: Path, output: Path) -> NvidiaReleaseReport:
+def run(
+    evidence_path: Path,
+    output: Path,
+    policy_path: Path | None = None,
+) -> NvidiaReleaseReport:
     evidence = NvidiaReleaseEvidence.model_validate_json(
         evidence_path.read_text(encoding="utf-8")
     )
-    policy = AcceptancePolicy.model_validate_json(
-        policy_path.read_text(encoding="utf-8")
+    policy = (
+        AcceptancePolicy.model_validate_json(policy_path.read_text(encoding="utf-8"))
+        if policy_path is not None
+        else AcceptancePolicy()
     )
     report = evaluate_nvidia_release(evidence, policy)
     output.mkdir(parents=True, exist_ok=True)
@@ -69,7 +82,7 @@ def run(evidence_path: Path, policy_path: Path, output: Path) -> NvidiaReleaseRe
 
 def main() -> None:
     args = build_parser().parse_args()
-    report = run(args.evidence, args.policy, args.output)
+    report = run(args.evidence, args.output, args.policy)
     print(
         json.dumps(
             {

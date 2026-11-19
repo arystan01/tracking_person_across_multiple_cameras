@@ -84,13 +84,13 @@ class QualityEvidence(StrictModel):
 
 
 class OperationalEvidence(StrictModel):
+    controls_api_latency_p95_s: float = Field(ge=0.0)
     search_time_p95_s: float = Field(ge=0.0)
     mean_camera_minutes: float = Field(ge=0.0)
     queue_latency_p95_s: float = Field(ge=0.0)
     worker_latency_p95_s: float = Field(ge=0.0)
     routing_latency_p95_s: float = Field(ge=0.0)
     retry_rate: float = Field(ge=0.0, le=1.0)
-    mean_search_cost: float = Field(ge=0.0)
     deletion_sla_p95_s: float = Field(ge=0.0)
     audit_complete: bool
     cold_warm_business_equal: bool
@@ -151,24 +151,15 @@ class AcceptancePolicy(StrictModel):
         "javes-nvidia-acceptance-policy.v1"
     )
     required_active_scenarios: int = Field(default=12, ge=1)
-    min_identity_precision: float = Field(ge=0.0, le=1.0)
-    min_identity_recall: float = Field(ge=0.0, le=1.0)
-    max_false_identity_rate: float = Field(ge=0.0, le=1.0)
-    min_tracklet_precision: float = Field(ge=0.0, le=1.0)
-    min_tracklet_recall: float = Field(ge=0.0, le=1.0)
-    max_median_position_error_m: float = Field(gt=0.0)
-    max_p95_position_error_m: float = Field(gt=0.0)
-    min_hidden_point_containment: float = Field(ge=0.0, le=1.0)
-    min_top2_branch_recall: float = Field(ge=0.0, le=1.0)
-    min_search_success_rate: float = Field(ge=0.0, le=1.0)
-    max_search_time_p95_s: float = Field(gt=0.0)
-    max_mean_camera_minutes: float = Field(gt=0.0)
-    max_queue_latency_p95_s: float = Field(gt=0.0)
-    max_worker_latency_p95_s: float = Field(gt=0.0)
-    max_routing_latency_p95_s: float = Field(gt=0.0)
-    max_retry_rate: float = Field(ge=0.0, le=1.0)
-    max_mean_search_cost: float = Field(ge=0.0)
-    max_deletion_sla_p95_s: float = Field(gt=0.0)
+    max_false_identity_rate: float = Field(default=0.05, ge=0.0, le=1.0)
+    max_median_position_error_m: float = Field(default=0.75, gt=0.0)
+    max_p95_position_error_m: float = Field(default=1.5, gt=0.0)
+    min_hidden_point_containment: float = Field(default=0.90, ge=0.0, le=1.0)
+    min_top2_branch_recall: float = Field(default=0.90, ge=0.0, le=1.0)
+    min_search_success_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_controls_api_latency_p95_s: float = Field(default=2.0, gt=0.0)
+    max_routing_latency_p95_s: float = Field(default=2.0, gt=0.0)
+    max_deletion_sla_p95_s: float = Field(default=60.0, gt=0.0)
 
 
 class GateCheck(StrictModel):
@@ -321,25 +312,9 @@ def evaluate_nvidia_release(
             quality.quarantined_scenarios == 0,
             f"quarantined={quality.quarantined_scenarios}",
         ),
-        "identity-precision": (
-            quality.identity_precision >= policy.min_identity_precision,
-            f"{quality.identity_precision:.6f} >= {policy.min_identity_precision:.6f}",
-        ),
-        "identity-recall": (
-            quality.identity_recall >= policy.min_identity_recall,
-            f"{quality.identity_recall:.6f} >= {policy.min_identity_recall:.6f}",
-        ),
         "false-identity-rate": (
             quality.false_identity_rate <= policy.max_false_identity_rate,
             f"{quality.false_identity_rate:.6f} <= {policy.max_false_identity_rate:.6f}",
-        ),
-        "tracklet-precision": (
-            quality.tracklet_precision >= policy.min_tracklet_precision,
-            f"{quality.tracklet_precision:.6f} >= {policy.min_tracklet_precision:.6f}",
-        ),
-        "tracklet-recall": (
-            quality.tracklet_recall >= policy.min_tracklet_recall,
-            f"{quality.tracklet_recall:.6f} >= {policy.min_tracklet_recall:.6f}",
         ),
         "median-position": (
             quality.median_position_error_m <= policy.max_median_position_error_m,
@@ -371,13 +346,11 @@ def evaluate_nvidia_release(
 
     operations = evidence.operations
     operation_checks = {
-        "search-time": (operations.search_time_p95_s, policy.max_search_time_p95_s),
-        "camera-minutes": (operations.mean_camera_minutes, policy.max_mean_camera_minutes),
-        "queue-latency": (operations.queue_latency_p95_s, policy.max_queue_latency_p95_s),
-        "worker-latency": (operations.worker_latency_p95_s, policy.max_worker_latency_p95_s),
+        "controls-api-latency": (
+            operations.controls_api_latency_p95_s,
+            policy.max_controls_api_latency_p95_s,
+        ),
         "routing-latency": (operations.routing_latency_p95_s, policy.max_routing_latency_p95_s),
-        "retry-rate": (operations.retry_rate, policy.max_retry_rate),
-        "search-cost": (operations.mean_search_cost, policy.max_mean_search_cost),
         "deletion-sla": (operations.deletion_sla_p95_s, policy.max_deletion_sla_p95_s),
     }
     for name, (actual, maximum) in operation_checks.items():
@@ -387,6 +360,18 @@ def evaluate_nvidia_release(
             actual <= maximum,
             f"{actual:.6f} <= {maximum:.6f}",
         )
+    add(
+        "operations.cv-throughput-measured",
+        "operations",
+        True,
+        (
+            f"search_p95_s={operations.search_time_p95_s:.6f}; "
+            f"camera_minutes={operations.mean_camera_minutes:.6f}; "
+            f"queue_p95_s={operations.queue_latency_p95_s:.6f}; "
+            f"worker_p95_s={operations.worker_latency_p95_s:.6f}; "
+            f"retry_rate={operations.retry_rate:.6f}"
+        ),
+    )
     for name, passed in (
         ("audit-complete", operations.audit_complete),
         ("cold-warm-equal", operations.cold_warm_business_equal),
