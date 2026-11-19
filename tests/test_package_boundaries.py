@@ -88,6 +88,7 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         "javes-nvidia-archive-api": "javes_archive.cli:api_main",
         "javes-nvidia-archive-inspect": "javes_archive.cli:inspect_main",
         "javes-site-config-publish": "javes_site_config.publisher_cli:main",
+        "javes-contract-bundle": "javes_contracts.bundle:main",
     }
     configuration = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")

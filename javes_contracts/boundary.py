@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -36,6 +36,44 @@ class ArtifactRef(ContractModel):
 
     def identity(self) -> str:
         return self.archive_id or self.object_key or self.uri or ""
+
+
+class ProblemDetails(ContractModel):
+    """Stable RFC 9457-style error body shared by all HTTP services."""
+
+    type: str = Field(pattern=r"^urn:javes:problem:[a-z0-9-]+$")
+    title: str
+    status: int = Field(ge=400, le=599)
+    detail: str
+    code: str = Field(pattern=r"^[A-Z0-9_]+$")
+    retryable: bool = False
+    request_id: str | None = None
+    errors: list[dict[str, Any]] | None = None
+
+
+class ActorView(ContractModel):
+    user_id: str
+    username: str
+    role: Literal["ROOT", "ADMIN", "OPERATOR", "VIEWER", "SERVICE"]
+    permissions: list[str]
+    must_change_password: bool
+
+
+class LoginRequest(ContractModel):
+    username: str
+    password: str
+
+
+class LoginResponse(ContractModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: datetime
+    user: ActorView
+
+    @field_validator("expires_at", mode="after")
+    @classmethod
+    def _aware_expiry(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
 
 
 class VideoAvailability(str, Enum):
@@ -442,3 +480,64 @@ class CaseCommandBody(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
+class CaseLifecycle(str, Enum):
+    PREPARING = "PREPARING"
+    SEARCHING = "SEARCHING"
+    CLOSED = "CLOSED"
+    EXPORTING = "EXPORTING"
+    SAVED = "SAVED"
+    DELETE_REQUESTED = "DELETE_REQUESTED"
+    DELETED = "DELETED"
+    FAILED = "FAILED"
+
+
+class RouteMapView(ContractModel):
+    floor_id: str
+    mime_type: str
+    url: str
+    alt_text: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class CaseSummary(ContractModel):
+    case_id: str
+    target_id: str
+    lifecycle: CaseLifecycle
+    revision: int = Field(ge=0)
+    route_revision: int = Field(ge=0)
+    mode: str | None = None
+    site_id: str
+    site_version: str
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("created_at", "updated_at", mode="after")
+    @classmethod
+    def _aware_summary_times(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
+class CaseView(ContractModel):
+    case_id: str
+    revision: int = Field(ge=0)
+    route_revision: int = Field(ge=0)
+    lifecycle: CaseLifecycle
+    mode: str | None = None
+    done: bool = False
+    stop_reason: str | None = None
+    best_hypothesis: dict[str, Any] | None = None
+    alternatives: list[dict[str, Any]] = Field(default_factory=list)
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    estimate: dict[str, Any] | None = None
+    route_presentation: dict[str, Any] | None = None
+    rendered_route_maps: list[RouteMapView] = Field(default_factory=list)
+    clips: list[dict[str, Any]] = Field(default_factory=list)
+    export: dict[str, Any] | None = None
+    search_progress: dict[str, Any] = Field(default_factory=dict)
+    live: dict[str, Any] | None = None
+    watch: list[dict[str, Any]] = Field(default_factory=list)
+    unobserved_windows: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)

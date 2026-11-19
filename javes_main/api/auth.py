@@ -7,24 +7,13 @@ from datetime import datetime
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from javes_contracts import LoginRequest, LoginResponse
 from javes_main.application import Actor, AuthenticationError, AuthService
 from javes_main.domain import UserAccount, UserRole
 
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class LoginRequest(ApiModel):
-    username: str
-    password: str
-
-
-class LoginResponse(ApiModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_at: datetime
-    user: dict
 
 
 class ChangePasswordRequest(ApiModel):

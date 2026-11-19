@@ -11,6 +11,7 @@ from javes_contracts import (
     CaseCommandBody,
     CreateCaseBody,
     LiveFeedUpdate,
+    ProblemDetails,
     ProbeResult,
     ReviewDecisionBody,
     WorkerClaimRequest,
@@ -21,6 +22,7 @@ from javes_contracts import (
     WorkerTaskFailureRequest,
     WorkerTaskResultRequest,
 )
+from javes_contracts.conventions import classify_problem
 from javes_main.application import (
     Actor,
     AuthenticationError,
@@ -126,15 +128,18 @@ def create_app(
             return response
 
     def problem(status: int, title: str, detail: str, problem_type: str) -> JSONResponse:
+        policy = classify_problem(problem_type, status)
         return JSONResponse(
             status_code=status,
             media_type="application/problem+json",
-            content={
-                "type": f"urn:javes:problem:{problem_type}",
-                "title": title,
-                "status": status,
-                "detail": detail,
-            },
+            content=ProblemDetails(
+                type=f"urn:javes:problem:{problem_type}",
+                title=title,
+                status=status,
+                detail=detail,
+                code=policy.code,
+                retryable=policy.retryable,
+            ).model_dump(mode="json", exclude_none=True),
         )
 
     @app.exception_handler(KeyError)
@@ -163,7 +168,12 @@ def create_app(
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_: Request, exc: HTTPException):
-        return problem(exc.status_code, "HTTP Error", str(exc.detail), "http")
+        problem_type = {
+            429: "rate-limit",
+            503: "service-unavailable",
+            504: "timeout",
+        }.get(exc.status_code, "http")
+        return problem(exc.status_code, "HTTP Error", str(exc.detail), problem_type)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_: Request, exc: RequestValidationError):
@@ -175,6 +185,8 @@ def create_app(
                 "title": "Validation Error",
                 "status": 422,
                 "detail": "request payload is invalid",
+                "code": "VALIDATION_FAILED",
+                "retryable": False,
                 "errors": exc.errors(),
             },
         )
