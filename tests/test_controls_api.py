@@ -87,6 +87,53 @@ def make_system():
     )
 
 
+@pytest.mark.anyio
+async def test_production_http_boundary_tls_rotation_cors_and_trace_headers():
+    system = make_system()
+    app = create_app(
+        system.manager,
+        auth=system.auth,
+        worker_tokens={"perception": ("current-token", "previous-token")},
+        worker_lease_secret="lease-secret-for-test",
+        require_https=True,
+        cors_origins=("https://dashboard.example",),
+    )
+    transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 443))
+    async with httpx.AsyncClient(transport=transport, base_url="http://main.test") as client:
+        rejected = await client.get("/health/ready")
+        assert rejected.status_code == 426
+        assert rejected.json()["code"] == "HTTPS_REQUIRED"
+    async with httpx.AsyncClient(transport=transport, base_url="https://main.test") as client:
+        for token in ("current-token", "previous-token"):
+            claimed = await client.post(
+                "/internal/v1/workers/perception/tasks/claim",
+                headers={"authorization": f"Bearer {token}", "x-request-id": "request-001"},
+                json={"worker_id": "worker-001", "limit": 1, "lease_seconds": 30},
+            )
+            assert claimed.status_code == 200
+            assert claimed.headers["x-request-id"] == "request-001"
+            assert claimed.headers["content-security-policy"].startswith("default-src 'none'")
+            assert claimed.headers["traceparent"].startswith("00-")
+        denied = await client.post(
+            "/internal/v1/workers/perception/tasks/claim",
+            headers={"authorization": "Bearer retired-token"},
+            json={"worker_id": "worker-001"},
+        )
+        assert denied.status_code == 401
+        invalid = await client.post(
+            "/v1/auth/login",
+            json={"username": "operator", "password": {"token": "must-not-leak"}},
+        )
+        assert invalid.status_code == 422
+        assert "must-not-leak" not in invalid.text
+        preflight = await client.options(
+            "/v1/cases",
+            headers={
+                "origin": "https://dashboard.example",
+                "access-control-request-method": "POST",
+            },
+        )
+        assert preflight.headers["access-control-allow-origin"] == "https://dashboard.example"
 def body(operator_id: str = "operator-1") -> CreateCaseBody:
     return CreateCaseBody(
         case_id="api-case",
@@ -273,6 +320,10 @@ async def test_controls_http_fake_end_to_end():
         assert metrics.json()["camera_seconds_processed"] > 0
         assert metrics.json()["job_completion_latency"]["count"] >= 1
         assert metrics.json()["routing_trigger_latency"]["count"] >= 1
+        assert set(metrics.json()["queue_depth"]) == {"jobs", "outbox", "routing"}
+        assert set(metrics.json()["terminal_failures"]) == {"jobs", "outbox", "routing"}
+        assert metrics.json()["expired_leases"] >= 0
+        assert metrics.json()["deletion_failures"] >= 0
 
         delete = CaseCommandBody(
             command_id="delete-1",

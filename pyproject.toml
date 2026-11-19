@@ -23,6 +23,7 @@ infra = [
   "sqlalchemy>=2,<3",
   "alembic>=1.13,<2",
   "httpx>=0.27,<1",
+  "psycopg[binary]>=3.2,<4",
 ]
 
 perception = [
@@ -39,6 +40,7 @@ perception = [
 javes-routing-demo = "javes_routing.service.demo:main"
 javes-routing-bench = "javes_routing.service.bench:main"
 javes-main-migrate = "javes_main.persistence.migrate:main"
+javes-main-backup = "javes_main.persistence.backup:main"
 javes-main-bootstrap-root = "javes_main.application.auth_cli:main"
 javes-contract-schemas = "javes_contracts.schema:main"
 javes-contract-bundle = "javes_contracts.bundle:main"
@@ -46,6 +48,7 @@ javes-retention-inspect = "javes_retention.runtime.cli:main"
 javes-perception-probe = "javes_perception.runtime.cli:main"
 javes-main-api = "javes_main.api_cli:main"
 javes-main-scheduler = "javes_main.scheduler_cli:main"
+javes-main-dlq = "javes_main.application.dlq_cli:main"
 javes-routing-api = "javes_routing.service.cli:main"
 javes-site-config-api = "javes_site_config.cli:main"
 javes-site-config-publish = "javes_site_config.publisher_cli:main"

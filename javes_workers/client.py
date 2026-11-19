@@ -13,6 +13,7 @@ from javes_contracts import (
     WorkerTaskFailureRequest,
     WorkerTaskResultRequest,
 )
+from javes_contracts.trace import outbound_trace_headers
 
 
 class HttpWorkerClient:
@@ -32,6 +33,9 @@ class HttpWorkerClient:
         self._headers = {"authorization": f"Bearer {token}"}
         self._client = client or httpx.Client(timeout=timeout_s)
 
+    def _request_headers(self) -> dict[str, str]:
+        return {**self._headers, **outbound_trace_headers()}
+
     def claim(self, *, limit: int = 1, lease_seconds: int = 30) -> list[WorkerTaskEnvelope]:
         body = WorkerClaimRequest(
             worker_id=self.worker_id,
@@ -40,7 +44,7 @@ class HttpWorkerClient:
         )
         response = self._client.post(
             f"{self.main_url}/internal/v1/workers/{self.component}/tasks/claim",
-            headers=self._headers,
+            headers=self._request_headers(),
             json=body.model_dump(mode="json"),
         )
         response.raise_for_status()
@@ -54,7 +58,7 @@ class HttpWorkerClient:
         )
         response = self._client.post(
             f"{self.main_url}/internal/v1/workers/{self.component}/tasks/{task.task_id}/heartbeat",
-            headers=self._headers,
+            headers=self._request_headers(),
             json=body.model_dump(mode="json"),
         )
         response.raise_for_status()
@@ -65,7 +69,7 @@ class HttpWorkerClient:
     ) -> WorkerTaskAck:
         response = self._client.post(
             f"{self.main_url}/internal/v1/workers/{self.component}/tasks/{task.task_id}/result",
-            headers=self._headers,
+            headers=self._request_headers(),
             json=result.model_dump(mode="json"),
         )
         response.raise_for_status()
@@ -87,7 +91,7 @@ class HttpWorkerClient:
         )
         response = self._client.post(
             f"{self.main_url}/internal/v1/workers/{self.component}/tasks/{task.task_id}/failure",
-            headers=self._headers,
+            headers=self._request_headers(),
             json=body.model_dump(mode="json"),
         )
         response.raise_for_status()
@@ -96,7 +100,7 @@ class HttpWorkerClient:
     def live(self, update: LiveFeedUpdate) -> None:
         response = self._client.post(
             f"{self.main_url}/internal/v1/cases/{update.case_id}/live",
-            headers=self._headers,
+            headers=self._request_headers(),
             json=update.model_dump(mode="json"),
         )
         response.raise_for_status()

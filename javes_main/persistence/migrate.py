@@ -27,6 +27,10 @@ def current_revision(database_url: str) -> None:
     command.current(alembic_config(database_url), verbose=True)
 
 
+def downgrade_database(database_url: str, revision: str = "base") -> None:
+    command.downgrade(alembic_config(database_url), revision)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manage the JAVES Main database schema")
     parser.add_argument(
@@ -34,13 +38,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=os.environ.get("JAVES_DATABASE_URL"),
         help="SQLAlchemy URL; defaults to JAVES_DATABASE_URL",
     )
-    parser.add_argument("action", choices=("upgrade", "current"))
+    parser.add_argument("action", choices=("upgrade", "downgrade", "current"))
     parser.add_argument("--revision", default="head")
     args = parser.parse_args(argv)
     if not args.database_url:
         parser.error("--database-url or JAVES_DATABASE_URL is required")
     if args.action == "upgrade":
         upgrade_database(args.database_url, args.revision)
+    elif args.action == "downgrade":
+        downgrade_database(args.database_url, args.revision)
     else:
         current_revision(args.database_url)
     return 0

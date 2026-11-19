@@ -1,0 +1,27 @@
+version: javes-alerts.v1
+alerts:
+  - name: queue_stalled
+    expression: oldest_queue_age_s > 120
+    severity: warning
+    for: 5m
+    runbook: ops/runbooks/incident-response.md
+  - name: expired_leases
+    expression: expired_leases > 0
+    severity: warning
+    for: 2m
+    runbook: ops/runbooks/dlq-replay.md
+  - name: deletion_failure
+    expression: deletion_failures > 0
+    severity: critical
+    for: 0m
+    runbook: ops/runbooks/incident-response.md
+  - name: archive_unavailable
+    expression: archive_availability.UNAVAILABLE > 0
+    severity: warning
+    for: 5m
+    runbook: ops/runbooks/incident-response.md
+  - name: routing_latency
+    expression: routing_trigger_latency.max_s > 5
+    severity: warning
+    for: 10m
+    runbook: ops/runbooks/incident-response.md

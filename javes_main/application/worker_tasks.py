@@ -469,9 +469,9 @@ class WorkerTaskService:
             record.lease_owner = None
             record.lease_expires_at = None
             record.updated_at = self.clock.now()
-            record.last_error = request.error_code + (
-                f": {request.detail}" if request.detail else ""
-            )
+            # Worker detail may contain vendor paths or credentials. Persist
+            # only the bounded machine code and correlate through request IDs.
+            record.last_error = request.error_code
             terminal = not request.retryable or record.attempt >= record.max_attempts
             if source == "job":
                 record.state = JobState.FAILED if terminal else JobState.PENDING

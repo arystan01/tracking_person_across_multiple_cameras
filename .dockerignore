@@ -1,0 +1,13 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+artifacts
+build
+dist
+data/nvidia_mtmc/mtmc_12cam/*.mp4
+models
+*.db
+*.sqlite
+*.pyc
+__pycache__

@@ -92,6 +92,23 @@ class MetricsService:
             for event in self.repository.list_events(case.request.case_id)
             if event.event_type == "WORKER_RESULT_DUPLICATE"
         )
+        expired_leases = sum(
+            1
+            for item in [*jobs, *outbox, *routing_triggers]
+            if item.lease_expires_at is not None and item.lease_expires_at <= now
+        )
+        deletion_failures = sum(
+            1
+            for item in outbox
+            if item.state == OutboxState.FAILED
+            and item.topic in {"RETENTION_COMMAND", "RETENTION_REGISTER"}
+        )
+        archive_availability = Counter()
+        for case in cases:
+            for event in self.repository.list_events(case.request.case_id):
+                if event.event_type == "ARCHIVE_SEGMENT_RESULT":
+                    availability = str(event.payload.get("availability", "UNKNOWN"))
+                    archive_availability[availability] += 1
         return {
             "generated_at": now.isoformat(),
             "active_cases": sum(
@@ -116,6 +133,25 @@ class MetricsService:
             "routing_retries": routing_retries,
             "duplicate_results": duplicate_results,
             "unobserved_windows": unobserved,
+            "queue_depth": {
+                "jobs": job_counts.get(JobState.PENDING.value, 0),
+                "outbox": outbox_counts.get(OutboxState.PENDING.value, 0),
+                "routing": routing_trigger_counts.get("PENDING", 0),
+            },
+            "leased_tasks": {
+                "jobs": job_counts.get(JobState.LEASED.value, 0),
+                "outbox": outbox_counts.get(OutboxState.LEASED.value, 0),
+                "routing": routing_trigger_counts.get("LEASED", 0),
+            },
+            "expired_leases": expired_leases,
+            "terminal_failures": {
+                "jobs": job_counts.get(JobState.FAILED.value, 0)
+                + job_counts.get(JobState.UNAVAILABLE.value, 0),
+                "outbox": outbox_counts.get(OutboxState.FAILED.value, 0),
+                "routing": routing_trigger_counts.get("FAILED", 0),
+            },
+            "deletion_failures": deletion_failures,
+            "archive_availability": dict(sorted(archive_availability.items())),
             "routing_runs": sum(
                 len(
                     self.repository.list_case_data(
