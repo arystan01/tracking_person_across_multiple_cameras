@@ -75,11 +75,13 @@ class OutboxTopic(str, Enum):
 class CaseDataKind(str, Enum):
     ROUTING_STATE = "ROUTING_STATE"
     ROUTING_RUN = "ROUTING_RUN"
+    ROUTING_INPUT = "ROUTING_INPUT"
     ROUTE_REVISION = "ROUTE_REVISION"
     PROBE_REQUEST = "PROBE_REQUEST"
     TRACKLET = "TRACKLET"
     CANDIDATE = "CANDIDATE"
     OPERATOR_DECISION = "OPERATOR_DECISION"
+    OPERATOR_DECISION_REVOCATION = "OPERATOR_DECISION_REVOCATION"
     ARTIFACT = "ARTIFACT"
 
 
@@ -300,6 +302,7 @@ class CaseRecord(DomainModel):
     deleted_at: datetime | None = None
     next_heartbeat_at: datetime | None = None
     content_redacted: bool = False
+    replay_capability: str = "INCOMPLETE"
 
     @field_validator(
         "created_at",

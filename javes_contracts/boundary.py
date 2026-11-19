@@ -163,9 +163,11 @@ class TargetGalleryCommand(ContractModel):
     contract_version: Literal["target-gallery.v1"] = "target-gallery.v1"
     command_id: str
     case_id: str
-    source: Literal["reference", "confirmed_tracklet"]
+    source: Literal["reference", "confirmed_tracklet", "rebuild"]
     image_ref: ArtifactRef | None = None
     tracklet_id: str | None = None
+    tracklet_ids: list[str] = Field(default_factory=list)
+    base_gallery_ref: str | None = None
     model_version: str = "osnet_ain_x1_0_msmt17"
 
     @model_validator(mode="after")
@@ -174,6 +176,9 @@ class TargetGalleryCommand(ContractModel):
             raise ValueError("reference gallery command requires image_ref")
         if self.source == "confirmed_tracklet" and not self.tracklet_id:
             raise ValueError("confirmed_tracklet command requires tracklet_id")
+        if self.source == "rebuild" and self.image_ref is None:
+            raise ValueError("rebuild gallery command requires image_ref")
+        self.tracklet_ids = sorted(set(self.tracklet_ids))
         return self
 
 
@@ -468,6 +473,48 @@ class ReviewDecisionBody(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
+class RevokeDecisionBody(ContractModel):
+    revocation_id: str
+    decision_id: str
+    operator_id: str
+    reason: str = Field(min_length=1, max_length=1000)
+    occurred_at: datetime
+    expected_case_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def _non_blank_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("revocation reason must not be blank")
+        return value
+
+
+class DecisionRecordView(ContractModel):
+    decision_id: str
+    candidate_id: str
+    tracklet_id: str
+    decision: Literal["CONFIRM", "REJECT"]
+    operator_id: str
+    occurred_at: datetime
+    active: bool = True
+    revocation_id: str | None = None
+    revoked_by: str | None = None
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
+    resulting_route_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("occurred_at", "revoked_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
 
 
 class CaseCommandBody(ContractModel):

@@ -21,6 +21,13 @@ PROBLEM_POLICIES: dict[str, ProblemPolicy] = {
         ProblemPolicy(
             "revision-conflict", "REVISION_CONFLICT", 409, True, "reload-and-retry"
         ),
+        ProblemPolicy(
+            "replay-evidence-incomplete",
+            "REPLAY_EVIDENCE_INCOMPLETE",
+            409,
+            False,
+            "disable-revoke-for-case",
+        ),
         ProblemPolicy("worker-lease", "WORKER_LEASE_INVALID", 409, True, "reclaim"),
         ProblemPolicy("conflict", "CONFLICT", 409, False, "operator-or-new-command"),
         ProblemPolicy("authentication", "AUTHENTICATION_REQUIRED", 401, False, "login"),
