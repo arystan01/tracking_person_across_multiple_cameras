@@ -6,6 +6,7 @@ import json
 import math
 import os
 import shutil
+import time
 from collections import Counter
 from pathlib import Path
 from statistics import median
@@ -19,6 +20,7 @@ from javes_routing.core.ground import floor_scale, point_to_polyline_distance_m
 
 
 ALL_NVIDIA_CAMERAS = tuple(f"Cam{index:03d}" for index in range(1, 13))
+EVALUATION_REPORT_SCHEMA_VERSION = "javes-real-cv-evaluation.v1"
 
 
 class EvalModel(BaseModel):
@@ -348,10 +350,23 @@ class ScenarioEvaluation(EvalModel):
     reachability: list[ReachabilityMetric] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     cache_hit: bool = False
+    cache_hits: int = Field(default=0, ge=0)
+    cache_misses: int = Field(default=0, ge=0)
+    duration_s: float = Field(default=0.0, ge=0.0)
 
 
 class EvaluationSummary(EvalModel):
+    schema_version: Literal["javes-real-cv-evaluation.v1"] = (
+        EVALUATION_REPORT_SCHEMA_VERSION
+    )
     scenarios: list[ScenarioEvaluation]
+    active_scenarios: int = Field(ge=0)
+    passed_scenarios: int = Field(ge=0)
+    failed_scenarios: int = Field(ge=0)
+    quarantined_scenarios: int = Field(default=0, ge=0)
+    extraction_cache_hits: int = Field(default=0, ge=0)
+    extraction_cache_misses: int = Field(default=0, ge=0)
+    duration_s: float = Field(default=0.0, ge=0.0)
     median_position_error_m: float
     p95_position_error_m: float
     false_identity_rate: float
@@ -360,7 +375,14 @@ class EvaluationSummary(EvalModel):
     passed: bool
 
 
-def aggregate_evaluation(results: list[ScenarioEvaluation]) -> EvaluationSummary:
+def aggregate_evaluation(
+    results: list[ScenarioEvaluation],
+    *,
+    quarantined_scenarios: int = 0,
+    extraction_cache_hits: int | None = None,
+    extraction_cache_misses: int | None = None,
+    duration_s: float | None = None,
+) -> EvaluationSummary:
     errors = sorted(
         error for result in results for error in result.positional_errors_m
     )
@@ -386,8 +408,28 @@ def aggregate_evaluation(results: list[ScenarioEvaluation]) -> EvaluationSummary
             top2_recall >= 0.90,
         )
     )
+    passed_scenarios = sum(item.passed for item in results)
     return EvaluationSummary(
         scenarios=results,
+        active_scenarios=len(results),
+        passed_scenarios=passed_scenarios,
+        failed_scenarios=len(results) - passed_scenarios,
+        quarantined_scenarios=quarantined_scenarios,
+        extraction_cache_hits=(
+            sum(item.cache_hits for item in results)
+            if extraction_cache_hits is None
+            else extraction_cache_hits
+        ),
+        extraction_cache_misses=(
+            sum(item.cache_misses for item in results)
+            if extraction_cache_misses is None
+            else extraction_cache_misses
+        ),
+        duration_s=(
+            sum(item.duration_s for item in results)
+            if duration_s is None
+            else duration_s
+        ),
         median_position_error_m=median_error,
         p95_position_error_m=p95_error,
         false_identity_rate=false_rate,
@@ -497,6 +539,8 @@ def run_real_cv_evaluation(
     """
     import cv2
 
+    evaluation_started = time.monotonic()
+
     from javes_contracts import (
         Anchors,
         ArtifactRef,
@@ -574,7 +618,9 @@ def run_real_cv_evaluation(
     for scenario in manifest.scenarios:
         if scenario.quarantined:
             continue
+        scenario_started = time.monotonic()
         before_hits = worker.extraction_cache_hits
+        before_misses = worker.extraction_cache_misses
         system = scenario.system_input
         case_id = f"eval-{scenario.id}"
         reference_bytes = _reference_jpeg(
@@ -897,8 +943,17 @@ def run_real_cv_evaluation(
                 reachability=reachability_metrics,
                 failures=failures,
                 cache_hit=worker.extraction_cache_hits > before_hits,
+                cache_hits=worker.extraction_cache_hits - before_hits,
+                cache_misses=worker.extraction_cache_misses - before_misses,
+                duration_s=time.monotonic() - scenario_started,
             )
         )
-    summary = aggregate_evaluation(scenario_results)
+    summary = aggregate_evaluation(
+        scenario_results,
+        quarantined_scenarios=sum(item.quarantined for item in manifest.scenarios),
+        extraction_cache_hits=worker.extraction_cache_hits,
+        extraction_cache_misses=worker.extraction_cache_misses,
+        duration_s=time.monotonic() - evaluation_started,
+    )
     write_evaluation_report(output, summary)
     return summary

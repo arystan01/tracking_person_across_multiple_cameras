@@ -9,12 +9,14 @@ import pytest
 from pydantic import ValidationError
 
 from tests.support.real_cv_eval import (
+    EVALUATION_REPORT_SCHEMA_VERSION,
     EvaluationManifest,
     ScenarioEvaluation,
     aggregate_evaluation,
     load_evaluation_manifest,
     run_real_cv_evaluation,
     system_payload,
+    write_evaluation_report,
 )
 
 
@@ -169,6 +171,49 @@ def test_aggregate_acceptance_thresholds_are_automatic():
         update={"positional_errors_m": [2.0], "passed": False}
     )
     assert not aggregate_evaluation([failed, *results[1:]]).passed
+
+
+def test_evaluation_summary_is_machine_readable_and_counts_failures(tmp_path):
+    passing = ScenarioEvaluation(
+        scenario_id="passing",
+        split="development",
+        passed=True,
+        positional_errors_m=[0.5],
+        route_associations=1,
+        cache_hit=True,
+        cache_hits=1,
+        duration_s=1.25,
+    )
+    failing = ScenarioEvaluation(
+        scenario_id="failing",
+        split="holdout",
+        passed=False,
+        positional_errors_m=[2.0],
+        route_associations=1,
+        failures=["positional gate"],
+        cache_misses=1,
+        duration_s=2.75,
+    )
+    summary = aggregate_evaluation(
+        [passing, failing],
+        quarantined_scenarios=1,
+    )
+    assert summary.schema_version == EVALUATION_REPORT_SCHEMA_VERSION
+    assert summary.active_scenarios == 2
+    assert summary.passed_scenarios == 1
+    assert summary.failed_scenarios == 1
+    assert summary.quarantined_scenarios == 1
+    assert summary.extraction_cache_hits == 1
+    assert summary.extraction_cache_misses == 1
+    assert summary.duration_s == pytest.approx(4.0)
+    assert not summary.passed
+
+    write_evaluation_report(tmp_path, summary)
+    report = (tmp_path / "report.json").read_text(encoding="utf-8")
+    assert EVALUATION_REPORT_SCHEMA_VERSION in report
+    assert '"failed_scenarios": 1' in report
+    assert '"quarantined_scenarios": 1' in report
+    assert "positional gate" in report
 
 
 @pytest.mark.real_cv
