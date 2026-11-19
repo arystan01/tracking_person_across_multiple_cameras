@@ -85,6 +85,7 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         "javes-routing-bench": "javes_routing.service.bench:main",
         "javes-perception-worker": "javes_perception.runtime.worker_cli:main",
         "javes-retention-worker": "javes_retention.runtime.worker_cli:main",
+        "javes-site-config-publish": "javes_site_config.publisher_cli:main",
     }
     configuration = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
