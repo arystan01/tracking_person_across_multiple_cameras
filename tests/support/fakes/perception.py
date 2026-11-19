@@ -58,15 +58,22 @@ class FakePerceptionWorker:
                 raise ValueError("same gallery command_id used with different payload")
             return previous[1].model_copy(deep=True)
 
-        source = (
-            command.image_ref.identity()
-            if command.image_ref is not None
-            else command.tracklet_id or ""
-        )
-        sources = self._gallery_sources.setdefault(command.case_id, [])
-        if source not in sources:
-            sources.append(source)
-            sources.sort()
+        if command.source == "rebuild":
+            sources = [command.image_ref.identity()] + [
+                f"tracklet:{item}" for item in command.tracklet_ids
+            ]
+            sources = sorted(set(sources))
+            self._gallery_sources[command.case_id] = sources
+        else:
+            source = (
+                command.image_ref.identity()
+                if command.image_ref is not None
+                else command.tracklet_id or ""
+            )
+            sources = self._gallery_sources.setdefault(command.case_id, [])
+            if source not in sources:
+                sources.append(source)
+                sources.sort()
         result = TargetGalleryResult(
             command_id=command.command_id,
             case_id=command.case_id,

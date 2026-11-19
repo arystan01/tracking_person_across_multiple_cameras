@@ -15,6 +15,8 @@ from javes_contracts import (
     LiveFeedUpdate,
     ProblemDetails,
     ProbeResult,
+    RevokeDecisionBody,
+    DecisionRecordView,
     ReviewDecisionBody,
     WorkerClaimRequest,
     WorkerClaimResponse,
@@ -32,6 +34,7 @@ from javes_main.application import (
     AuthService,
     CaseManager,
     MetricsService,
+    ReplayEvidenceIncomplete,
     LeaseError,
     WorkerTaskService,
 )
@@ -182,6 +185,15 @@ def create_app(
     @app.exception_handler(LeaseError)
     async def lease_error_handler(_, exc: LeaseError):
         return problem(409, "Invalid Worker Lease", str(exc), "worker-lease")
+
+    @app.exception_handler(ReplayEvidenceIncomplete)
+    async def replay_evidence_handler(_, exc: ReplayEvidenceIncomplete):
+        return problem(
+            409,
+            "Replay Evidence Incomplete",
+            str(exc),
+            "replay-evidence-incomplete",
+        )
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_, exc: ValueError):
@@ -453,6 +465,44 @@ def create_app(
         require_permission(actor, "case.review")
         require_same_actor(actor, body.operator_id)
         view = manager.decide(
+            case_id,
+            body,
+            idempotency_key=idempotency_key,
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.routing.drain()
+            scheduler.outbox.drain()
+            view = manager.get_view(case_id)
+        return view
+
+    @app.get(
+        "/v1/cases/{case_id}/decisions",
+        response_model=list[DecisionRecordView],
+    )
+    async def decision_history(
+        case_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> list[DecisionRecordView]:
+        require_permission(actor, "case.review")
+        return manager.list_decisions(case_id)
+
+    @app.post(
+        "/v1/cases/{case_id}/decisions/{decision_id}/revoke",
+        response_model=CaseView,
+    )
+    async def revoke_decision(
+        case_id: str,
+        decision_id: str,
+        body: RevokeDecisionBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> CaseView:
+        require_permission(actor, "case.review")
+        require_same_actor(actor, body.operator_id)
+        if body.decision_id != decision_id:
+            raise ValueError("path decision_id does not match request body")
+        view = manager.revoke_decision(
             case_id,
             body,
             idempotency_key=idempotency_key,

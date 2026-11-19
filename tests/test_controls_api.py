@@ -14,6 +14,7 @@ from javes_contracts import (
     LastKnown,
     LiveFeedUpdate,
     ReviewDecisionBody,
+    RevokeDecisionBody,
 )
 from javes_main.adapters import (
     FileArtifactStore,
@@ -348,6 +349,81 @@ async def test_controls_http_fake_end_to_end():
         )
         assert deleted.status_code == 200, deleted.text
         assert deleted.json()["lifecycle"] == "DELETED"
+
+
+@pytest.mark.anyio
+async def test_controls_decision_history_and_revoke_api():
+    system = make_system()
+    transport = httpx.ASGITransport(
+        app=create_app(
+            system.manager,
+            auth=system.auth,
+            scheduler=system.scheduler,
+            run_fake_jobs_inline=True,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        root_token = await login(client, "root", "root-password-for-tests")
+        me = await client.get(
+            "/v1/auth/me",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        root_id = me.json()["user_id"]
+        created = await client.post(
+            "/v1/cases",
+            json=body(root_id).model_dump(mode="json"),
+            headers=headers("revoke-api-create", root_token),
+        )
+        assert created.status_code == 201, created.text
+        candidate = created.json()["candidates"][0]
+        decision = ReviewDecisionBody(
+            decision_id="api-revoke-decision",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id=root_id,
+            occurred_at=BASE + timedelta(seconds=70),
+        )
+        confirmed = await client.post(
+            "/v1/cases/api-case/decisions",
+            json=decision.model_dump(mode="json"),
+            headers=headers("api-revoke-decision", root_token),
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        history = await client.get(
+            "/v1/cases/api-case/decisions",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        assert history.status_code == 200
+        assert history.json()[0]["active"] is True
+
+        revoke = RevokeDecisionBody(
+            revocation_id="api-revocation",
+            decision_id=decision.decision_id,
+            operator_id=root_id,
+            reason="wrong person selected",
+            occurred_at=BASE + timedelta(seconds=75),
+            expected_case_revision=confirmed.json()["revision"],
+        )
+        revoked = await client.post(
+            f"/v1/cases/api-case/decisions/{decision.decision_id}/revoke",
+            json=revoke.model_dump(mode="json"),
+            headers=headers("api-revocation", root_token),
+        )
+        assert revoked.status_code == 200, revoked.text
+        history = await client.get(
+            "/v1/cases/api-case/decisions",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        assert history.json()[0]["active"] is False
+        assert history.json()[0]["revocation_id"] == "api-revocation"
+
+        duplicate = await client.post(
+            f"/v1/cases/api-case/decisions/{decision.decision_id}/revoke",
+            json=revoke.model_dump(mode="json"),
+            headers=headers("api-revocation", root_token),
+        )
+        assert duplicate.status_code == 200
 
 
 @pytest.mark.anyio
