@@ -6,6 +6,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .registry import FilesystemSiteConfigRegistry
+from javes_telemetry import current_runtime, instrument_fastapi
 
 
 def create_site_config_app(
@@ -34,8 +35,7 @@ def create_site_config_app(
             else None
         )
         if not any(
-            candidate is not None
-            and secrets.compare_digest(candidate, service_token)
+            candidate is not None and secrets.compare_digest(candidate, service_token)
             for candidate in (bearer, x_service_token)
         ):
             raise HTTPException(status_code=401, detail="valid service token required")
@@ -43,6 +43,13 @@ def create_site_config_app(
     @app.get("/health/live")
     async def live() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready")
+    async def ready() -> dict[str, str]:
+        healthy, status = current_runtime().readiness()
+        if not healthy:
+            raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        return {"status": "ready", "telemetry": status}
 
     @app.get("/internal/v1/sites/{site_id}/versions/{version}")
     async def get_site(
@@ -79,4 +86,5 @@ def create_site_config_app(
         authorise(authorization, x_service_token)
         return registry.params(version)
 
+    instrument_fastapi(app)
     return app

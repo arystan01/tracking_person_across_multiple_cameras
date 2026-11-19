@@ -14,6 +14,7 @@ from javes_contracts import (
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.step import init_state
 from javes_routing.core.facade import step_and_render
+from javes_telemetry import current_runtime, instrument_fastapi, operation
 
 
 def create_routing_app(site_config, *, service_token: str) -> FastAPI:
@@ -38,8 +39,7 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
             else None
         )
         if not any(
-            candidate is not None
-            and secrets.compare_digest(candidate, service_token)
+            candidate is not None and secrets.compare_digest(candidate, service_token)
             for candidate in (bearer, x_service_token)
         ):
             raise HTTPException(status_code=401, detail="valid service token required")
@@ -69,8 +69,7 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
         return body.case.model_copy(
             update={
                 "last_known_camera": (
-                    body.anchors.last_known_camera
-                    or body.case.last_known_camera
+                    body.anchors.last_known_camera or body.case.last_known_camera
                 ),
                 "last_known_zone": (
                     body.anchors.last_known_zone or body.case.last_known_zone
@@ -79,8 +78,7 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
                     body.anchors.last_known_time or body.case.last_known_time
                 ),
                 "last_known_bbox_xywh": (
-                    body.anchors.last_known_bbox_xywh
-                    or body.case.last_known_bbox_xywh
+                    body.anchors.last_known_bbox_xywh or body.case.last_known_bbox_xywh
                 ),
                 "last_known_footpoint_px": (
                     body.anchors.last_known_footpoint_px
@@ -97,6 +95,13 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
     @app.get("/health/live")
     async def live() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready")
+    async def ready() -> dict[str, str]:
+        healthy, status = current_runtime().readiness()
+        if not healthy:
+            raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        return {"status": "ready", "telemetry": status}
 
     @app.post("/internal/v1/routing/init", response_model=RoutingInitResponse)
     async def initialise(
@@ -124,19 +129,23 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
         site = site_snapshot(body.site_id, body.site_version)
         params_data = params_snapshot(body.params_version)
         params = RoutingParams.model_validate(params_data.params)
-        result = step_and_render(
-            body.state,
-            body.probe_results,
-            site.graph,
-            body.anchors,
-            params,
-            body.now,
-            floor_assets(body.site_id, body.site_version, site),
-        )
+        with operation(
+            "routing.calculate", {"component": "routing", "operation": "step"}
+        ):
+            result = step_and_render(
+                body.state,
+                body.probe_results,
+                site.graph,
+                body.anchors,
+                params,
+                body.now,
+                floor_assets(body.site_id, body.site_version, site),
+            )
         return RoutingStepResponse(
             result=result,
             site_checksum=site.checksum,
             params_checksum=params_data.checksum,
         )
 
+    instrument_fastapi(app)
     return app

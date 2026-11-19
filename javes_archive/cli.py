@@ -7,6 +7,7 @@ import json
 
 from .api import create_nvidia_archive_app
 from .registry import NvidiaArchiveRegistry
+from javes_telemetry import configure_telemetry, shutdown_telemetry
 
 
 def api_main() -> None:
@@ -18,6 +19,7 @@ def api_main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8083)
     args = parser.parse_args()
+    configure_telemetry("javes-nvidia-archive-api")
     registry = NvidiaArchiveRegistry(
         args.root,
         args.manifest,
@@ -25,11 +27,14 @@ def api_main() -> None:
     )
     import uvicorn
 
-    uvicorn.run(
-        create_nvidia_archive_app(registry, service_token=args.token),
-        host=args.host,
-        port=args.port,
-    )
+    try:
+        uvicorn.run(
+            create_nvidia_archive_app(registry, service_token=args.token),
+            host=args.host,
+            port=args.port,
+        )
+    finally:
+        shutdown_telemetry()
 
 
 def inspect_main() -> None:

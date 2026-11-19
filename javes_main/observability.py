@@ -32,7 +32,10 @@ def redact(value: Any, *, key: str | None = None) -> Any:
     if key is not None and _SENSITIVE_KEY.search(key):
         return "[REDACTED]"
     if isinstance(value, Mapping):
-        return {str(item_key): redact(item, key=str(item_key)) for item_key, item in value.items()}
+        return {
+            str(item_key): redact(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [redact(item) for item in value]
     if isinstance(value, str):
@@ -44,12 +47,20 @@ def redact(value: Any, *, key: str | None = None) -> Any:
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        try:
+            from javes_telemetry import current_span_ids
+
+            trace_id, span_id = current_span_ids()
+        except ImportError:
+            trace_id = span_id = None
         payload = {
             "level": record.levelname,
             "logger": record.name,
             "message": redact(record.getMessage()),
             "correlation_id": current_correlation_id(),
             "traceparent": current_traceparent(),
+            "trace_id": trace_id,
+            "span_id": span_id,
         }
         if record.exc_info:
             payload["exception"] = redact(self.formatException(record.exc_info))
@@ -61,4 +72,12 @@ def configure_json_logging(level: str = "INFO") -> None:
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
+    try:
+        from javes_telemetry import logging_handler
+
+        otel_handler = logging_handler()
+        if otel_handler is not None:
+            root.handlers.append(otel_handler)
+    except ImportError:
+        pass
     root.setLevel(level.upper())

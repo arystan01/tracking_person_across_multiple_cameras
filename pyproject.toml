@@ -16,6 +16,12 @@ test = [
   "sqlalchemy>=2,<3",
   "alembic>=1.13,<2",
   "httpx>=0.27,<1",
+  "opentelemetry-sdk>=1.28,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.28,<2",
+  "opentelemetry-instrumentation-fastapi>=0.49b0,<1",
+  "opentelemetry-instrumentation-httpx>=0.49b0,<1",
+  "opentelemetry-instrumentation-logging>=0.49b0,<1",
+  "protobuf<7",
 ]
 infra = [
   "fastapi>=0.115,<1",
@@ -24,6 +30,12 @@ infra = [
   "alembic>=1.13,<2",
   "httpx>=0.27,<1",
   "psycopg[binary]>=3.2,<4",
+  "opentelemetry-sdk>=1.28,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.28,<2",
+  "opentelemetry-instrumentation-fastapi>=0.49b0,<1",
+  "opentelemetry-instrumentation-httpx>=0.49b0,<1",
+  "opentelemetry-instrumentation-logging>=0.49b0,<1",
+  "protobuf<7",
 ]
 
 perception = [
@@ -63,7 +75,7 @@ javes-nvidia-archive-inspect = "javes_archive.cli:inspect_main"
 javes-nvidia-acceptance = "javes_release.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*"]
+include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*", "javes_telemetry*"]
 
 [tool.setuptools.package-data]
 "javes_main.persistence.migrations" = ["script.py.mako"]
