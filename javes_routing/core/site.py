@@ -124,19 +124,21 @@ def _point_in_polygon(
     return inside
 
 
-def _validate_walk_geometry(
-    edge: WalkEdgeDef,
+def validate_corridor_geometry(
+    label: str,
     points: list[tuple[float, float]],
+    width_m: float,
     floor,
 ) -> None:
+    """Validate the full corridor width against immutable floor geometry."""
     if not floor.walkable_polygons and not floor.blocked_polygons:
         return
     if floor.m_per_px is None:
         raise ValueError(
-            f"Walk edge '{edge.id}' requires floor m_per_px for polygon validation"
+            f"{label} requires floor m_per_px for polygon validation"
         )
     sample_step_px = 0.25 / floor.m_per_px
-    half_width_px = edge.width_m / (2.0 * floor.m_per_px)
+    half_width_px = width_m / (2.0 * floor.m_per_px)
     for left, right in zip(points, points[1:]):
         dx = right[0] - left[0]
         dy = right[1] - left[1]
@@ -165,14 +167,14 @@ def _validate_walk_geometry(
                     for polygon in floor.walkable_polygons
                 ):
                     raise ValueError(
-                        f"Walk edge '{edge.id}' leaves the walkable area at {point}"
+                        f"{label} leaves the walkable area at {point}"
                     )
                 if any(
                     _point_in_polygon(point, polygon)
                     for polygon in floor.blocked_polygons
                 ):
                     raise ValueError(
-                        f"Walk edge '{edge.id}' crosses a blocked area at {point}"
+                        f"{label} crosses a blocked area at {point}"
                     )
 
 
@@ -448,9 +450,10 @@ def parse_site(
                     point,
                     floor_sizes,
                 )
-            _validate_walk_geometry(
-                edge,
+            validate_corridor_geometry(
+                f"Walk edge '{edge.id}'",
                 [source.map_xy, *edge.map_path, target.map_xy],
+                edge.width_m,
                 floors_by_id[edge.floor_id],
             )
             walk_edges.append(edge)
