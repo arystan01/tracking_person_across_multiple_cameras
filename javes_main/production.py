@@ -37,7 +37,21 @@ def build_api_first_system(settings: MainSettings) -> ApiFirstSystem:
         raise ValueError(
             "API-first production configuration is incomplete: " + ", ".join(missing)
         )
-    repository = SqlAlchemyRepository.from_url(settings.database_url)
+    engine_options: dict = {"pool_pre_ping": True}
+    if settings.database_url.startswith(("postgresql://", "postgresql+")):
+        engine_options.update(
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout=settings.database_pool_timeout_s,
+            isolation_level="READ COMMITTED",
+            connect_args={
+                "options": (
+                    f"-c statement_timeout={settings.database_statement_timeout_ms} "
+                    "-c timezone=UTC"
+                )
+            },
+        )
+    repository = SqlAlchemyRepository.from_url(settings.database_url, **engine_options)
     artifacts = FileArtifactStore(settings.artifact_root)
     clock = SystemClock()
     ids = ContentIdGenerator()
@@ -74,9 +88,12 @@ def build_api_first_system(settings: MainSettings) -> ApiFirstSystem:
     )
 
 
-def worker_tokens(settings: MainSettings) -> dict[str, str]:
-    return {
-        "perception": settings.perception_worker_token.get_secret_value(),  # type: ignore[union-attr]
-        "clip": settings.clip_worker_token.get_secret_value(),  # type: ignore[union-attr]
-        "retention": settings.retention_worker_token.get_secret_value(),  # type: ignore[union-attr]
-    }
+def worker_tokens(settings: MainSettings) -> dict[str, tuple[str, ...]]:
+    result: dict[str, tuple[str, ...]] = {}
+    for component in ("perception", "clip", "retention"):
+        current = getattr(settings, f"{component}_worker_token")
+        previous = getattr(settings, f"{component}_worker_token_previous")
+        result[component] = tuple(
+            item.get_secret_value() for item in (current, previous) if item is not None
+        )
+    return result

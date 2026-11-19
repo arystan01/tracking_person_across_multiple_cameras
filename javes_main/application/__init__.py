@@ -5,6 +5,7 @@ from .case_manager import (
 )
 from .metrics import MetricsService
 from .worker_tasks import LeaseError, WorkerTaskService
+from .dlq import DeadLetterService
 from .auth_service import (
     Actor,
     AuthenticationError,
@@ -21,6 +22,7 @@ __all__ = [
     "CaseManager",
     "DEFAULT_RETENTION_DAYS",
     "DEFAULT_RETENTION_TTL_S",
+    "DeadLetterService",
     "LoginResult",
     "MetricsService",
     "LeaseError",
