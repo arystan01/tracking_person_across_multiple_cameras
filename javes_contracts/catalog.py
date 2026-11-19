@@ -27,8 +27,8 @@ ENDPOINTS = [
     ("SiteConfig", "Main/Routing", "GET", "/internal/v1/sites/{site_id}/versions/{version}/assets/{asset_id}", None, "binary"),
     ("SiteConfig", "Routing", "GET", "/internal/v1/routing-params/{version}", None, "RoutingParamsResponse"),
     # Workers -> NVIDIA archive registry/API.
-    ("Archive", "Perception/Clip", "POST", "/internal/v1/archive/segments", "VideoSegmentRequest", "VideoSegmentResult"),
-    ("Archive", "Operators", "GET", "/internal/v1/archive/sources/{camera_id}", None, "archive-source.v1"),
+    ("Archive", "Perception/Clip", "POST", "/v1/video-segments", "VideoSegmentRequest", "VideoSegmentResult"),
+    ("Archive", "Operators", "GET", "/internal/v1/archive/inspect", None, "archive-inspection.v1"),
 ]
 
 

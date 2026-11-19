@@ -227,7 +227,24 @@ GOLDEN_FIXTURES: dict[str, Golden] = {
     ),
     "retention/result.json": (
         RetentionResult,
-        {"command_id": "retention-001", "case_id": "case-001", "action": "DELETE_CASE", "deleted_resource_ids": ["resource-001"], "audit_tombstone_id": "audit-001"},
+        {
+            "command_id": "retention-001",
+            "case_id": "case-001",
+            "action": "DELETE_CASE",
+            "deleted_resource_ids": ["resource-001"],
+            "audit_tombstone_id": "audit-001",
+            "receipts": [
+                {
+                    "resource_id": "resource-001",
+                    "backend_kind": "shared-filesystem",
+                    "locator_kind": "object_key",
+                    "locator_hash": f"sha256:{SHA}",
+                    "attempt": 1,
+                    "status": "DELETED",
+                    "occurred_at": T1,
+                }
+            ],
+        },
     ),
     "site/site-version.json": (
         SiteVersionResponse,

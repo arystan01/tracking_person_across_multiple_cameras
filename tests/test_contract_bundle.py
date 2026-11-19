@@ -58,6 +58,18 @@ def test_inventory_names_only_public_models_or_explicit_binary_responses() -> No
         assert endpoint["consumer"]
 
 
+def test_archive_inventory_matches_the_deployed_read_only_api() -> None:
+    endpoints = {
+        (endpoint["method"], endpoint["path"])
+        for endpoint in inventory_document()["endpoints"]
+        if endpoint["owner"] == "Archive"
+    }
+    assert endpoints == {
+        ("GET", "/internal/v1/archive/inspect"),
+        ("POST", "/v1/video-segments"),
+    }
+
+
 def test_alpha_compatibility_allows_optional_addition_but_rejects_breaking_changes() -> None:
     old = {
         "type": "object",
