@@ -112,6 +112,9 @@ def test_preview_publish_and_read_exact_immutable_versions(tmp_path: Path) -> No
     assert params_preview["version"] == "params-v1"
     assert publish_params(params_path, registry_root) == params_preview
     assert registry.params("params-v1").checksum == params_preview["checksum"]
+    params_bundle = registry_root / "routing_params/params-v1"
+    assert (params_bundle / "params.yaml").is_file()
+    assert (params_bundle / "manifest.json").is_file()
 
 
 def test_duplicate_publish_conflicts_and_incomplete_staging_is_invisible(
@@ -152,6 +155,27 @@ def test_published_bundle_detects_mutation_and_reader_rejects_symlinks(
     (source / "map.png").symlink_to(real_map.name)
     with pytest.raises(ValueError, match="must not contain symlinks"):
         preview_site(source)
+
+
+def test_cached_registry_revalidates_published_site_and_params_bytes(
+    tmp_path: Path,
+) -> None:
+    registry_root = tmp_path / "registry"
+    source = _site_source(tmp_path / "source")
+    publish_site(source, registry_root)
+    params_path = _params_source(tmp_path / "params-v1.yaml")
+    publish_params(params_path, registry_root)
+    registry = FilesystemSiteConfigRegistry(registry_root)
+
+    registry.site("warehouse", "v1")
+    registry.params("params-v1")
+    (registry_root / "sites/warehouse/v1/map.png").write_bytes(b"mutated")
+    (registry_root / "routing_params/params-v1/params.yaml").write_bytes(b"mutated")
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        registry.site("warehouse", "v1")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        registry.params("params-v1")
 
 
 def test_invalid_calibration_and_blocked_walk_edge_never_publish(

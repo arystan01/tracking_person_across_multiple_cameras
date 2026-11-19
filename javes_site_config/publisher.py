@@ -196,25 +196,48 @@ def publish_params(source: str | Path, registry_root: str | Path) -> dict:
     preview = preview_params(source)
     parent = Path(registry_root).resolve() / "routing_params"
     parent.mkdir(parents=True, exist_ok=True)
-    target = parent / f"{preview['version']}.yaml"
-    if target.exists():
+    target = parent / str(preview["version"])
+    legacy_target = parent / f"{preview['version']}.yaml"
+    if target.exists() or legacy_target.exists():
         raise PublishConflictError(
             f"immutable Routing params version already exists: {preview['version']}"
         )
-    staging = parent / f".staging-{preview['version']}-{uuid.uuid4().hex}.yaml"
+    staging = parent / f".staging-{preview['version']}-{uuid.uuid4().hex}"
+    staging.mkdir()
     try:
-        shutil.copyfile(source_path, staging)
-        _fsync_file(staging)
-        staged = load_routing_params(staging)
+        staged_path = staging / "params.yaml"
+        shutil.copyfile(source_path, staged_path)
+        _fsync_file(staged_path)
+        staged = load_routing_params(staged_path)
         if model_checksum(staged) != preview["checksum"]:
             raise ValueError("staged Routing params checksum changed during publish")
+        manifest_path = staging / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "format": "javes-routing-params-bundle.v1",
+                    "version": preview["version"],
+                    "params_checksum": preview["checksum"],
+                    "files": {"params.yaml": preview["source"]},
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        _fsync_file(manifest_path)
+        _fsync_directory(staging)
         try:
-            os.link(staging, target)
-        except FileExistsError as exc:
-            raise PublishConflictError(
-                f"immutable Routing params version already exists: {preview['version']}"
-            ) from exc
+            os.rename(staging, target)
+        except OSError as exc:
+            if target.exists() or legacy_target.exists():
+                raise PublishConflictError(
+                    f"immutable Routing params version already exists: {preview['version']}"
+                ) from exc
+            raise
         _fsync_directory(parent)
         return preview
     finally:
-        staging.unlink(missing_ok=True)
+        if staging.exists():
+            shutil.rmtree(staging)
