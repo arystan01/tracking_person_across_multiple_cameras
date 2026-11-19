@@ -61,6 +61,12 @@ class RoutingParams(BaseModel):
     max_hidden_edges: int = Field(default=5, ge=2)
     dormant_border_priority: float = 0.5
     estimate_neighbour_share: float = Field(default=0.3, ge=0.0, le=1.0)
+    edge_timing_overrides: dict[str, dict[str, float]] = Field(default_factory=dict)
+    timing_calibration_manifest_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+    timing_calibration_split: str | None = None
+    timing_calibration_scenario_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_profiles(self) -> RoutingParams:
@@ -68,4 +74,18 @@ class RoutingParams(BaseModel):
             factors = self.profiles.get(name)
             if factors is None or any(float(factors.get(key, 0.0)) <= 0 for key in ("tmin_k", "ttyp_k", "tmax_k")):
                 raise ValueError(f"invalid timing profile {name}")
+        for edge_id, timing in self.edge_timing_overrides.items():
+            try:
+                t_min = float(timing["t_min"])
+                t_typ = float(timing["t_typ"])
+                t_max = float(timing["t_max"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"invalid timing override for edge {edge_id!r}") from exc
+            if not (0 < t_min <= t_typ <= t_max):
+                raise ValueError(f"invalid timing override order for edge {edge_id!r}")
+        if self.timing_calibration_split not in {None, "development"}:
+            raise ValueError("Routing timing calibration may use development split only")
+        self.timing_calibration_scenario_ids = sorted(
+            set(self.timing_calibration_scenario_ids)
+        )
         return self

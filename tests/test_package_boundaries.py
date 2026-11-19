@@ -91,6 +91,8 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         "javes-contract-bundle": "javes_contracts.bundle:main",
         "javes-main-backup": "javes_main.persistence.backup:main",
         "javes-main-dlq": "javes_main.application.dlq_cli:main",
+        "javes-routing-calibrate": "javes_routing.service.timing_calibration:main",
+        "javes-routing-shadow": "javes_routing.service.shadow_benchmark:main",
     }
     configuration = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")

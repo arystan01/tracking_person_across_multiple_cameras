@@ -50,6 +50,10 @@ blind_path_priority: 0.3
 max_hidden_edges: 5
 dormant_border_priority: 0.5
 estimate_neighbour_share: 0.3
+edge_timing_overrides: {}
+timing_calibration_manifest_sha256: null
+timing_calibration_split: null
+timing_calibration_scenario_ids: []
 profiles:
   ADULT:   {tmin_k: 1.0, ttyp_k: 1.0, tmax_k: 1.0}
   CHILD:   {tmin_k: 0.6, ttyp_k: 1.0, tmax_k: 1.6}
