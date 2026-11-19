@@ -10,12 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from javes_contracts import (
     Anchors,
+    CaseLifecycle,
+    CaseSummary,
+    CaseView,
     ClipRecord,
     CreateCaseBody,
     LiveFeedUpdate,
     PerceptionProbeJob,
     ProbeResult,
     RenderedRouteBundle,
+    RouteMapView,
     SearchState,
     StepResult,
 )
@@ -31,17 +35,6 @@ def _utc(value: datetime | None) -> datetime | None:
 
 class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
-
-
-class CaseLifecycle(str, Enum):
-    PREPARING = "PREPARING"
-    SEARCHING = "SEARCHING"
-    CLOSED = "CLOSED"
-    EXPORTING = "EXPORTING"
-    SAVED = "SAVED"
-    DELETE_REQUESTED = "DELETE_REQUESTED"
-    DELETED = "DELETED"
-    FAILED = "FAILED"
 
 
 class JobState(str, Enum):
@@ -320,53 +313,3 @@ class CaseRecord(DomainModel):
     @classmethod
     def _aware(cls, value: datetime | None) -> datetime | None:
         return _utc(value)
-
-
-class RouteMapView(DomainModel):
-    floor_id: str
-    mime_type: str
-    url: str
-    alt_text: str
-    width: int
-    height: int
-
-
-class CaseSummary(DomainModel):
-    case_id: str
-    target_id: str
-    lifecycle: CaseLifecycle
-    revision: int
-    route_revision: int
-    mode: str | None = None
-    site_id: str
-    site_version: str
-    created_at: datetime
-    updated_at: datetime
-
-    @field_validator("created_at", "updated_at", mode="after")
-    @classmethod
-    def _aware_summary_times(cls, value: datetime) -> datetime:
-        return _utc(value)  # type: ignore[return-value]
-
-
-class CaseView(DomainModel):
-    case_id: str
-    revision: int
-    route_revision: int
-    lifecycle: CaseLifecycle
-    mode: str | None = None
-    done: bool = False
-    stop_reason: str | None = None
-    best_hypothesis: dict[str, Any] | None = None
-    alternatives: list[dict[str, Any]] = Field(default_factory=list)
-    candidates: list[dict[str, Any]] = Field(default_factory=list)
-    estimate: dict[str, Any] | None = None
-    route_presentation: dict[str, Any] | None = None
-    rendered_route_maps: list[RouteMapView] = Field(default_factory=list)
-    clips: list[dict[str, Any]] = Field(default_factory=list)
-    export: dict[str, Any] | None = None
-    search_progress: dict[str, Any] = Field(default_factory=dict)
-    live: dict[str, Any] | None = None
-    watch: list[dict[str, Any]] = Field(default_factory=list)
-    unobserved_windows: list[dict[str, Any]] = Field(default_factory=list)
-    errors: list[dict[str, Any]] = Field(default_factory=list)
