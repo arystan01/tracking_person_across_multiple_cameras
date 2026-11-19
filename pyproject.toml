@@ -38,6 +38,8 @@ perception = [
 [project.scripts]
 javes-routing-demo = "javes_routing.service.demo:main"
 javes-routing-bench = "javes_routing.service.bench:main"
+javes-routing-calibrate = "javes_routing.service.timing_calibration:main"
+javes-routing-shadow = "javes_routing.service.shadow_benchmark:main"
 javes-main-migrate = "javes_main.persistence.migrate:main"
 javes-main-bootstrap-root = "javes_main.application.auth_cli:main"
 javes-contract-schemas = "javes_contracts.schema:main"
