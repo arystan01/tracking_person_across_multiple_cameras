@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from javes_contracts import Estimate, SiteGraph
 from javes_routing.core.ground import floor_scale, point_to_polyline_distance_m
+from javes_routing.core.site import validate_corridor_geometry
 
 
 ALL_NVIDIA_CAMERAS = tuple(f"Cam{index:03d}" for index in range(1, 13))
@@ -228,6 +229,8 @@ class ReachabilityMetric(EvalModel):
     negative_total: int
     probability_mass: float
     true_branch_rank: int | None = None
+    geometry_errors: list[str] = Field(default_factory=list)
+    early_arrival_errors: list[str] = Field(default_factory=list)
 
     @property
     def containment_ratio(self) -> float:
@@ -282,6 +285,74 @@ def checkpoint_in_reachable_area(
     return False
 
 
+def reachable_geometry_errors(
+    estimate: Estimate,
+    graph: SiteGraph,
+) -> list[str]:
+    """Return any emitted corridor that violates immutable floor geometry."""
+    floors = {
+        floor.id: floor
+        for floor in (graph.map.floors if graph.map is not None else [])
+    }
+    errors: list[str] = []
+    for segment in estimate.reachable_segments:
+        if len(segment.points) < 2:
+            errors.append(f"{segment.edge_id}: corridor has fewer than two points")
+            continue
+        if segment.floor_id is None or segment.floor_id not in floors:
+            errors.append(f"{segment.edge_id}: unknown floor {segment.floor_id!r}")
+            continue
+        try:
+            validate_corridor_geometry(
+                f"Reachable segment '{segment.edge_id}'",
+                segment.points,
+                segment.width_m,
+                floors[segment.floor_id],
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def early_arrival_errors(
+    checkpoints: list[OracleCheckpoint],
+    estimate: Estimate,
+    graph: SiteGraph,
+    *,
+    max_speed_mps: float,
+) -> list[str]:
+    """Reject corridors that reach a checkpoint faster than a straight-line bound."""
+    origin = estimate.reachable_origin
+    horizon_s = estimate.reachable_horizon_s
+    if origin is None or horizon_s is None or max_speed_mps <= 0.0:
+        return []
+    scale = floor_scale(graph, origin.floor_id)
+    if scale is None:
+        return []
+    errors: list[str] = []
+    for checkpoint in checkpoints:
+        if not checkpoint_in_reachable_area(checkpoint, estimate, graph):
+            continue
+        x, y, floor_id, checkpoint_error_m = checkpoint_map_position(
+            checkpoint, graph
+        )
+        if floor_id != origin.floor_id:
+            continue
+        lower_bound_m = max(
+            math.hypot(x - origin.x, y - origin.y) * scale
+            - origin.error_m
+            - checkpoint_error_m,
+            0.0,
+        )
+        minimum_s = lower_bound_m / max_speed_mps
+        if horizon_s + 1e-6 < minimum_s:
+            errors.append(
+                f"{checkpoint.camera_id}@{checkpoint.time_s:.3f}s appears after "
+                f"{horizon_s:.3f}s but requires at least {minimum_s:.3f}s"
+            )
+    return errors
+
+
 def _point_in_polygon(
     point: tuple[float, float], polygon: list[tuple[float, float]]
 ) -> bool:
@@ -306,6 +377,7 @@ def evaluate_reachability(
     negative: list[OracleCheckpoint],
     *,
     true_edge_ids: list[str] | None = None,
+    max_speed_mps: float = 2.0,
 ) -> ReachabilityMetric:
     mass = sum(item.probability for item in estimate.reachable_nodes)
     if estimate.reachable_nodes and not math.isclose(mass, 1.0, abs_tol=1e-6):
@@ -315,6 +387,13 @@ def evaluate_reachability(
     )
     negative_rejected = sum(
         not checkpoint_in_reachable_area(item, estimate, graph) for item in negative
+    )
+    geometry_errors = reachable_geometry_errors(estimate, graph)
+    timing_errors = early_arrival_errors(
+        positive,
+        estimate,
+        graph,
+        max_speed_mps=max_speed_mps,
     )
     rank = None
     if true_edge_ids:
@@ -335,6 +414,8 @@ def evaluate_reachability(
         negative_total=len(negative),
         probability_mass=mass,
         true_branch_rank=rank,
+        geometry_errors=geometry_errors,
+        early_arrival_errors=timing_errors,
     )
 
 
@@ -377,6 +458,10 @@ def aggregate_evaluation(results: list[ScenarioEvaluation]) -> EvaluationSummary
     containment = contained / checkpoints if checkpoints else 0.0
     top2_recall = top2 / len(ranked) if ranked else 0.0
     false_rate = false_count / association_count if association_count else 0.0
+    reachable_geometry_valid = all(
+        not metric.geometry_errors and not metric.early_arrival_errors
+        for metric in reachability
+    )
     passed = bool(results) and all(item.passed for item in results) and all(
         (
             median_error <= 0.75,
@@ -384,6 +469,7 @@ def aggregate_evaluation(results: list[ScenarioEvaluation]) -> EvaluationSummary
             false_rate <= 0.05,
             containment >= 0.90,
             top2_recall >= 0.90,
+            reachable_geometry_valid,
         )
     )
     return EvaluationSummary(
@@ -797,6 +883,7 @@ def run_real_cv_evaluation(
                     matching,
                     matching_negative,
                     true_edge_ids=outcome.true_edge_ids,
+                    max_speed_mps=params.max_speed,
                 )
                 reachability_metrics.append(metric)
                 if metric.containment_ratio < 0.90:
@@ -811,6 +898,10 @@ def run_real_cv_evaluation(
                     failures.append(
                         f"negative checkpoint included at {outcome.checkpoint_times_s}"
                     )
+                if metric.geometry_errors:
+                    failures.extend(metric.geometry_errors)
+                if metric.early_arrival_errors:
+                    failures.extend(metric.early_arrival_errors)
         finite_errors = [item for item in errors if math.isfinite(item)]
         if len(finite_errors) != len(errors):
             failures.append("one or more oracle checkpoints were not associated")

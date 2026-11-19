@@ -48,7 +48,7 @@ from javes_routing.core.positioning import (
     reachable_area,
 )
 from javes_routing.core.render import render_route_maps
-from javes_routing.core.site import parse_site
+from javes_routing.core.site import parse_site, validate_corridor_geometry
 from javes_routing.core.step import step
 from javes_routing.core.update import merge_tracklets_to_visits
 from javes_site_config.registry import model_checksum
@@ -514,7 +514,7 @@ def test_reachable_area_follows_directed_graph_and_normalises_leaf_nodes() -> No
     )
     probabilities = {item.node_id: item.probability for item in terminal_nodes}
     assert sum(probabilities.values()) == pytest.approx(1.0)
-    assert probabilities["woutside"] > probabilities["wblind"]
+    assert probabilities["OUTSIDE"] > probabilities["wblind"]
 
 
 def test_reachable_area_uses_branch_priors_and_done_empty_evidence() -> None:
@@ -563,7 +563,7 @@ def test_reachable_area_uses_branch_priors_and_done_empty_evidence() -> None:
         hypothesis, graph, params, T0 + timedelta(seconds=15)
     )
     prior = {item.node_id: item.probability for item in prior_nodes}
-    assert prior == pytest.approx({"wblind": 0.75, "woutside": 0.25})
+    assert prior == pytest.approx({"wblind": 0.75, "OUTSIDE": 0.25})
 
     from javes_contracts import SearchState
 
@@ -587,7 +587,168 @@ def test_reachable_area_uses_branch_priors_and_done_empty_evidence() -> None:
     )
     checked = {item.node_id: item.probability for item in checked_nodes}
     assert sum(checked.values()) == pytest.approx(1.0, abs=1e-9)
-    assert checked["wblind"] < checked["woutside"]
+    assert checked["wblind"] < checked["OUTSIDE"]
+
+    partial_state = state.model_copy(
+        update={
+            "probed_windows": [
+                state.probed_windows[0].model_copy(
+                    update={"coverage_ratio": 0.5}
+                )
+            ]
+        },
+        deep=True,
+    )
+    unavailable_state = state.model_copy(
+        update={
+            "probed_windows": [
+                state.probed_windows[0].model_copy(
+                    update={
+                        "status": ProbeStatus.UNAVAILABLE,
+                        "coverage_ratio": 0.0,
+                    }
+                )
+            ]
+        },
+        deep=True,
+    )
+    for unverified_state in (partial_state, unavailable_state):
+        _, unverified_nodes = reachable_area(
+            hypothesis,
+            graph,
+            params,
+            T0 + timedelta(seconds=15),
+            unverified_state,
+        )
+        assert {
+            item.node_id: item.probability for item in unverified_nodes
+        } == pytest.approx(prior)
+
+
+def test_reachable_area_cycles_are_finite_deterministic_and_normalised() -> None:
+    graph = _graph()
+    assert graph.walk_graph is not None
+    cycle = WalkGraphDef(
+        nodes={
+            key: graph.walk_graph.nodes[key]
+            for key in ("wa", "wb", "wc")
+        },
+        edges=[
+            WalkEdgeDef(
+                id="cycle-a-b", source="wa", target="wb", floor_id="1F", d_m=10
+            ),
+            WalkEdgeDef(
+                id="cycle-b-c", source="wb", target="wc", floor_id="1F", d_m=10
+            ),
+            WalkEdgeDef(
+                id="cycle-c-a", source="wc", target="wa", floor_id="1F", d_m=10
+            ),
+        ],
+    )
+    graph = graph.model_copy(update={"walk_graph": cycle}, deep=True)
+    hypothesis = Hypothesis(
+        id="cycle",
+        visits=[_visit_with_trajectory()],
+        current_node="A",
+        status=HypothesisStatus.ALIVE,
+    )
+    params = RoutingParams(
+        max_speed=2.0,
+        reachable_heading_kappa=0.0,
+        reachable_max_states=64,
+    )
+    first = reachable_area(
+        hypothesis, graph, params, T0 + timedelta(seconds=120)
+    )
+    second = reachable_area(
+        hypothesis, graph, params, T0 + timedelta(seconds=120)
+    )
+    assert first == second
+    segments, nodes = first
+    assert {item.edge_id for item in segments} == {
+        "cycle-a-b",
+        "cycle-b-c",
+        "cycle-c-a",
+    }
+    assert len(nodes) == 1
+    assert sum(item.probability for item in nodes) == pytest.approx(1.0)
+
+
+def test_corridor_validation_checks_width_not_only_centreline() -> None:
+    floor = MapFloor(
+        id="1F",
+        size_px=(100, 100),
+        m_per_px=0.1,
+        walkable_polygons=[[(0, 0), (100, 0), (100, 100), (0, 100)]],
+        blocked_polygons=[[(40, 40), (60, 40), (60, 60), (40, 60)]],
+    )
+    validate_corridor_geometry(
+        "safe corridor", [(10, 20), (90, 20)], 1.0, floor
+    )
+    with pytest.raises(ValueError, match="crosses a blocked area"):
+        validate_corridor_geometry(
+            "blocked corridor", [(10, 50), (90, 50)], 1.0, floor
+        )
+    with pytest.raises(ValueError, match="leaves the walkable area"):
+        validate_corridor_geometry(
+            "too wide corridor", [(10, 2), (90, 2)], 1.0, floor
+        )
+
+
+def test_reentry_replaces_old_reachable_origin_and_area() -> None:
+    graph = _graph()
+    params = RoutingParams(max_speed=2.0)
+    initial = Hypothesis(
+        id="initial",
+        visits=[_visit_with_trajectory()],
+        current_node="A",
+        status=HypothesisStatus.ALIVE,
+    )
+    from javes_contracts import SearchState
+
+    initial_state = SearchState(
+        case_id="case",
+        site_version=graph.version,
+        params_version=params.version,
+        hypotheses=[initial],
+    )
+    before = compute_estimate(
+        [initial], graph, T0 + timedelta(seconds=15), initial_state, params
+    )
+    assert before.reachable_segments
+    assert before.reachable_origin is not None
+
+    reentry_point = ProjectedTrajectoryPoint(
+        timestamp=T0 + timedelta(seconds=15),
+        x=126,
+        y=48,
+        floor_id="1F",
+        calibration_error_m=0.1,
+    )
+    reentry = Visit(
+        visit_id="vB-reentry",
+        camera_id="B",
+        t_in=reentry_point.timestamp,
+        t_out=reentry_point.timestamp,
+        tracklet_ids=["track-B-reentry"],
+        appearance_score=0.9,
+        projected_trajectory=[reentry_point],
+    )
+    updated = initial.model_copy(
+        update={"visits": [*initial.visits, reentry], "current_node": "B"},
+        deep=True,
+    )
+    updated_state = initial_state.model_copy(
+        update={"hypotheses": [updated]}, deep=True
+    )
+    after = compute_estimate(
+        [updated], graph, reentry_point.timestamp, updated_state, params
+    )
+    assert after.reachable_segments == []
+    assert after.reachable_nodes == []
+    assert after.reachable_origin is not None
+    assert (after.reachable_origin.x, after.reachable_origin.y) == (126.0, 48.0)
+    assert after.reachable_origin != before.reachable_origin
 
 
 def test_reachable_area_snaps_to_edge_instead_of_nearest_node() -> None:
