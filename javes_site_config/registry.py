@@ -56,12 +56,71 @@ class FilesystemSiteConfigRegistry:
         version = self._safe_segment(version, "site version")
         return self._inside(self.root / "sites" / site_id / version)
 
+    def _safe_file(self, base: Path, relative: str) -> Path:
+        if not relative or "\\" in relative:
+            raise ValueError("invalid Site Config relative path")
+        unresolved = base / relative
+        cursor = base
+        for part in Path(relative).parts:
+            if part in {"", ".", ".."}:
+                raise ValueError("invalid Site Config relative path")
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("Site Config bundle must not contain symlinks")
+        path = self._inside(unresolved)
+        try:
+            path.relative_to(base.resolve())
+        except ValueError as exc:
+            raise ValueError("site asset escapes its immutable version") from exc
+        if not path.is_file():
+            raise FileNotFoundError(f"missing Site Config file {relative!r}")
+        return path
+
+    @staticmethod
+    def _file_descriptor(path: Path) -> dict[str, object]:
+        data = path.read_bytes()
+        return {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size_bytes": len(data),
+        }
+
+    def _validate_publish_manifest(
+        self,
+        base: Path,
+        *,
+        site_id: str,
+        version: str,
+        checksum: str,
+    ) -> None:
+        manifest_path = base / "manifest.json"
+        if not manifest_path.exists():
+            return
+        manifest_path = self._safe_file(base, "manifest.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("format") != "javes-site-bundle.v1":
+            raise ValueError("unknown Site Config publish manifest format")
+        if manifest.get("site_id") != site_id or manifest.get("version") != version:
+            raise ValueError("Site Config publish manifest identity mismatch")
+        if manifest.get("graph_checksum") != checksum:
+            raise ValueError("Site Config graph checksum mismatch")
+        files = manifest.get("files")
+        if not isinstance(files, dict) or "site.yaml" not in files:
+            raise ValueError("Site Config publish manifest is incomplete")
+        for relative, expected in sorted(files.items()):
+            if not isinstance(relative, str) or not isinstance(expected, dict):
+                raise ValueError("invalid Site Config publish manifest entry")
+            actual = self._file_descriptor(self._safe_file(base, relative))
+            if actual != expected:
+                raise ValueError(
+                    f"Site Config published file checksum mismatch: {relative!r}"
+                )
+
     def site(self, site_id: str, version: str) -> SiteVersionResponse:
         cache_key = (site_id, version)
         if cache_key in self._sites:
             return self._sites[cache_key].model_copy(deep=True)
         base = self._site_dir(site_id, version)
-        graph = load_site(base / "site.yaml")
+        graph = load_site(self._safe_file(base, "site.yaml"))
         if graph.site_id != site_id or graph.version != version:
             raise ValueError("site.yaml identity does not match requested immutable version")
         assets: list[SiteAssetDescriptor] = []
@@ -69,13 +128,7 @@ class FilesystemSiteConfigRegistry:
             for floor in graph.map.floors:
                 if floor.image is None:
                     continue
-                path = self._inside(base / floor.image)
-                try:
-                    path.relative_to(base.resolve())
-                except ValueError as exc:
-                    raise ValueError("site asset escapes its immutable version") from exc
-                if not path.is_file():
-                    raise FileNotFoundError(f"missing site asset {floor.image!r}")
+                path = self._safe_file(base, floor.image)
                 data = path.read_bytes()
                 self._assets[(site_id, version, floor.id)] = (
                     bytes(data),
@@ -96,6 +149,12 @@ class FilesystemSiteConfigRegistry:
             graph=graph,
             assets=assets,
         )
+        self._validate_publish_manifest(
+            base,
+            site_id=site_id,
+            version=version,
+            checksum=result.checksum,
+        )
         self._sites[cache_key] = result.model_copy(deep=True)
         return result
 
@@ -113,9 +172,10 @@ class FilesystemSiteConfigRegistry:
         version = self._safe_segment(version, "Routing params version")
         if version in self._params:
             return self._params[version].model_copy(deep=True)
-        path = self._inside(self.root / "routing_params" / f"{version}.yaml")
-        if not path.is_file():
+        path = self.root / "routing_params" / f"{version}.yaml"
+        if not path.exists():
             raise KeyError(f"unknown Routing params version {version!r}")
+        path = self._safe_file(self.root / "routing_params", f"{version}.yaml")
         params = load_routing_params(path)
         if params.version != version:
             raise ValueError("params file identity does not match requested version")
