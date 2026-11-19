@@ -6,6 +6,7 @@ import time
 from .domain import CaseLifecycle
 from .production import build_api_first_system
 from .settings import MainSettings
+from .observability import configure_json_logging
 
 
 def run_scheduler_once(system) -> dict[str, int]:
@@ -33,6 +34,7 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     settings = MainSettings.from_env()
+    configure_json_logging(settings.log_level)
     system = build_api_first_system(settings)
     while True:
         run_scheduler_once(system)

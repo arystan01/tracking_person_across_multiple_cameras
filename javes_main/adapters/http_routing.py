@@ -17,6 +17,7 @@ from javes_contracts import (
 )
 from javes_site_config.registry import model_checksum
 from javes_routing.core.params import RoutingParams
+from javes_main.observability import outbound_trace_headers
 
 
 class HttpRoutingAdapter:
@@ -33,6 +34,9 @@ class HttpRoutingAdapter:
         self.base_url = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=timeout_s)
         self._headers = {"authorization": f"Bearer {token}"}
+
+    def _request_headers(self) -> dict[str, str]:
+        return {**self._headers, **outbound_trace_headers()}
 
     @staticmethod
     def _validate_checksums(response, graph: SiteGraph, params: RoutingParams) -> None:
@@ -59,7 +63,7 @@ class HttpRoutingAdapter:
         )
         response = self._client.post(
             f"{self.base_url}/internal/v1/routing/init",
-            headers=self._headers,
+            headers=self._request_headers(),
             json=body.model_dump(mode="json", by_alias=True),
         )
         response.raise_for_status()
@@ -89,7 +93,7 @@ class HttpRoutingAdapter:
         )
         response = self._client.post(
             f"{self.base_url}/internal/v1/routing/step",
-            headers=self._headers,
+            headers=self._request_headers(),
             json=body.model_dump(mode="json", by_alias=True),
         )
         response.raise_for_status()
