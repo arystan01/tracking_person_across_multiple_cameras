@@ -60,11 +60,21 @@ from .auth import (
     user_view,
 )
 from .middleware import install_boundary_middleware
+from javes_telemetry import (
+    current_runtime,
+    instrument_fastapi,
+    operation,
+    record_counter,
+)
 
 
-async def _idempotency(value: str | None = Header(default=None, alias="idempotency-key")) -> str:
+async def _idempotency(
+    value: str | None = Header(default=None, alias="idempotency-key")
+) -> str:
     if not value or not value.strip():
-        raise HTTPException(status_code=400, detail="idempotency-key header is required")
+        raise HTTPException(
+            status_code=400, detail="idempotency-key header is required"
+        )
     value = value.strip()
     if len(value) > 200:
         raise HTTPException(status_code=400, detail="idempotency-key is too long")
@@ -91,7 +101,13 @@ def create_app(
             allow_origins=list(origins),
             allow_credentials=False,
             allow_methods=["GET", "POST", "PUT"],
-            allow_headers=["authorization", "content-type", "idempotency-key", "x-request-id", "traceparent"],
+            allow_headers=[
+                "authorization",
+                "content-type",
+                "idempotency-key",
+                "x-request-id",
+                "traceparent",
+            ],
             expose_headers=["x-request-id", "traceparent"],
             max_age=600,
         )
@@ -118,9 +134,7 @@ def create_app(
     ) -> None:
         configured = configured_worker_tokens.get(component)
         component_tokens = (
-            (configured,)
-            if isinstance(configured, str)
-            else tuple(configured or ())
+            (configured,) if isinstance(configured, str) else tuple(configured or ())
         )
         bearer_token = None
         if authorization and authorization.lower().startswith("bearer "):
@@ -142,11 +156,11 @@ def create_app(
             except (AuthenticationError, HTTPException):
                 authenticated = False
         if not authenticated:
-            raise HTTPException(status_code=401, detail="valid worker token is required")
+            raise HTTPException(
+                status_code=401, detail="valid worker token is required"
+            )
 
-    def iam_idempotency(
-        key: str, action: str, payload: dict, operation
-    ) -> dict:
+    def iam_idempotency(key: str, action: str, payload: dict, operation) -> dict:
         storage_key = f"iam:{action}:{key}"
         fingerprint = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -162,7 +176,9 @@ def create_app(
             auth.repository.remember_idempotency(storage_key, fingerprint, response)
             return response
 
-    def problem(status: int, title: str, detail: str, problem_type: str) -> JSONResponse:
+    def problem(
+        status: int, title: str, detail: str, problem_type: str
+    ) -> JSONResponse:
         policy = classify_problem(problem_type, status)
         return JSONResponse(
             status_code=status,
@@ -252,8 +268,13 @@ def create_app(
             manager.repository.list_cases()
             manager.repository.list_users()
         except Exception as exc:
-            raise HTTPException(status_code=503, detail="persistence is unavailable") from exc
-        return {"status": "ready"}
+            raise HTTPException(
+                status_code=503, detail="persistence is unavailable"
+            ) from exc
+        telemetry_ready, telemetry_status = current_runtime().readiness()
+        if not telemetry_ready:
+            raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        return {"status": "ready", "telemetry": telemetry_status}
 
     @app.get("/internal/v1/metrics")
     async def operational_metrics(actor: Actor = Depends(current_actor)) -> dict:
@@ -437,12 +458,16 @@ def create_app(
         return manager.get_view(case_id)
 
     @app.get("/v1/cases/{case_id}/events")
-    async def get_events(case_id: str, actor: Actor = Depends(current_actor)) -> list[dict]:
+    async def get_events(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> list[dict]:
         require_permission(actor, "case.events.read")
         return manager.get_events(case_id)
 
     @app.get("/v1/cases/{case_id}/clips")
-    async def get_clips(case_id: str, actor: Actor = Depends(current_actor)) -> list[dict]:
+    async def get_clips(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> list[dict]:
         require_permission(actor, "case.read")
         return manager.get_clips(case_id)
 
@@ -505,10 +530,15 @@ def create_app(
         require_same_actor(actor, body.operator_id)
         if body.decision_id != decision_id:
             raise ValueError("path decision_id does not match request body")
-        view = manager.revoke_decision(
-            case_id,
-            body,
-            idempotency_key=idempotency_key,
+        with operation("decision.replay", {"component": "main", "operation": "revoke"}):
+            view = manager.revoke_decision(
+                case_id,
+                body,
+                idempotency_key=idempotency_key,
+            )
+        record_counter(
+            "javes.decision.replay",
+            attributes={"component": "main", "outcome": "accepted"},
         )
         if run_fake_jobs_inline:
             assert scheduler is not None
@@ -541,14 +571,20 @@ def create_app(
     ) -> LegalHoldView:
         require_permission(actor, "case.legal_hold.manage")
         require_same_actor(actor, body.operator_id)
-        view = manager.set_legal_hold(
-            case_id, body, idempotency_key=idempotency_key
+        with operation("legal_hold.set", {"component": "main", "operation": "set"}):
+            view = manager.set_legal_hold(
+                case_id, body, idempotency_key=idempotency_key
+            )
+        record_counter(
+            "javes.legal_hold.operations",
+            attributes={"component": "main", "operation": "set", "outcome": "accepted"},
         )
         if run_fake_jobs_inline:
             assert scheduler is not None
             scheduler.outbox.drain()
             view = next(
-                item for item in manager.list_legal_holds(case_id)
+                item
+                for item in manager.list_legal_holds(case_id)
                 if item.hold_id == body.hold_id
             )
         return view
@@ -568,14 +604,26 @@ def create_app(
         require_same_actor(actor, body.operator_id)
         if body.hold_id != hold_id:
             raise ValueError("path hold_id does not match request body")
-        view = manager.release_legal_hold(
-            case_id, body, idempotency_key=idempotency_key
+        with operation(
+            "legal_hold.release", {"component": "main", "operation": "release"}
+        ):
+            view = manager.release_legal_hold(
+                case_id, body, idempotency_key=idempotency_key
+            )
+        record_counter(
+            "javes.legal_hold.operations",
+            attributes={
+                "component": "main",
+                "operation": "release",
+                "outcome": "accepted",
+            },
         )
         if run_fake_jobs_inline:
             assert scheduler is not None
             scheduler.outbox.drain()
             view = next(
-                item for item in manager.list_legal_holds(case_id)
+                item
+                for item in manager.list_legal_holds(case_id)
                 if item.hold_id == body.hold_id
             )
         return view
@@ -736,4 +784,5 @@ def create_app(
         require_worker(component, authorization)
         return task_service.fail(component, task_id, body)
 
+    instrument_fastapi(app)
     return app

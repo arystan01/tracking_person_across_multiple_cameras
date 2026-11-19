@@ -7,6 +7,7 @@ from .domain import CaseLifecycle
 from .production import build_api_first_system
 from .settings import MainSettings
 from .observability import configure_json_logging
+from javes_telemetry import configure_telemetry, shutdown_telemetry
 
 
 def run_scheduler_once(system) -> dict[str, int]:
@@ -34,13 +35,17 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     settings = MainSettings.from_env()
+    configure_telemetry("javes-main-scheduler")
     configure_json_logging(settings.log_level)
     system = build_api_first_system(settings)
-    while True:
-        run_scheduler_once(system)
-        if args.once:
-            return
-        time.sleep(settings.scheduler_poll_s)
+    try:
+        while True:
+            run_scheduler_once(system)
+            if args.once:
+                return
+            time.sleep(settings.scheduler_poll_s)
+    finally:
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":

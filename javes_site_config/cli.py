@@ -4,6 +4,7 @@ import argparse
 
 from .api import create_site_config_app
 from .registry import FilesystemSiteConfigRegistry
+from javes_telemetry import configure_telemetry, shutdown_telemetry
 
 
 def main() -> None:
@@ -13,15 +14,19 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8082)
     args = parser.parse_args()
+    configure_telemetry("javes-site-config-api")
     import uvicorn
 
-    uvicorn.run(
-        create_site_config_app(
-            FilesystemSiteConfigRegistry(args.root), service_token=args.token
-        ),
-        host=args.host,
-        port=args.port,
-    )
+    try:
+        uvicorn.run(
+            create_site_config_app(
+                FilesystemSiteConfigRegistry(args.root), service_token=args.token
+            ),
+            host=args.host,
+            port=args.port,
+        )
+    finally:
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":

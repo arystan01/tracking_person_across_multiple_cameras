@@ -19,11 +19,7 @@ def imported_modules(package: Path) -> set[str]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 modules.update(alias.name for alias in node.names)
-            elif (
-                isinstance(node, ast.ImportFrom)
-                and node.module
-                and node.level == 0
-            ):
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                 modules.add(node.module)
     return modules
 
@@ -49,6 +45,7 @@ def test_core_import_boundaries() -> None:
         in {"fastapi", "httpx", "sqlalchemy", "sqlite3", "pathlib", "requests"}
         for name in routing
     )
+    assert not any(name.startswith("javes_telemetry") for name in routing)
 
     perception = imported_modules(ROOT / "javes_perception" / "core")
     assert not any(
@@ -58,12 +55,14 @@ def test_core_import_boundaries() -> None:
         or name.startswith("javes_workers.")
         for name in perception
     )
+    assert not any(name.startswith("javes_telemetry") for name in perception)
 
     retention = imported_modules(ROOT / "javes_retention" / "core")
     assert not any(
         name.split(".")[0] in {"fastapi", "httpx", "requests", "javes_workers"}
         for name in retention
     )
+    assert not any(name.startswith("javes_telemetry") for name in retention)
 
 
 def test_contracts_depend_only_on_pydantic_and_standard_library() -> None:
@@ -95,9 +94,7 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         "javes-routing-shadow": "javes_routing.service.shadow_benchmark:main",
         "javes-nvidia-acceptance": "javes_release.cli:main",
     }
-    configuration = tomllib.loads(
-        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     scripts = configuration["project"]["scripts"]
     for command, target in targets.items():
         assert scripts[command] == target
@@ -117,6 +114,7 @@ def test_setuptools_discovers_new_packages_only() -> None:
         "javes_retention.runtime",
         "javes_archive",
         "javes_release",
+        "javes_telemetry",
     } <= packages
     assert "routing" not in packages
     assert "javes_routing_api" not in packages

@@ -4,6 +4,7 @@ import argparse
 import time
 
 from javes_workers import HttpWorkerClient
+from javes_telemetry import configure_telemetry, shutdown_telemetry
 
 
 def main() -> None:
@@ -16,6 +17,7 @@ def main() -> None:
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    configure_telemetry("javes-clip-worker-unavailable")
     client = HttpWorkerClient(args.main_url, "clip", args.token, args.worker_id)
     while True:
         tasks = client.claim(limit=10, lease_seconds=30)
@@ -27,6 +29,7 @@ def main() -> None:
                 retryable=False,
             )
         if args.once:
+            shutdown_telemetry()
             return
         if not tasks:
             time.sleep(args.poll_seconds)

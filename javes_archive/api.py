@@ -9,6 +9,7 @@ from fastapi import Body, FastAPI, Header, HTTPException
 from javes_contracts import VideoSegmentRequest, VideoSegmentResult
 
 from .registry import NvidiaArchiveRegistry
+from javes_telemetry import current_runtime, instrument_fastapi, operation
 
 
 def create_nvidia_archive_app(
@@ -35,8 +36,12 @@ def create_nvidia_archive_app(
 
     @app.get("/health/ready")
     async def ready() -> dict[str, str | int]:
+        healthy, telemetry_status = current_runtime().readiness()
+        if not healthy:
+            raise HTTPException(status_code=503, detail="telemetry is unavailable")
         return {
             "status": "ok",
+            "telemetry": telemetry_status,
             "cameras": len(registry.manifest.cameras),
             "manifest_checksum": registry.manifest_checksum,
         }
@@ -54,6 +59,10 @@ def create_nvidia_archive_app(
         authorization: str | None = Header(default=None),
     ) -> VideoSegmentResult:
         authorise(authorization)
-        return registry.segment(VideoSegmentRequest.model_validate(body))
+        with operation(
+            "archive.read", {"component": "archive", "operation": "segment"}
+        ):
+            return registry.segment(VideoSegmentRequest.model_validate(body))
 
+    instrument_fastapi(app)
     return app
