@@ -49,8 +49,10 @@ def fit_development_timing(
     base: RoutingParams,
     *,
     version: str,
-    min_samples: int = 1,
+    min_samples: int = 3,
 ) -> RoutingParams:
+    if min_samples < 2:
+        raise ValueError("timing calibration requires at least two independent samples")
     manifest = json.loads(manifest_bytes)
     samples: dict[str, list[float]] = defaultdict(list)
     scenario_ids: list[str] = []
@@ -107,6 +109,7 @@ def fit_development_timing(
             "timing_calibration_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
             "timing_calibration_split": "development",
             "timing_calibration_scenario_ids": sorted(scenario_ids),
+            "timing_calibration_min_samples": min_samples,
         }
     )
 
@@ -118,7 +121,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--base-params", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--min-samples", type=int, default=1)
+    parser.add_argument("--min-samples", type=int, default=3)
     args = parser.parse_args(argv)
     manifest_bytes = Path(args.manifest).read_bytes()
     result = fit_development_timing(

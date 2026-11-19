@@ -5,6 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.real_cv_eval import (
+    ScenarioEvaluation,
+    aggregate_evaluation,
+    business_result_sha256,
+    write_evaluation_report,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -118,3 +125,39 @@ def test_refresh_cache_ignores_previous_run_but_reuses_current_run(
     assert cold.get(fingerprint) is None
     cold.put(bundle)
     assert cold.get(fingerprint) == bundle
+
+
+def test_cold_and_warm_runs_have_a_comparable_business_result(tmp_path: Path) -> None:
+    result = ScenarioEvaluation(
+        scenario_id="small-fixture",
+        split="development",
+        passed=True,
+        positional_errors_m=[0.25],
+        route_associations=1,
+        cache_misses=1,
+        duration_s=3.0,
+    )
+    cold = aggregate_evaluation(
+        [result], extraction_cache_hits=0, extraction_cache_misses=1, duration_s=3.0
+    )
+    warm_result = result.model_copy(
+        update={
+            "cache_hit": True,
+            "cache_hits": 1,
+            "cache_misses": 0,
+            "duration_s": 0.1,
+        }
+    )
+    warm = aggregate_evaluation(
+        [warm_result], extraction_cache_hits=1, extraction_cache_misses=0, duration_s=0.1
+    )
+    assert business_result_sha256(cold) == business_result_sha256(warm)
+
+    changed = aggregate_evaluation(
+        [warm_result.model_copy(update={"false_associations": 1})]
+    )
+    assert business_result_sha256(cold) != business_result_sha256(changed)
+
+    write_evaluation_report(tmp_path, warm)
+    payload = (tmp_path / "business-results.json").read_text(encoding="utf-8")
+    assert business_result_sha256(warm) in payload

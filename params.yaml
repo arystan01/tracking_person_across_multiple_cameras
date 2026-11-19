@@ -54,6 +54,7 @@ edge_timing_overrides: {}
 timing_calibration_manifest_sha256: null
 timing_calibration_split: null
 timing_calibration_scenario_ids: []
+timing_calibration_min_samples: 3
 profiles:
   ADULT:   {tmin_k: 1.0, ttyp_k: 1.0, tmax_k: 1.0}
   CHILD:   {tmin_k: 0.6, ttyp_k: 1.0, tmax_k: 1.6}

@@ -1,15 +1,5 @@
 version: nvidia-12cam-timing-v1
-edge_timing_overrides:
-  Cam004-blind-north:
-    t_min: 0.5655
-    t_typ: 3.074877
-    t_max: 3.843596
-    sample_count: 1.0
-  blind-north-Cam001:
-    t_min: 1.1203
-    t_typ: 6.09179
-    t_max: 7.614738
-    sample_count: 1.0
+edge_timing_overrides: {}
 timing_calibration_manifest_sha256: ac49bc30aca44e37d666de3ee790cf2370381fe570c68ddf39a3941d6c627022
 timing_calibration_split: development
 timing_calibration_scenario_ids:
@@ -21,3 +11,4 @@ timing_calibration_scenario_ids:
   - cam008-local-person
   - cam010-local-person
   - pink-overall-worker
+timing_calibration_min_samples: 3

@@ -67,6 +67,7 @@ class RoutingParams(BaseModel):
     )
     timing_calibration_split: str | None = None
     timing_calibration_scenario_ids: list[str] = Field(default_factory=list)
+    timing_calibration_min_samples: int = Field(default=3, ge=2)
 
     @model_validator(mode="after")
     def _validate_profiles(self) -> RoutingParams:
@@ -83,6 +84,10 @@ class RoutingParams(BaseModel):
                 raise ValueError(f"invalid timing override for edge {edge_id!r}") from exc
             if not (0 < t_min <= t_typ <= t_max):
                 raise ValueError(f"invalid timing override order for edge {edge_id!r}")
+            if int(timing.get("sample_count", 0)) < self.timing_calibration_min_samples:
+                raise ValueError(
+                    f"timing override for edge {edge_id!r} has insufficient samples"
+                )
         if self.timing_calibration_split not in {None, "development"}:
             raise ValueError("Routing timing calibration may use development split only")
         self.timing_calibration_scenario_ids = sorted(

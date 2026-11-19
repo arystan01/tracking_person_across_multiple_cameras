@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import math
 import os
@@ -456,6 +457,35 @@ class EvaluationSummary(EvalModel):
     passed: bool
 
 
+def business_result_document(summary: EvaluationSummary) -> dict:
+    """Return the deterministic result surface shared by cold and warm runs.
+
+    Cache counters, cache-hit flags and wall-clock durations are deliberately
+    excluded.  Everything that can change release acceptance remains present.
+    """
+
+    payload = summary.model_dump(mode="json")
+    for key in (
+        "extraction_cache_hits",
+        "extraction_cache_misses",
+        "duration_s",
+    ):
+        payload.pop(key, None)
+    for scenario in payload["scenarios"]:
+        for key in ("cache_hit", "cache_hits", "cache_misses", "duration_s"):
+            scenario.pop(key, None)
+    return payload
+
+
+def business_result_sha256(summary: EvaluationSummary) -> str:
+    encoded = json.dumps(
+        business_result_document(summary),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def aggregate_evaluation(
     results: list[ScenarioEvaluation],
     *,
@@ -542,6 +572,12 @@ def write_evaluation_report(output: Path, summary: EvaluationSummary) -> None:
 <table><thead><tr><th>Scenario</th><th>Split</th><th>Result</th><th>Extraction</th><th>Failures</th></tr></thead><tbody>{rows}</tbody></table>
 <h2>Metrics</h2><pre>{html.escape(payload)}</pre></body></html>"""
     (output / "report.json").write_text(payload, encoding="utf-8")
+    business_payload = business_result_document(summary)
+    business_payload["sha256"] = business_result_sha256(summary)
+    (output / "business-results.json").write_text(
+        json.dumps(business_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     (output / "index.html").write_text(page, encoding="utf-8")
 
 

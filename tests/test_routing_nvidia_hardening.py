@@ -179,12 +179,34 @@ def test_timing_fit_uses_development_only_and_pins_provenance() -> None:
         edges=[EdgeDef(id="A-B", source="A", target="B", t_min=10, t_typ=40, t_max=120)],
     )
     fitted = fit_development_timing(
-        payload, graph, RoutingParams(), version="nvidia-timing-v1"
+        payload, graph, RoutingParams(), version="nvidia-timing-v1", min_samples=2
     )
-    assert fitted.edge_timing_overrides["A-B"]["t_typ"] == 20.0
+    assert fitted.edge_timing_overrides == {}
     assert fitted.timing_calibration_scenario_ids == ["development-person"]
     assert fitted.timing_calibration_split == "development"
     assert fitted.timing_calibration_manifest_sha256 == hashlib.sha256(payload).hexdigest()
+
+    manifest["scenarios"].insert(
+        1,
+        {
+            "id": "development-person-2",
+            "split": "development",
+            "oracle": {"sightings": [
+                {"camera_id": "A", "t_in_s": 0, "t_out_s": 5},
+                {"camera_id": "B", "t_in_s": 25, "t_out_s": 30},
+            ]},
+        },
+    )
+    repeated_payload = json.dumps(manifest, sort_keys=True).encode()
+    repeated = fit_development_timing(
+        repeated_payload,
+        graph,
+        RoutingParams(),
+        version="nvidia-timing-v2",
+        min_samples=2,
+    )
+    assert repeated.edge_timing_overrides["A-B"]["t_typ"] == 20.0
+    assert repeated.edge_timing_overrides["A-B"]["sample_count"] == 2.0
 
 
 def test_shadow_report_uses_identical_params_for_development_and_holdout() -> None:
@@ -218,7 +240,7 @@ def test_committed_nvidia_oracle_fits_only_development_and_shadows_holdout() -> 
     fitted = fit_development_timing(
         manifest, graph, RoutingParams(), version="nvidia-12cam-timing-v1"
     )
-    assert fitted.edge_timing_overrides
+    assert fitted.edge_timing_overrides == {}
     assert len(fitted.timing_calibration_scenario_ids) == 8
     assert not {
         "cam011-local-person",
@@ -231,6 +253,7 @@ def test_committed_nvidia_oracle_fits_only_development_and_shadows_holdout() -> 
         / "data/nvidia_mtmc/mtmc_12cam/routing-params.nvidia-12cam-timing-v1.yaml"
     )
     assert published.edge_timing_overrides == fitted.edge_timing_overrides
+    assert published.timing_calibration_min_samples == 3
     assert published.timing_calibration_manifest_sha256 == (
         fitted.timing_calibration_manifest_sha256
     )
