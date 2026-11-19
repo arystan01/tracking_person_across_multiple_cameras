@@ -12,6 +12,7 @@ from javes_contracts import (
     ExportClipsCommand,
     PerceptionProbeJob,
     RetentionCommand,
+    RetentionHoldCommand,
     RetentionResource,
     TargetGalleryCommand,
 )
@@ -210,5 +211,9 @@ class OutboxDispatcher:
         if topic == OutboxTopic.RETENTION_COMMAND:
             return self.retention.process(
                 RetentionCommand.model_validate(message.payload["command"])
+            )
+        if topic == OutboxTopic.RETENTION_HOLD:
+            return self.retention.apply_hold(
+                RetentionHoldCommand.model_validate(message.payload["command"])
             )
         raise ValueError(f"unsupported outbox topic {message.topic!r}")

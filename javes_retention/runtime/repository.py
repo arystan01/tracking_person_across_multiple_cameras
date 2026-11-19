@@ -11,7 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from javes_contracts import RetentionCommand, RetentionResource, RetentionResult
+from javes_contracts import (
+    RetentionCommand,
+    RetentionHoldCommand,
+    RetentionHoldResult,
+    RetentionResource,
+    RetentionResult,
+)
 
 
 def _utc_text(value: datetime | None) -> str | None:
@@ -198,6 +204,33 @@ class SQLiteRetentionRepository:
                 proof_digest TEXT NOT NULL
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS retention_legal_holds (
+                hold_id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                external_ticket_id TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                set_by TEXT NOT NULL,
+                set_at TEXT NOT NULL,
+                active INTEGER NOT NULL,
+                release_id TEXT,
+                release_ticket_id TEXT,
+                release_reason TEXT,
+                released_by TEXT,
+                released_at TEXT
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_retention_legal_holds_case ON retention_legal_holds(case_id, active)",
+            """
+            CREATE TABLE IF NOT EXISTS retention_hold_commands (
+                command_id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                result TEXT NOT NULL,
+                completed_at TEXT NOT NULL
+            )
+            """,
         )
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
@@ -206,6 +239,142 @@ class SQLiteRetentionRepository:
                     self._db.execute(statement)
                 self._db.execute("PRAGMA user_version = 1")
                 self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def active_hold_ids(self, case_id: str) -> list[str]:
+        with self._lock:
+            rows = self._db.execute(
+                """
+                SELECT hold_id FROM retention_legal_holds
+                WHERE case_id = ? AND active = 1 ORDER BY hold_id
+                """,
+                (case_id,),
+            ).fetchall()
+        return [str(row["hold_id"]) for row in rows]
+
+    def list_legal_holds(self, case_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM retention_legal_holds"
+        args: tuple[object, ...] = ()
+        if case_id is not None:
+            query += " WHERE case_id = ?"
+            args = (case_id,)
+        query += " ORDER BY case_id, set_at, hold_id"
+        with self._lock:
+            return [dict(row) for row in self._db.execute(query, args).fetchall()]
+
+    def apply_hold_command(
+        self,
+        command: RetentionHoldCommand,
+        fingerprint: str,
+        *,
+        now: datetime,
+    ) -> RetentionHoldResult:
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                previous = self._db.execute(
+                    "SELECT * FROM retention_hold_commands WHERE command_id = ?",
+                    (command.command_id,),
+                ).fetchone()
+                if previous is not None:
+                    if previous["fingerprint"] != fingerprint:
+                        raise ValueError(
+                            "legal-hold command_id reused with different payload"
+                        )
+                    result = RetentionHoldResult.model_validate_json(
+                        previous["result"]
+                    )
+                    self._db.execute("COMMIT")
+                    return result
+
+                hold = self._db.execute(
+                    "SELECT * FROM retention_legal_holds WHERE hold_id = ?",
+                    (command.hold_id,),
+                ).fetchone()
+                if command.action == "SET":
+                    if hold is not None:
+                        if (
+                            hold["case_id"] != command.case_id
+                            or hold["external_ticket_id"]
+                            != command.external_ticket_id
+                        ):
+                            raise ValueError(
+                                "hold_id reused for another case or ticket"
+                            )
+                        if not bool(hold["active"]):
+                            raise ValueError("released hold_id cannot be reactivated")
+                    else:
+                        self._db.execute(
+                            """
+                            INSERT INTO retention_legal_holds(
+                                hold_id, case_id, external_ticket_id, reason,
+                                set_by, set_at, active
+                            ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                            """,
+                            (
+                                command.hold_id,
+                                command.case_id,
+                                command.external_ticket_id,
+                                command.reason,
+                                command.actor_id,
+                                _utc_text(command.occurred_at),
+                            ),
+                        )
+                else:
+                    if hold is None or hold["case_id"] != command.case_id:
+                        raise KeyError(f"unknown legal hold {command.hold_id!r}")
+                    if not bool(hold["active"]):
+                        raise ValueError("legal hold is already released")
+                    self._db.execute(
+                        """
+                        UPDATE retention_legal_holds
+                        SET active=0, release_id=?, release_ticket_id=?,
+                            release_reason=?, released_by=?, released_at=?
+                        WHERE hold_id=?
+                        """,
+                        (
+                            command.command_id,
+                            command.external_ticket_id,
+                            command.reason,
+                            command.actor_id,
+                            _utc_text(command.occurred_at),
+                            command.hold_id,
+                        ),
+                    )
+                active_rows = self._db.execute(
+                    """
+                    SELECT hold_id FROM retention_legal_holds
+                    WHERE case_id=? AND active=1 ORDER BY hold_id
+                    """,
+                    (command.case_id,),
+                ).fetchall()
+                result = RetentionHoldResult(
+                    command_id=command.command_id,
+                    case_id=command.case_id,
+                    hold_id=command.hold_id,
+                    action=command.action,
+                    active_hold_ids=[str(row["hold_id"]) for row in active_rows],
+                )
+                self._db.execute(
+                    """
+                    INSERT INTO retention_hold_commands(
+                        command_id, case_id, fingerprint, payload, result,
+                        completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        command.command_id,
+                        command.case_id,
+                        fingerprint,
+                        command.model_dump_json(),
+                        result.model_dump_json(),
+                        _utc_text(now),
+                    ),
+                )
+                self._db.execute("COMMIT")
+                return result
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise

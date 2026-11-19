@@ -5,7 +5,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from javes_contracts import ArtifactRef, RetentionClass, RetentionCommand, RetentionResource
+from javes_contracts import (
+    ArtifactRef,
+    RetentionClass,
+    RetentionCommand,
+    RetentionHoldCommand,
+    RetentionResource,
+)
 from javes_contracts import CaseCommandBody, ReviewDecisionBody
 from javes_main.domain import CaseLifecycle
 from javes_main.adapters import InMemoryArtifactStore, InMemoryLiveFeedStore
@@ -66,6 +72,89 @@ def worker(
         {"object_key": ArtifactStoreDeletionBackend(store), **(extra or {})}
     )
     return RetentionWorker(repository, router, clock=lambda: BASE)
+
+
+def hold_command(
+    command_id: str,
+    hold_id: str,
+    action: str,
+    *,
+    ticket: str = "SEC-123",
+) -> RetentionHoldCommand:
+    return RetentionHoldCommand(
+        command_id=command_id,
+        case_id="case-1",
+        hold_id=hold_id,
+        action=action,
+        external_ticket_id=ticket,
+        reason=f"{action.lower()} requested by legal",
+        actor_id="root-1",
+        occurred_at=BASE,
+    )
+
+
+def test_case_legal_holds_protect_existing_and_future_resources_until_last_release(
+    tmp_path,
+):
+    store = InMemoryArtifactStore()
+    repo = SQLiteRetentionRepository(tmp_path / "retention.db")
+    retention = worker(repo, store)
+    for item in [
+        resource("route", RetentionClass.CASE_RESULT, key="route.svg"),
+        resource("audit", RetentionClass.AUDIT),
+    ]:
+        if item.artifact_ref and item.artifact_ref.object_key:
+            store.put(item.artifact_ref.object_key, b"payload", "application/octet-stream")
+        retention.register(item)
+
+    first = retention.apply_hold(hold_command("set-1", "hold-1", "SET"))
+    second = retention.apply_hold(hold_command("set-2", "hold-2", "SET", ticket="SEC-456"))
+    assert first.active_hold_ids == ["hold-1"]
+    assert second.active_hold_ids == ["hold-1", "hold-2"]
+    blocked = retention.process(command("delete-held", "DELETE_CASE"))
+    assert blocked.deleted_resource_ids == []
+    assert blocked.held_resource_ids == ["route"]
+    assert blocked.preserved_resource_ids == ["audit", "route"]
+
+    late = resource("late", RetentionClass.CASE_RESULT, key="late.svg")
+    store.put("late.svg", b"late", "image/svg+xml")
+    retention.register(late)
+    assert retention.get_resource("late").state == "ACTIVE"  # type: ignore[union-attr]
+
+    released_one = retention.apply_hold(
+        hold_command("release-1", "hold-1", "RELEASE")
+    )
+    assert released_one.active_hold_ids == ["hold-2"]
+    still_blocked = retention.process(command("delete-still-held", "DELETE_CASE"))
+    assert still_blocked.held_resource_ids == ["late", "route"]
+
+    released_last = retention.apply_hold(
+        hold_command("release-2", "hold-2", "RELEASE", ticket="SEC-456")
+    )
+    assert released_last.active_hold_ids == []
+    deleted = retention.process(command("delete-after-release", "DELETE_CASE"))
+    assert deleted.deleted_resource_ids == ["late", "route"]
+    assert deleted.preserved_resource_ids == ["audit"]
+    assert deleted.held_resource_ids == []
+    assert store.keys() == []
+
+
+def test_legal_hold_commands_are_durable_idempotent_and_fingerprint_checked(tmp_path):
+    path = tmp_path / "retention.db"
+    store = InMemoryArtifactStore()
+    first = worker(SQLiteRetentionRepository(path), store)
+    command_value = hold_command("set-durable", "hold-durable", "SET")
+    expected = first.apply_hold(command_value)
+    first.close()
+
+    restarted = worker(SQLiteRetentionRepository(path), store)
+    assert restarted.apply_hold(command_value) == expected
+    with pytest.raises(ValueError, match="different payload"):
+        restarted.apply_hold(
+            command_value.model_copy(update={"reason": "different reason"})
+        )
+    with pytest.raises(KeyError, match="unknown legal hold"):
+        restarted.apply_hold(hold_command("release-missing", "missing", "RELEASE"))
 
 
 def test_close_retains_until_delete_and_keeps_audit(tmp_path):

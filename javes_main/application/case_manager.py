@@ -15,6 +15,7 @@ from javes_contracts import (
     ArtifactRef,
     CaseCommandBody,
     CaseInfo,
+    CreateLegalHoldBody,
     ClipLifecycleState,
     ClipProcessingStatus,
     ClipRecord,
@@ -25,14 +26,18 @@ from javes_contracts import (
     ExportClipsResult,
     Hypothesis,
     LiveFeedUpdate,
+    LegalHoldView,
     PerceptionProbeJob,
     ProbeResult,
     ProbeStatus,
     RetentionClass,
     RetentionCommand,
+    RetentionHoldCommand,
+    RetentionHoldResult,
     RetentionResource,
     RetentionResult,
     RevokeDecisionBody,
+    ReleaseLegalHoldBody,
     DecisionRecordView,
     ReviewDecisionBody,
     RoutingWorkerResult,
@@ -51,7 +56,9 @@ from javes_main.domain.models import (
     CaseView,
     JobRecord,
     JobState,
+    LegalHoldRecord,
     OutboxRecord,
+    OutboxState,
     OutboxTopic,
     ProbeResultRecord,
     RoutingTriggerRecord,
@@ -199,6 +206,213 @@ class CaseManager:
 
     def _active_decisions(self, case_id: str) -> list[DecisionRecordView]:
         return [item for item in self._decision_history(case_id) if item.active]
+
+    @staticmethod
+    def _legal_hold_view(record: LegalHoldRecord) -> LegalHoldView:
+        return LegalHoldView.model_validate(record.model_dump(mode="python"))
+
+    def list_legal_holds(self, case_id: str) -> list[LegalHoldView]:
+        case = self.repository.get(case_id)
+        return [
+            self._legal_hold_view(item)
+            for item in sorted(
+                case.legal_holds.values(), key=lambda value: (value.set_at, value.hold_id)
+            )
+        ]
+
+    def set_legal_hold(
+        self,
+        case_id: str,
+        body: CreateLegalHoldBody,
+        *,
+        idempotency_key: str,
+    ) -> LegalHoldView:
+        storage_key = f"case:{case_id}:legal-hold:set:{idempotency_key}"
+        fingerprint = _fingerprint(body)
+        replay = self._idempotent_response(storage_key, fingerprint)
+        if replay is not None:
+            return next(
+                item for item in self.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
+        case = self.repository.get(case_id)
+        if case.lifecycle == CaseLifecycle.DELETED:
+            self._event(
+                case_id,
+                "LEGAL_HOLD_SET_DENIED",
+                actor_id=body.operator_id,
+                payload={"hold_id": body.hold_id, "reason": "case_deleted"},
+            )
+            raise ValueError("cannot set legal hold on a deleted case")
+        if case.lifecycle == CaseLifecycle.DELETE_REQUESTED:
+            leased_deletion = any(
+                item.topic == OutboxTopic.RETENTION_COMMAND.value
+                and item.state == OutboxState.LEASED
+                for item in self.repository.list_outbox(case_id=case_id)
+            )
+            if leased_deletion:
+                self._event(
+                    case_id,
+                    "LEGAL_HOLD_SET_DENIED",
+                    actor_id=body.operator_id,
+                    payload={"hold_id": body.hold_id, "reason": "deletion_in_flight"},
+                )
+                raise ValueError("cannot set legal hold while deletion is in flight")
+        with self.repository.transaction():
+            self.repository.lock_idempotency(storage_key)
+            replay = self._idempotent_response(storage_key, fingerprint)
+            if replay is not None:
+                return next(
+                    item for item in self.list_legal_holds(case_id)
+                    if item.hold_id == body.hold_id
+                )
+            case = self.repository.get(case_id)
+            if body.expected_case_revision != case.revision:
+                raise ValueError(
+                    "expected_case_revision does not match current case revision"
+                )
+            if body.hold_id in case.legal_holds:
+                raise ValueError("hold_id already exists")
+            expected = case.revision
+            record = LegalHoldRecord(
+                hold_id=body.hold_id,
+                case_id=case_id,
+                external_ticket_id=body.external_ticket_id,
+                reason=body.reason,
+                set_by=body.operator_id,
+                set_at=body.occurred_at,
+            )
+            case.legal_holds[body.hold_id] = record
+            case.updated_at = self.clock.now()
+            self.repository.save(case, expected)
+            command = RetentionHoldCommand(
+                command_id=self.ids.new("retention_hold", case_id, "set", body.hold_id),
+                case_id=case_id,
+                hold_id=body.hold_id,
+                action="SET",
+                external_ticket_id=body.external_ticket_id,
+                reason=body.reason,
+                actor_id=body.operator_id,
+                occurred_at=body.occurred_at,
+            )
+            self._enqueue(
+                case_id,
+                OutboxTopic.RETENTION_HOLD,
+                f"retention-hold:{command.command_id}",
+                {"command": command.model_dump(mode="json")},
+            )
+            self._record_case_data(
+                case_id,
+                CaseDataKind.LEGAL_HOLD,
+                body.hold_id,
+                body.model_dump(mode="json"),
+                schema_version="legal-hold.v1alpha1",
+                occurred_at=body.occurred_at,
+            )
+            self._event(
+                case_id,
+                "LEGAL_HOLD_SET",
+                actor_id=body.operator_id,
+                payload={
+                    "hold_id": body.hold_id,
+                    "external_ticket_id": body.external_ticket_id,
+                },
+            )
+            self.repository.remember_idempotency(
+                storage_key, fingerprint, {"case_id": case_id, "hold_id": body.hold_id}
+            )
+        return self._legal_hold_view(record)
+
+    def release_legal_hold(
+        self,
+        case_id: str,
+        body: ReleaseLegalHoldBody,
+        *,
+        idempotency_key: str,
+    ) -> LegalHoldView:
+        storage_key = f"case:{case_id}:legal-hold:release:{idempotency_key}"
+        fingerprint = _fingerprint(body)
+        replay = self._idempotent_response(storage_key, fingerprint)
+        if replay is not None:
+            return next(
+                item for item in self.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
+        case = self.repository.get(case_id)
+        if case.lifecycle == CaseLifecycle.DELETED:
+            self._event(
+                case_id,
+                "LEGAL_HOLD_RELEASE_DENIED",
+                actor_id=body.operator_id,
+                payload={"hold_id": body.hold_id, "reason": "case_deleted"},
+            )
+            raise ValueError("cannot release legal hold on a deleted case")
+        with self.repository.transaction():
+            self.repository.lock_idempotency(storage_key)
+            replay = self._idempotent_response(storage_key, fingerprint)
+            if replay is not None:
+                return next(
+                    item for item in self.list_legal_holds(case_id)
+                    if item.hold_id == body.hold_id
+                )
+            case = self.repository.get(case_id)
+            if body.expected_case_revision != case.revision:
+                raise ValueError(
+                    "expected_case_revision does not match current case revision"
+                )
+            record = case.legal_holds.get(body.hold_id)
+            if record is None:
+                raise KeyError(f"unknown legal hold {body.hold_id!r}")
+            if not record.active:
+                raise ValueError("legal hold is already released")
+            if record.release_pending:
+                raise ValueError("legal hold release is already pending")
+            expected = case.revision
+            record.release_pending = True
+            record.release_id = body.release_id
+            record.release_reason = body.reason
+            record.released_by = body.operator_id
+            record.released_at = body.occurred_at
+            case.updated_at = self.clock.now()
+            self.repository.save(case, expected)
+            command = RetentionHoldCommand(
+                command_id=body.release_id,
+                case_id=case_id,
+                hold_id=body.hold_id,
+                action="RELEASE",
+                external_ticket_id=body.external_ticket_id,
+                reason=body.reason,
+                actor_id=body.operator_id,
+                occurred_at=body.occurred_at,
+            )
+            self._enqueue(
+                case_id,
+                OutboxTopic.RETENTION_HOLD,
+                f"retention-hold:{command.command_id}",
+                {"command": command.model_dump(mode="json")},
+            )
+            self._record_case_data(
+                case_id,
+                CaseDataKind.LEGAL_HOLD_RELEASE,
+                body.release_id,
+                body.model_dump(mode="json"),
+                schema_version="legal-hold-release.v1alpha1",
+                occurred_at=body.occurred_at,
+            )
+            self._event(
+                case_id,
+                "LEGAL_HOLD_RELEASE_REQUESTED",
+                actor_id=body.operator_id,
+                payload={
+                    "hold_id": body.hold_id,
+                    "release_id": body.release_id,
+                    "external_ticket_id": body.external_ticket_id,
+                },
+            )
+            self.repository.remember_idempotency(
+                storage_key, fingerprint, {"case_id": case_id, "hold_id": body.hold_id}
+            )
+        return self._legal_hold_view(record)
 
     def _enqueue(
         self,
@@ -1918,6 +2132,7 @@ class CaseManager:
             self.repository.save_job(job)
         expected = case.revision
         case.lifecycle = CaseLifecycle.DELETE_REQUESTED
+        case.pending_retention_action = "DELETE_CASE"
         case.live_feed = None
         case.next_heartbeat_at = None
         case.updated_at = now
@@ -1978,6 +2193,7 @@ class CaseManager:
                     continue
                 expected = current.revision
                 current.lifecycle = CaseLifecycle.DELETE_REQUESTED
+                current.pending_retention_action = "TTL_EXPIRED"
                 current.updated_at = now
                 self.repository.save(current, expected)
                 self._enqueue(
@@ -2019,6 +2235,7 @@ class CaseManager:
         case.export_ref = None
         case.live_feed = None
         case.content_redacted = True
+        case.pending_retention_action = None
         case.lifecycle = CaseLifecycle.DELETED
         case.deleted_at = now
         case.retention_due_at = None
@@ -2344,6 +2561,22 @@ class CaseManager:
                 or retention.action != command.action
             ):
                 raise ValueError("Retention result does not match its command")
+            if (
+                retention.action in {"DELETE_CASE", "TTL_EXPIRED"}
+                and retention.held_resource_ids
+            ):
+                case.pending_retention_action = retention.action
+                case.updated_at = now
+                self.repository.save(case, expected)
+                self._event(
+                    message.case_id,
+                    "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD",
+                    payload={
+                        "retention_command_id": retention.command_id,
+                        "held_resource_ids": retention.held_resource_ids,
+                    },
+                )
+                return
             if retention.action in {"DELETE_CASE", "TTL_EXPIRED"}:
                 self._redact_deleted_case(case, now=now)
                 self.repository.save(case, expected)
@@ -2364,6 +2597,71 @@ class CaseManager:
                 message.case_id,
                 event_type,
                 payload=retention.model_dump(mode="json"),
+            )
+            return
+
+        if topic == OutboxTopic.RETENTION_HOLD:
+            hold_result = RetentionHoldResult.model_validate(result)
+            hold_command = RetentionHoldCommand.model_validate(
+                message.payload["command"]
+            )
+            if (
+                hold_result.command_id != hold_command.command_id
+                or hold_result.case_id != hold_command.case_id
+                or hold_result.case_id != message.case_id
+                or hold_result.hold_id != hold_command.hold_id
+                or hold_result.action != hold_command.action
+            ):
+                raise ValueError("Retention legal-hold result does not match its command")
+            hold = case.legal_holds.get(hold_result.hold_id)
+            if hold is None:
+                raise ValueError("Retention returned an unknown legal hold")
+            expected_active = {
+                hold_id
+                for hold_id, item in case.legal_holds.items()
+                if item.active and not (
+                    hold_result.action == "RELEASE" and hold_id == hold_result.hold_id
+                )
+            }
+            if set(hold_result.active_hold_ids) != expected_active:
+                raise ValueError("Retention active legal-hold projection diverged")
+            if hold_result.action == "RELEASE":
+                hold.active = False
+                hold.release_pending = False
+                case.updated_at = now
+                self.repository.save(case, expected)
+                if (
+                    not expected_active
+                    and case.lifecycle == CaseLifecycle.DELETE_REQUESTED
+                    and case.pending_retention_action in {"DELETE_CASE", "TTL_EXPIRED"}
+                ):
+                    retry = RetentionCommand(
+                        command_id=self.ids.new(
+                            "retention",
+                            message.case_id,
+                            "hold-release",
+                            hold_result.command_id,
+                            case.pending_retention_action,
+                        ),
+                        case_id=message.case_id,
+                        action=case.pending_retention_action,
+                        actor_id=hold.released_by,
+                        occurred_at=hold.released_at or now,
+                    )
+                    self._enqueue(
+                        message.case_id,
+                        OutboxTopic.RETENTION_COMMAND,
+                        f"retention-command:{retry.command_id}",
+                        {"command": retry.model_dump(mode="json")},
+                    )
+                event_type = "LEGAL_HOLD_RELEASED"
+            else:
+                event_type = "LEGAL_HOLD_APPLIED"
+            self._event(
+                message.case_id,
+                event_type,
+                actor_id=hold_command.actor_id,
+                payload=hold_result.model_dump(mode="json"),
             )
             return
 

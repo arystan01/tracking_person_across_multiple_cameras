@@ -11,12 +11,14 @@ from javes_contracts import (
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
+    CreateLegalHoldBody,
     LastKnown,
     ProbeRequest,
     ProbeResult,
     ProbeStatus,
     ReviewDecisionBody,
     RevokeDecisionBody,
+    ReleaseLegalHoldBody,
 )
 from javes_main.application import MetricsService
 from javes_main.application import ReplayEvidenceIncomplete
@@ -706,6 +708,77 @@ def test_legacy_replay_ledger_backfill_requires_complete_persisted_triggers():
     )
     assert migrated["migrated"] == migrated["routing_runs"]
     assert app.repository.get("case-1").replay_capability == "COMPLETE"
+
+
+def test_case_delete_waits_for_all_legal_holds_and_resumes_after_last_release():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="legal-hold-create")
+    app.scheduler.run_case_once("case-1")
+    for index in (1, 2):
+        revision = app.repository.get("case-1").revision
+        app.manager.set_legal_hold(
+            "case-1",
+            CreateLegalHoldBody(
+                hold_id=f"hold-{index}",
+                external_ticket_id=f"LEGAL-{index}",
+                reason="preserve evidence for investigation",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=70 + index),
+                expected_case_revision=revision,
+            ),
+            idempotency_key=f"hold-{index}",
+        )
+        app.outbox_dispatcher.drain()
+    assert app.retention_worker.active_holds["case-1"] == {"hold-1", "hold-2"}
+
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="delete-under-hold",
+            action="DELETE",
+            operator_id="root-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ),
+        idempotency_key="delete-under-hold",
+    )
+    app.outbox_dispatcher.drain()
+    blocked = app.repository.get("case-1")
+    assert blocked.lifecycle == CaseLifecycle.DELETE_REQUESTED
+    assert blocked.content_redacted is False
+    assert blocked.pending_retention_action == "DELETE_CASE"
+    assert any(
+        event["event_type"] == "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD"
+        for event in app.manager.get_events("case-1")
+    )
+
+    for index in (1, 2):
+        current = app.repository.get("case-1")
+        app.manager.release_legal_hold(
+            "case-1",
+            ReleaseLegalHoldBody(
+                release_id=f"release-{index}",
+                hold_id=f"hold-{index}",
+                external_ticket_id=f"LEGAL-{index}",
+                reason="legal approved release",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=90 + index),
+                expected_case_revision=current.revision,
+            ),
+            idempotency_key=f"release-{index}",
+        )
+        app.outbox_dispatcher.drain()
+        if index == 1:
+            assert app.repository.get("case-1").lifecycle == CaseLifecycle.DELETE_REQUESTED
+
+    deleted = app.repository.get("case-1")
+    assert deleted.lifecycle == CaseLifecycle.DELETED
+    assert deleted.content_redacted is True
+    holds = app.manager.list_legal_holds("case-1")
+    assert [item.active for item in holds] == [False, False]
+    assert all(not item.release_pending for item in holds)
+    events = app.manager.get_events("case-1")
+    assert sum(item["event_type"] == "LEGAL_HOLD_SET" for item in events) == 2
+    assert sum(item["event_type"] == "LEGAL_HOLD_RELEASED" for item in events) == 2
 
 
 def test_repository_optimistic_revision_check():
