@@ -307,6 +307,27 @@ class RetentionCommand(ContractModel):
         return aware_utc(value)  # type: ignore[return-value]
 
 
+class RetentionDeletionReceipt(ContractModel):
+    """Path-free proof for one physical deletion attempt."""
+
+    contract_version: Literal["retention-deletion-receipt.v1"] = (
+        "retention-deletion-receipt.v1"
+    )
+    resource_id: str
+    backend_kind: str
+    locator_kind: str
+    locator_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    attempt: int = Field(ge=1)
+    status: Literal["DELETED", "ALREADY_MISSING", "FAILED"]
+    occurred_at: datetime
+    error_code: str | None = None
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_receipt_time(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
 class RetentionResult(ContractModel):
     contract_version: Literal["retention-result.v1"] = "retention-result.v1"
     command_id: str
@@ -315,6 +336,24 @@ class RetentionResult(ContractModel):
     deleted_resource_ids: list[str] = Field(default_factory=list)
     preserved_resource_ids: list[str] = Field(default_factory=list)
     audit_tombstone_id: str
+    receipts: list[RetentionDeletionReceipt] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _terminal_deletion_proof(self) -> RetentionResult:
+        deleted = set(self.deleted_resource_ids)
+        receipt_ids = {item.resource_id for item in self.receipts}
+        if not receipt_ids <= deleted:
+            raise ValueError("retention receipt references a non-deleted resource")
+        terminal = {
+            item.resource_id
+            for item in self.receipts
+            if item.status in {"DELETED", "ALREADY_MISSING"}
+        }
+        if terminal != deleted:
+            raise ValueError(
+                "every deleted resource requires terminal physical deletion proof"
+            )
+        return self
 
 
 class CaseWindow(ContractModel):

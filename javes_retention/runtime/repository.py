@@ -109,6 +109,30 @@ class SQLiteRetentionRepository:
                 self._db.execute("ROLLBACK")
                 raise
 
+    @contextmanager
+    def command_lock(self):
+        """Serialize destructive commands across local worker processes.
+
+        SQLite protects journal rows but cannot keep an external backend call
+        inside a database transaction safely.  A process-level advisory lock
+        closes that gap for the supported local deployment.  PostgreSQL
+        deployments replace this repository with row/advisory locking.
+        """
+
+        if self.path == ":memory:":
+            with self._lock:
+                yield
+            return
+        import fcntl
+
+        lock_path = Path(f"{self.path}.commands.lock")
+        with lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def _create_schema(self) -> None:
         statements = (
             """
