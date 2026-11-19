@@ -28,6 +28,11 @@ def test_alerts_slos_and_runbooks_are_connected() -> None:
     names = {item["name"] for item in alerts["alerts"]}
     assert {"queue_stalled", "expired_leases", "deletion_failure", "archive_unavailable"} <= names
     assert slo["scope"] == "nvidia-12cam"
+    assert slo["objectives"]["controls_api_p95_s"]["target"] == 2.0
+    assert slo["objectives"]["routing_step_p95_s"]["target"] == 2.0
+    assert slo["objectives"]["deletion_completion_p95_s"]["target"] == 60.0
+    routing = next(item for item in alerts["alerts"] if item["name"] == "routing_latency")
+    assert routing["expression"] == "routing_trigger_latency.p95_s > 2"
     for alert in alerts["alerts"]:
         assert (ROOT / alert["runbook"]).is_file()
 

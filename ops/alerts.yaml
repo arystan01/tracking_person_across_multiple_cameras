@@ -21,7 +21,7 @@ alerts:
     for: 5m
     runbook: ops/runbooks/incident-response.md
   - name: routing_latency
-    expression: routing_trigger_latency.max_s > 5
+    expression: routing_trigger_latency.p95_s > 2
     severity: warning
     for: 10m
     runbook: ops/runbooks/incident-response.md

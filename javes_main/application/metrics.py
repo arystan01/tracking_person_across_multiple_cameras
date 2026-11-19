@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import math
 from typing import Any
 
 from javes_main.domain import CaseLifecycle, JobState, OutboxState
@@ -11,10 +12,13 @@ from javes_main.ports import CaseRepository, Clock
 
 def _duration_summary(values: list[float]) -> dict[str, float | int]:
     if not values:
-        return {"count": 0, "avg_s": 0.0, "max_s": 0.0}
+        return {"count": 0, "avg_s": 0.0, "p95_s": 0.0, "max_s": 0.0}
+    ordered = sorted(values)
+    p95 = ordered[max(math.ceil(len(ordered) * 0.95) - 1, 0)]
     return {
         "count": len(values),
         "avg_s": sum(values) / len(values),
+        "p95_s": p95,
         "max_s": max(values),
     }
 

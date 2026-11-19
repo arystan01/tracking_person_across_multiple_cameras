@@ -320,6 +320,7 @@ async def test_controls_http_fake_end_to_end():
         assert metrics.json()["camera_seconds_processed"] > 0
         assert metrics.json()["job_completion_latency"]["count"] >= 1
         assert metrics.json()["routing_trigger_latency"]["count"] >= 1
+        assert metrics.json()["routing_trigger_latency"]["p95_s"] >= 0
         assert set(metrics.json()["queue_depth"]) == {"jobs", "outbox", "routing"}
         assert set(metrics.json()["terminal_failures"]) == {"jobs", "outbox", "routing"}
         assert metrics.json()["expired_leases"] >= 0
