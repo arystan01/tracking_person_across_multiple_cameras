@@ -43,6 +43,7 @@ COMPONENT_TOPICS: dict[str, set[str]] = {
     "retention": {
         OutboxTopic.RETENTION_REGISTER.value,
         OutboxTopic.RETENTION_COMMAND.value,
+        OutboxTopic.RETENTION_HOLD.value,
     },
 }
 
@@ -54,6 +55,7 @@ TOPIC_OPERATIONS = {
     OutboxTopic.CLIP_EXPORT.value: "CLIP_EXPORT",
     OutboxTopic.RETENTION_REGISTER.value: "RETENTION_REGISTER",
     OutboxTopic.RETENTION_COMMAND.value: "RETENTION_DELETE",
+    OutboxTopic.RETENTION_HOLD.value: "RETENTION_HOLD",
 }
 
 

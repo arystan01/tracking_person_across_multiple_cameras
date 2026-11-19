@@ -14,6 +14,8 @@ from javes_contracts import (
     PerceptionProbeJob,
     ProbeResult,
     RetentionCommand,
+    RetentionHoldCommand,
+    RetentionHoldResult,
     RetentionResource,
     RetentionResult,
     RoutingWorkerResult,
@@ -184,6 +186,7 @@ class ClipPort(Protocol):
 class RetentionPort(Protocol):
     def register(self, resource: RetentionResource) -> None: ...
     def process(self, command: RetentionCommand) -> RetentionResult: ...
+    def apply_hold(self, command: RetentionHoldCommand) -> RetentionHoldResult: ...
 
 
 class VideoArchivePort(Protocol):

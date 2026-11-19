@@ -378,6 +378,7 @@ class RetentionResult(ContractModel):
     action: Literal["CLOSE_CASE", "DELETE_CASE", "TTL_EXPIRED"]
     deleted_resource_ids: list[str] = Field(default_factory=list)
     preserved_resource_ids: list[str] = Field(default_factory=list)
+    held_resource_ids: list[str] = Field(default_factory=list)
     audit_tombstone_id: str
     receipts: list[RetentionDeletionReceipt] = Field(default_factory=list)
 
@@ -397,6 +398,109 @@ class RetentionResult(ContractModel):
                 "every deleted resource requires terminal physical deletion proof"
             )
         return self
+
+
+class RetentionHoldCommand(ContractModel):
+    contract_version: Literal["retention-hold-command.v1"] = (
+        "retention-hold-command.v1"
+    )
+    command_id: str
+    case_id: str
+    hold_id: str
+    action: Literal["SET", "RELEASE"]
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    actor_id: str
+    occurred_at: datetime
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class RetentionHoldResult(ContractModel):
+    contract_version: Literal["retention-hold-result.v1"] = (
+        "retention-hold-result.v1"
+    )
+    command_id: str
+    case_id: str
+    hold_id: str
+    action: Literal["SET", "RELEASE"]
+    active_hold_ids: list[str] = Field(default_factory=list)
+
+
+class CreateLegalHoldBody(ContractModel):
+    hold_id: str
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    operator_id: str
+    occurred_at: datetime
+    expected_case_revision: int = Field(ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class ReleaseLegalHoldBody(ContractModel):
+    release_id: str
+    hold_id: str
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    operator_id: str
+    occurred_at: datetime
+    expected_case_revision: int = Field(ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class LegalHoldView(ContractModel):
+    hold_id: str
+    case_id: str
+    external_ticket_id: str
+    reason: str
+    set_by: str
+    set_at: datetime
+    active: bool = True
+    release_pending: bool = False
+    released_by: str | None = None
+    released_at: datetime | None = None
+    release_id: str | None = None
+    release_reason: str | None = None
+
+    @field_validator("set_at", "released_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
 
 
 class CaseWindow(ContractModel):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from javes_contracts import (
     RetentionCommand,
+    RetentionHoldCommand,
     RetentionResource,
     WorkerTaskResultRequest,
 )
@@ -37,6 +38,10 @@ class RetentionTaskRunner:
                 elif task.operation == "RETENTION_DELETE":
                     result = self.worker.process(
                         RetentionCommand.model_validate(task.payload)
+                    ).model_dump(mode="json")
+                elif task.operation == "RETENTION_HOLD":
+                    result = self.worker.apply_hold(
+                        RetentionHoldCommand.model_validate(task.payload)
                     ).model_dump(mode="json")
                 else:
                     raise ValueError(

@@ -12,10 +12,13 @@ from fastapi.responses import JSONResponse
 from javes_contracts import (
     CaseCommandBody,
     CreateCaseBody,
+    CreateLegalHoldBody,
+    LegalHoldView,
     LiveFeedUpdate,
     ProblemDetails,
     ProbeResult,
     RevokeDecisionBody,
+    ReleaseLegalHoldBody,
     DecisionRecordView,
     ReviewDecisionBody,
     WorkerClaimRequest,
@@ -512,6 +515,69 @@ def create_app(
             scheduler.routing.drain()
             scheduler.outbox.drain()
             view = manager.get_view(case_id)
+        return view
+
+    @app.get(
+        "/v1/cases/{case_id}/legal-holds",
+        response_model=list[LegalHoldView],
+    )
+    async def legal_holds(
+        case_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> list[LegalHoldView]:
+        require_permission(actor, "case.legal_hold.manage")
+        return manager.list_legal_holds(case_id)
+
+    @app.post(
+        "/v1/cases/{case_id}/legal-holds",
+        response_model=LegalHoldView,
+        status_code=201,
+    )
+    async def set_legal_hold(
+        case_id: str,
+        body: CreateLegalHoldBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> LegalHoldView:
+        require_permission(actor, "case.legal_hold.manage")
+        require_same_actor(actor, body.operator_id)
+        view = manager.set_legal_hold(
+            case_id, body, idempotency_key=idempotency_key
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.outbox.drain()
+            view = next(
+                item for item in manager.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
+        return view
+
+    @app.post(
+        "/v1/cases/{case_id}/legal-holds/{hold_id}/release",
+        response_model=LegalHoldView,
+    )
+    async def release_legal_hold(
+        case_id: str,
+        hold_id: str,
+        body: ReleaseLegalHoldBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> LegalHoldView:
+        require_permission(actor, "case.legal_hold.manage")
+        require_same_actor(actor, body.operator_id)
+        if body.hold_id != hold_id:
+            raise ValueError("path hold_id does not match request body")
+        view = manager.release_legal_hold(
+            case_id, body, idempotency_key=idempotency_key
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.outbox.drain()
+            view = next(
+                item for item in manager.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
         return view
 
     def case_command(
