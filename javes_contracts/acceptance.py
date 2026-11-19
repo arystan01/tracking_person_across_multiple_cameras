@@ -183,6 +183,12 @@ def check_retention_result(
     _require(len(preserved) == len(set(preserved)), "duplicate preserved resource id")
     _require(not set(deleted) & set(preserved), "resource is both deleted and preserved")
     _require(bool(result.audit_tombstone_id), "retention result requires audit tombstone")
+    terminal = {
+        item.resource_id
+        for item in result.receipts
+        if item.status in {"DELETED", "ALREADY_MISSING"}
+    }
+    _require(terminal == set(deleted), "deleted resource lacks terminal receipt")
 
 
 def check_video_segment_result(

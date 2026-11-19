@@ -7,6 +7,7 @@ import hashlib
 from javes_contracts import (
     RetentionClass,
     RetentionCommand,
+    RetentionDeletionReceipt,
     RetentionResource,
     RetentionResult,
 )
@@ -112,6 +113,19 @@ class FakeRetentionWorker:
             deleted_resource_ids=deleted,
             preserved_resource_ids=preserved,
             audit_tombstone_id=_tombstone(command),
+            receipts=[
+                RetentionDeletionReceipt(
+                    resource_id=resource_id,
+                    backend_kind="test-fake",
+                    locator_kind="metadata",
+                    locator_hash="sha256:"
+                    + hashlib.sha256(resource_id.encode()).hexdigest(),
+                    attempt=1,
+                    status="DELETED",
+                    occurred_at=command.occurred_at,
+                )
+                for resource_id in deleted
+            ],
         )
         self._commands[command.command_id] = (fingerprint, result)
         return result.model_copy(deep=True)
