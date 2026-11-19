@@ -13,6 +13,10 @@ dist/
 *.egg-info/
 .venv/
 venv/
+.env
+.env.*
+!.env.example
+!deploy/staging/.env.example
 
 # Local runtime state and generated output
 *.sqlite
@@ -20,6 +24,8 @@ venv/
 demo_out/
 schemas/
 artifacts/
+/runtime/
+backups/
 .presentation_work/
 deliverables/
 .~lock.*#
