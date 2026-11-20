@@ -1,5 +1,10 @@
 """Local persistent store. Replace behind this interface for a REST backend."""
 import json
+from contextlib import contextmanager
+from threading import RLock
+
+_LOCKS = {}
+_LOCKS_GUARD = RLock()
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -7,7 +12,9 @@ from .domain import Case
 
 class SQLiteStore:
     def __init__(self, path):
-        self.path = str(path)
+        self.path = str(Path(path).resolve())
+        with _LOCKS_GUARD:
+            self.lock = _LOCKS.setdefault(self.path, RLock())
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript('''
@@ -17,11 +24,15 @@ class SQLiteStore:
                     at TEXT NOT NULL, operator TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
             ''')
 
+    @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
-        # Avoid keeping deleted image data on reusable SQLite pages.
         db.execute("PRAGMA secure_delete=ON")
-        return db
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def save(self, case, operator, action, detail=""):
         with self.connect() as db:

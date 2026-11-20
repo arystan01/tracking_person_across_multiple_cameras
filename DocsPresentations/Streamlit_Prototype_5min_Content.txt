@@ -1,0 +1,124 @@
+STREAMLIT PROTOTYPE — FIVE-MINUTE PRESENTATION CONTENT
+
+Scope: your dashboard contribution within the team presentation.
+Target: 4 minutes 30 seconds, with a 30-second buffer.
+Format: slide text, spoken script, and optional live-demo actions.
+No separate title slide is needed when inserting these into the team deck.
+
+SLIDE 1 — Operator dashboard
+Time: 0:00–0:35
+
+ON THE SLIDE
+• Streamlit interface for a case-based missing-person search
+• Staff review candidate sightings before adding them to the route
+• Current prototype uses simulated search results
+
+SPEAKER NOTES
+“My part of the project is the Streamlit dashboard that security staff would use during a search. It connects the team's search results to an operator's decisions. Staff can open a case, inspect candidate sightings, and save the reviewed results. The current version lets us test this workflow with simulated data while the other components are still under development.”
+
+SHOW
+The dashboard after signing in. Avoid spending time demonstrating the login.
+
+SLIDE 2 — Case creation
+Time: 0:35–1:20
+
+ON THE SLIDE
+• Reference photo with rotation and crop controls
+• Last-known camera or zone and search time window
+• Unique case ID for later retrieval
+• Photo-free demo for testing the workflow
+
+SPEAKER NOTES
+“A search starts with information about one missing person. The operator provides a reference photo, the last-known camera or zone, and a time window. The interface supports rotating and cropping the photo before storing it. The case receives a unique ID so staff can retrieve it later. For testing, we can also create a case without a photo. The uploaded image is prepared for a future perception service, but the current demo does not analyze it.”
+
+SHOW
+Open New case and point out the photo area, camera selector, and time window.
+Do not fill out a new case live. Switch to your prepared case afterward.
+
+SLIDE 3 — Candidate review
+Time: 1:20–2:40
+
+ON THE SLIDE
+• Candidate camera, timestamp, and appearance score
+• Travel-time warning for implausible movements
+• Operator decision: confirm, remove, or request recalculation
+• Review progress shows unresolved candidates
+
+SPEAKER NOTES
+“After a search, the dashboard presents candidate sightings. Each candidate has a camera, timestamp, and appearance score. The prototype also compares the available travel time with the minimum travel time between cameras. This can flag a candidate that looks similar but appears somewhere too quickly.
+
+The operator opens a clip and chooses a decision. They confirm a correct sighting, remove a result when the target is absent, or request recalculation when the identification or route needs another check. Confirmed sightings contribute to the displayed route. Unresolved decisions prevent saving the final result.
+
+Here, I will confirm the candidate at Camera B. The review count changes immediately. The videos are illustrative animations, and recalculation currently returns the same demo observations. Actual search and recalculation will come from the backend.”
+
+SHOW
+Open Review clip for Camera B. Select “Target present; location correct” and apply.
+Point out the updated confirmed count and review progress.
+Explain recalculation verbally to avoid spending time on an extra review cycle.
+
+SLIDE 4 — Route and saved results
+Time: 2:40–3:45
+
+ON THE SLIDE
+• Schematic route from reported location and confirmed sightings
+• Last-observed camera and time
+• Save completed reviews and reopen by case ID
+• JSON report and merged illustrative clip sequence
+
+SPEAKER NOTES
+“The route view combines the reported starting location with operator-confirmed sightings in time order. It shows the latest confirmed camera and time, and warns if confirmed observations conflict with travel constraints. The lines summarize movement between camera zones. They do not establish an exact path or a person's current position outside coverage.
+
+Once all candidates have decisions, the operator can save the result. Saving makes it view-only, and the case ID retrieves it later. Results include a JSON report. For demo data, the app can also concatenate the confirmed animation clips when FFmpeg is available. Preserving actual CCTV footage still requires the media backend.”
+
+SHOW
+Open Route & coverage and point to Camera B and the last-observed time.
+Open Case results and save the prepared case.
+If time allows, reopen it through Find case using the copied ID.
+Do not demonstrate deletion during the presentation.
+
+SLIDE 5 — Integration and next steps
+Time: 3:45–4:30
+
+ON THE SLIDE
+• Working locally: review, case storage, route display, save/reopen, export
+• Replaceable adapters for changing input/output formats
+• Next connections: perception results, real clips, authentication
+• Live tracking and automatic re-entry remain future work
+
+SPEAKER NOTES
+“The interface, local storage, review decisions, and saved-result workflow work now. Search results and coverage events remain simulated.
+
+Because the team's formats are still changing, the code separates the dashboard from case management and input adapters. JSON and CSV imports translate external results into a common candidate structure. A future API adapter can perform the same translation, and output adapters can change the report format.
+
+My next step is to connect the team's perception and media outputs, then test the complete workflow with real recordings. This prototype gives us an interface we can already use to check that integration.”
+
+4:30–5:00 — BUFFER
+Use this time for slow navigation or the handoff to the next teammate.
+If behind schedule, skip reopening the saved case and finish Slide 5.
+
+LIVE-DEMO PREPARATION
+1. Launch from the intended checkout and sign in with operator / trace-demo.
+   These are public demo credentials, not production access control.
+2. Choose Try a complete demo case, then Start search.
+3. Confirm demo-A. Remove demo-C, demo-D, and demo-distractor.
+4. Leave demo-B unreviewed. Do not save yet.
+5. Copy the case ID into a temporary note for the reopening demonstration.
+6. Check that the four assets/camera-*.mp4 animations play.
+7. If demonstrating the merged sequence, verify FFmpeg is available beforehand.
+8. Keep the app open. Use New case to explain intake, then Current case for the prepared example.
+9. Have screenshots of intake, candidate review, and the route as a fallback.
+
+ACCURACY NOTES FOR QUESTIONS
+• No Re-ID model analyzes the photo in this prototype.
+• An appearance score is a comparison value, not an identity probability.
+• Coverage and re-entry controls are manual simulations.
+• The reappearance-timeout input and simulation button have been removed.
+• Saved cases are view-only and persist until deletion. Legacy CLOSED cases still follow their pre-existing retention rule.
+• Demo clip concatenation works with supplied animations. It does not implement CCTV extraction or preservation.
+• JSON/CSV field mapping exists in the adapter API. The current UI does not expose mapping controls.
+• The app uses local SQLite. Backend API integration and production authentication are pending.
+• The current search accepts one candidate batch per case. Continuous updates require further integration.
+• No measured accuracy, latency, or operator-time improvement is claimed here.
+
+CONTENT BASIS
+Current app.py and search_dashboard modules in this repository, inspected 2 November 2026.
