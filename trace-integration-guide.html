@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A teammate’s guide to connecting the TRACE Streamlit dashboard to the JAVES-AI Controls API.">
+  <title>TRACE × JAVES-AI Integration Guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink:#152635; --muted:#455967; --line:#cbd9dc;
+      --paper:#f4f8f8; --card:#fff; --accent:#075f57; --tint:#e7f4f0;
+      --dark:#142a34; --mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+    }
+    * { box-sizing:border-box }
+    body { margin:0; background:var(--paper); color:var(--ink);
+      font:1rem/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif }
+    .wrap { width:min(64rem,calc(100% - 2.5rem)); margin-inline:auto }
+    .hero { background:var(--dark); color:white; padding:3rem 0 2.5rem; border-bottom:5px solid #71cbbb }
+    .project { margin:0; color:#98e1d3; font-size:.82rem; font-weight:750; letter-spacing:.09em; text-transform:uppercase }
+    h1, h2, h3 { line-height:1.18; letter-spacing:-.025em }
+    h1 { margin:.35rem 0 .75rem; font-size:clamp(2.3rem,7vw,4rem) }
+    h2 { margin:0 0 .9rem; font-size:clamp(1.55rem,4vw,2rem) }
+    h3 { margin:1.4rem 0 .5rem; font-size:1.12rem }
+    p { margin:.65rem 0 }
+    .hero .intro { max-width:44rem; margin:0; color:#e1eef1; font-size:1.14rem }
+    nav { display:flex; flex-wrap:wrap; gap:.5rem 1.35rem; margin-top:1.6rem }
+    a { color:var(--accent); text-underline-offset:.2em }
+    nav a { color:#a8eee1; font-size:.91rem }
+    a:focus-visible, summary:focus-visible { outline:3px solid #ba6a1a; outline-offset:3px }
+    main { padding:1.4rem 0 3rem }
+    section { background:var(--card); margin:1.2rem 0; padding:clamp(1.15rem,4vw,2rem);
+      border:1px solid var(--line); border-radius:14px; scroll-margin-top:.8rem }
+    .status { background:#fff7e8; border:1px solid #e7c990; border-left:4px solid #ac6517;
+      border-radius:8px; margin:0; padding:.85rem 1rem }
+    .flow { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; align-items:stretch; gap:.5rem;
+      margin:1.1rem 0; padding:0; list-style:none }
+    .node { background:var(--tint); border:1px solid #b6d7d0; border-radius:10px; padding:.9rem }
+    .node strong { display:block; margin-bottom:.2rem }
+    .node span { display:block; color:var(--muted); font-size:.89rem }
+    .arrow { align-self:center; color:var(--accent); font-size:1.5rem }
+    .mobile-arrow { display:none }
+    .caption { color:var(--muted); font-size:.92rem }
+    .files { margin:.9rem 0 0 }
+    .files > div { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); gap:.5rem 1rem;
+      border-top:1px solid var(--line); padding:.65rem 0 }
+    dt { font-weight:650 } dd { margin:0 }
+    code, pre { font-family:var(--mono); font-size:.9em }
+    :not(pre) > code { background:#eaf0f2; padding:.08em .25em; border-radius:3px; overflow-wrap:anywhere }
+    .hero code { color:#e1eef1; background:#284653 }
+    pre { margin:.7rem 0 1rem; background:var(--dark); color:#edf8fa; padding:1rem;
+      border-radius:8px; overflow-x:auto; line-height:1.6; tab-size:2 }
+    ol, ul { padding-inline-start:1.4rem }
+    li + li { margin-top:.45rem }
+    .flow li + li { margin-top:0 }
+    details { margin-top:1rem; padding:.7rem .9rem; border:1px solid var(--line); border-radius:8px }
+    summary { cursor:pointer; font-weight:675; color:var(--accent) }
+    footer { color:var(--muted); padding:0 0 2rem; font-size:.9rem }
+    @media(max-width:42rem) {
+      .flow { grid-template-columns:1fr; gap:.35rem }
+      .arrow { text-align:center; line-height:1 }
+      .desktop-arrow { display:none }
+      .mobile-arrow { display:inline }
+      .files > div { grid-template-columns:1fr; gap:.2rem }
+    }
+    @media print {
+      body { background:white; font-size:10.5pt }
+      .wrap { width:100% }
+      .hero { background:white; color:black; padding:0 0 .75rem }
+      .hero .intro,.project,.hero code { color:black }
+      nav { display:none }
+      section { padding:1rem; border-radius:0 }
+      pre { white-space:pre-wrap; overflow-wrap:anywhere; background:white; color:black; border:1px solid #aaa }
+      h2,h3 { break-after:avoid }
+      pre, .flow { break-inside:avoid }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <p class="project">TRACE · JAVES-AI</p>
+      <h1>How the dashboard and backend connect</h1>
+      <p class="intro">The Streamlit dashboard lives in <code>dashboard/</code> in the proposed repository layout. At runtime, it sends HTTP requests to the backend’s existing Controls API.</p>
+      <nav aria-label="Guide sections">
+        <a href="#architecture">Architecture</a>
+        <a href="#case-flow">Case walkthrough</a>
+        <a href="#setup">Local setup</a>
+        <a href="#verification">Verification</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p class="status"><strong>GitHub status</strong> · The integration is available as <a href="dashboard-controls-integration.patch" download><code>dashboard-controls-integration.patch</code></a>. GitHub rejected branch creation with a 403, so the patch still needs to be applied and pushed by someone with repository write access.</p>
+
+    <section id="architecture">
+      <h2>How requests reach Controls</h2>
+      <ol class="flow" aria-label="Request path from the operator to the backend">
+        <li class="node"><strong>Operator’s browser</strong><span>Opens the Streamlit dashboard</span></li>
+        <li class="arrow" aria-hidden="true"><span class="desktop-arrow">→</span><span class="mobile-arrow">↓</span></li>
+        <li class="node"><strong>Streamlit server</strong><span>Runs the UI and sends authenticated HTTP requests</span></li>
+        <li class="arrow" aria-hidden="true"><span class="desktop-arrow">→</span><span class="mobile-arrow">↓</span></li>
+        <li class="node"><strong>JAVES-AI Controls API</strong><span>Owns accounts, cases, decisions, and access to results</span></li>
+      </ol>
+      <p>Controls coordinates the backend services and workers. Routing produces the route SVG, while the dashboard displays the image fetched through Controls. The dashboard accesses case data and media through the API.</p>
+
+      <dl class="files">
+        <div><dt><code>dashboard/app.py</code></dt><dd>Chooses connected mode when <code>TRACE_CONTROLS_URL</code> is set. Otherwise it starts the local simulator.</dd></div>
+        <div><dt><code>dashboard/search_dashboard/live.py</code></dt><dd>Implements connected sign-in, case screens, polling, review actions, and media display.</dd></div>
+        <div><dt><code>dashboard/search_dashboard/controls.py</code></dt><dd>Sends requests with bearer authentication and idempotency keys where required. Translates API and network failures into UI messages.</dd></div>
+        <div><dt><code>javes_main/api/</code></dt><dd>Hosts the existing Controls endpoints in the backend. The integration patch adds the dashboard and updates the root README.</dd></div>
+      </dl>
+    </section>
+
+    <section id="case-flow">
+      <h2>What happens during a case</h2>
+      <ol>
+        <li><strong>Sign in.</strong> Streamlit posts to <code>/v1/auth/login</code> and keeps the returned bearer token in its server-side session.</li>
+        <li><strong>Find or create a case.</strong> <code>GET /v1/cases</code> lists existing cases. To create one, the dashboard posts the case details and staged reference-image key to <code>/v1/cases</code>.</li>
+        <li><strong>Open the case view.</strong> While the case screen is open, Streamlit requests <code>/v1/cases/{case_id}/view</code> every five seconds. The response includes status, candidates, progress, and any available media references. Streamlit requests route SVGs and live JPEGs from Controls using the session token.</li>
+        <li><strong>Review a candidate or close the search.</strong> The dashboard sends the action to Controls. Controls checks permissions and owns the resulting state. The case view refreshes to show that state.</li>
+      </ol>
+      <details>
+        <summary>What if creating a case times out?</summary>
+        <p>Controls might already have accepted the request. If the operator resubmits the same form in the same session, Streamlit reuses the original payload and <code>Idempotency-Key</code>. Controls can return the existing case without creating a duplicate.</p>
+      </details>
+    </section>
+
+    <section id="setup">
+      <h2>Run it locally</h2>
+      <h3>1. Apply the patch in a clean clone</h3>
+      <p>Put the HTML guide and the patch in the same directory to keep the download link working. Run these commands from the directory containing the patch.</p>
+      <pre><code>git clone https://github.com/arystan01/tracking_person_across_multiple_cameras.git trace-integrated
+git -C trace-integrated switch -c feature/dashboard-controls-integration
+git -C trace-integrated apply --check "$PWD/dashboard-controls-integration.patch"
+git -C trace-integrated apply --index "$PWD/dashboard-controls-integration.patch"</code></pre>
+      <p>Applying the patch stages the files locally. A teammate with write access can commit them, push the feature branch, and open a pull request.</p>
+
+      <h3>2. Start the backend and Streamlit</h3>
+      <p>Follow the backend README’s configuration and start order to run Main/Controls and its dependencies. In a second terminal, from the directory containing <code>trace-integrated</code>, run the dashboard commands below. <a href="https://github.com/arystan01/tracking_person_across_multiple_cameras/blob/8b27b7843c342fbe964027c8b77c58928e6fc308/README.md#configuration-and-start-order">Backend startup instructions</a></p>
+      <pre><code>cd trace-integrated/dashboard
+python -m pip install -r requirements.txt
+TRACE_CONTROLS_URL=http://127.0.0.1:8080 python -m streamlit run app.py --server.address 127.0.0.1</code></pre>
+      <p>Open the URL printed by Streamlit and sign in with a backend-issued account. New cases require a reference image that a backend operator has staged in the shared artifact store under <code>cases/&lt;case-id&gt;/</code>. Enter that key with the site version and last-known information.</p>
+      <p>For the standalone demo, run the Streamlit command with <code>TRACE_CONTROLS_URL</code> unset and use the demo credentials in <code>dashboard/README.md</code>.</p>
+    </section>
+
+    <section id="verification">
+      <h2>What was verified</h2>
+      <ul>
+        <li><strong>Dashboard</strong> · 22 tests passed.</li>
+        <li><strong>Backend</strong> · 193 tests passed. One test requiring OpenCV was skipped, and seven real-CV tests were excluded.</li>
+        <li><strong>Integration smoke test</strong> · Streamlit used the actual Controls API code with test workers. The test exercised sign-in, password change, case creation and retry, SVG and JPEG retrieval, candidate review, case closure, and sign-out.</li>
+      </ul>
+    </section>
+  </main>
+  <footer class="wrap">Integration baseline · GitHub <code>main</code> at commit <code>8b27b78</code>. <a href="https://github.com/arystan01/tracking_person_across_multiple_cameras/tree/8b27b7843c342fbe964027c8b77c58928e6fc308">View backend source</a></footer>
+</body>
+</html>
