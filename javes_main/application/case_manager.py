@@ -17,6 +17,8 @@ from javes_contracts import (
     CaseInfo,
     CreateLegalHoldBody,
     ClipLifecycleState,
+    ClipPurgeCommand,
+    ClipPurgeResult,
     ClipProcessingStatus,
     ClipRecord,
     ClipStateCommand,
@@ -61,6 +63,7 @@ from javes_main.domain.models import (
     OutboxTopic,
     ProbeResultRecord,
     RoutingTriggerRecord,
+    ReferenceImageUploadStatus,
     StoredRoute,
 )
 from javes_main.ports import (
@@ -76,7 +79,12 @@ from javes_main.ports import (
     SiteConfigPort,
 )
 from javes_main.projections import build_case_view
-from javes_main.application.errors import ReplayEvidenceIncomplete
+from javes_main.application.errors import ReferenceUploadError, ReplayEvidenceIncomplete
+from javes_contracts.acceptance import (
+    check_clip_state_result,
+    check_cut_result,
+    check_export_result,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -158,6 +166,16 @@ class CaseManager:
         if previous[0] != fingerprint:
             raise ValueError("idempotency key reused with different payload")
         return previous[1]
+
+    def cleanup_expired_reference_uploads(self, *, limit: int = 100) -> int:
+        from .reference_uploads import ReferenceImageUploadService
+
+        return ReferenceImageUploadService(
+            repository=self.repository,
+            artifacts=self.artifacts,
+            clock=self.clock,
+            ids=self.ids,
+        ).cleanup_expired(limit=limit)
 
     def _decision_history(self, case_id: str) -> list[DecisionRecordView]:
         decisions = {
@@ -508,7 +526,11 @@ class CaseManager:
                         case_id=case_id,
                         kind=manifest.kind.upper(),
                         retention_class=manifest.policy_class(),
-                        artifact_ref=ArtifactRef(object_key=manifest.object_key),
+                        artifact_ref=ArtifactRef(
+                            object_key=manifest.object_key,
+                            sha256=manifest.sha256,
+                        ),
+                        revision=manifest.policy_revision,
                     )
                 )
 
@@ -838,6 +860,7 @@ class CaseManager:
                         kind="SUPERSEDED_ROUTE_SVG",
                         retention_class=RetentionClass.EPHEMERAL,
                         artifact_ref=ArtifactRef(object_key=key),
+                        revision=2,
                     )
                 )
 
@@ -919,12 +942,94 @@ class CaseManager:
             )
         return saved
 
-    def create_case(self, body: CreateCaseBody, *, idempotency_key: str) -> CaseView:
+    def _validated_reference_upload(
+        self,
+        body: CreateCaseBody,
+        owner_id: str,
+        *,
+        for_update: bool,
+    ):
+        reference = body.reference_image_ref
+        if reference.object_key is None or reference.sha256 is None:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_NOT_FOUND",
+                "a registered reference image upload is required",
+                status=404,
+            )
+        try:
+            upload = self.repository.get_reference_upload_by_key(
+                reference.object_key, for_update=for_update
+            )
+        except KeyError as exc:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_NOT_FOUND",
+                "reference image upload was not found",
+                status=404,
+            ) from exc
+        if upload.operator_id != owner_id:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_NOT_FOUND",
+                "reference image upload was not found",
+                status=404,
+            )
+        if upload.case_id != body.case_id:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_INVALID",
+                "reference image upload belongs to a different case",
+            )
+        if upload.status == ReferenceImageUploadStatus.CONSUMED:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_ALREADY_USED",
+                "reference image upload was already consumed",
+            )
+        if upload.status == ReferenceImageUploadStatus.EXPIRED or (
+            upload.expires_at <= self.clock.now()
+        ):
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_EXPIRED",
+                "reference image upload has expired",
+                status=410,
+            )
+        if upload.sha256 != reference.sha256:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_CONTENT_MISMATCH",
+                "reference image checksum does not match its upload record",
+            )
+        try:
+            data, mime_type = self.artifacts.get(upload.object_key)
+        except KeyError as exc:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_CONTENT_MISMATCH",
+                "reference image bytes are missing",
+            ) from exc
+        if (
+            mime_type != "image/jpeg"
+            or len(data) != upload.size_bytes
+            or hashlib.sha256(data).hexdigest() != upload.sha256
+        ):
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_CONTENT_MISMATCH",
+                "reference image bytes do not match the upload record",
+            )
+        return upload
+
+    def create_case(
+        self,
+        body: CreateCaseBody,
+        *,
+        idempotency_key: str,
+        reference_owner_id: str | None = None,
+    ) -> CaseView:
         storage_key = f"case:create:{idempotency_key}"
         fingerprint = _fingerprint(body)
         replay = self._idempotent_response(storage_key, fingerprint)
         if replay is not None:
             return self.get_view(str(replay["case_id"]))
+
+        if reference_owner_id is not None:
+            self._validated_reference_upload(
+                body, reference_owner_id, for_update=False
+            )
 
         graph = self.sites.get_graph(body.site_id, body.site_version)
         params = self.sites.get_params()
@@ -979,6 +1084,11 @@ class CaseManager:
             if replay is not None:
                 replay_case_id = str(replay["case_id"])
             else:
+                upload = None
+                if reference_owner_id is not None:
+                    upload = self._validated_reference_upload(
+                        body, reference_owner_id, for_update=True
+                    )
                 self.repository.add(case)
                 self._event(
                     body.case_id,
@@ -1011,6 +1121,16 @@ class CaseManager:
                 self.repository.remember_idempotency(
                     storage_key, fingerprint, {"case_id": body.case_id}
                 )
+                if upload is not None:
+                    upload.status = ReferenceImageUploadStatus.CONSUMED
+                    upload.consumed_at = now
+                    self.repository.save_reference_upload(upload)
+                    self._event(
+                        body.case_id,
+                        "REFERENCE_IMAGE_UPLOAD_CONSUMED",
+                        actor_id=reference_owner_id,
+                        payload={"upload_id": upload.upload_id},
+                    )
         if replay_case_id is not None:
             return self.get_view(replay_case_id)
         return self.get_view(body.case_id)
@@ -1182,6 +1302,7 @@ class CaseManager:
                         kind="SUPERSEDED_ROUTE_SVG",
                         retention_class=RetentionClass.EPHEMERAL,
                         artifact_ref=ArtifactRef(object_key=old_key),
+                        revision=2,
                     )
                 )
         case.latest_route = StoredRoute(
@@ -2365,6 +2486,7 @@ class CaseManager:
         if topic == OutboxTopic.CLIP_CUT:
             record = ClipRecord.model_validate(result)
             command = CutClipCommand.model_validate(message.payload["command"])
+            check_cut_result(command, record)
             if (
                 record.clip_request_id != command.clip_request_id
                 or record.case_id != command.case_id
@@ -2390,23 +2512,19 @@ class CaseManager:
                         "checksum": record.checksum,
                     },
                 )
-                resource = RetentionResource(
-                    resource_id=self.ids.new(
-                        "resource", message.case_id, "clip", record.clip_id
-                    ),
-                    case_id=message.case_id,
-                    kind="HOLD_CLIP",
-                    retention_class=RetentionClass.REVIEW_HOLD,
-                    artifact_ref=record.artifact_ref,
-                )
-                self._enqueue(
-                    message.case_id,
-                    OutboxTopic.RETENTION_REGISTER,
-                    (
-                        "retention-register:"
-                        f"{resource.resource_id}:{record.revision}:{record.state}"
-                    ),
-                    {"resource": resource.model_dump(mode="json")},
+                self._enqueue_retention_resource(
+                    RetentionResource(
+                        resource_id=self.ids.new(
+                            "resource",
+                            message.case_id,
+                            record.artifact_ref.object_key,
+                        ),
+                        case_id=message.case_id,
+                        kind="CLIP",
+                        retention_class=RetentionClass.REVIEW_HOLD,
+                        artifact_ref=record.artifact_ref,
+                        revision=record.revision,
+                    )
                 )
             action = None
             if record.tracklet_id in case.pending_confirm_tracklet_ids:
@@ -2442,6 +2560,8 @@ class CaseManager:
         if topic == OutboxTopic.CLIP_STATE:
             record = ClipRecord.model_validate(result)
             command = ClipStateCommand.model_validate(message.payload["command"])
+            previous_clip = case.clips.get(record.clip_id)
+            check_clip_state_result(command, record, previous=previous_clip)
             if (
                 record.case_id != command.case_id
                 or record.case_id != message.case_id
@@ -2477,31 +2597,24 @@ class CaseManager:
                         "checksum": record.checksum,
                     },
                 )
-                resource = RetentionResource(
-                    resource_id=self.ids.new(
-                        "resource", message.case_id, "clip", record.clip_id
-                    ),
-                    case_id=message.case_id,
-                    kind=(
-                        "CONFIRMED_CLIP"
-                        if record.state == ClipLifecycleState.CONFIRMED
-                        else "RELEASED_CLIP"
-                    ),
-                    retention_class=(
-                        RetentionClass.CONFIRMED_EVIDENCE
-                        if record.state == ClipLifecycleState.CONFIRMED
-                        else RetentionClass.EPHEMERAL
-                    ),
-                    artifact_ref=record.artifact_ref,
-                )
-                self._enqueue(
-                    message.case_id,
-                    OutboxTopic.RETENTION_REGISTER,
-                    (
-                        "retention-register:"
-                        f"{resource.resource_id}:{record.revision}:{record.state}"
-                    ),
-                    {"resource": resource.model_dump(mode="json")},
+                clip_retention_class = {
+                    ClipLifecycleState.HOLD: RetentionClass.REVIEW_HOLD,
+                    ClipLifecycleState.CONFIRMED: RetentionClass.CONFIRMED_EVIDENCE,
+                    ClipLifecycleState.RELEASED: RetentionClass.EPHEMERAL,
+                }[record.state]
+                self._enqueue_retention_resource(
+                    RetentionResource(
+                        resource_id=self.ids.new(
+                            "resource",
+                            message.case_id,
+                            record.artifact_ref.object_key,
+                        ),
+                        case_id=message.case_id,
+                        kind="CLIP",
+                        retention_class=clip_retention_class,
+                        artifact_ref=record.artifact_ref,
+                        revision=record.revision,
+                    )
                 )
             self._event(
                 message.case_id,
@@ -2513,6 +2626,7 @@ class CaseManager:
         if topic == OutboxTopic.CLIP_EXPORT:
             export = ExportClipsResult.model_validate(result)
             command = ExportClipsCommand.model_validate(message.payload["command"])
+            check_export_result(command, export)
             if (
                 export.export_request_id != command.export_request_id
                 or export.case_id != command.case_id
@@ -2549,13 +2663,13 @@ class CaseManager:
                         resource_id=self.ids.new(
                             "resource",
                             message.case_id,
-                            "export",
-                            previous_export.export_request_id,
+                            previous_export.artifact_ref.object_key,
                         ),
                         case_id=message.case_id,
                         kind="SUPERSEDED_EXPORT",
                         retention_class=RetentionClass.EPHEMERAL,
                         artifact_ref=previous_export.artifact_ref,
+                        revision=2,
                     )
                 )
             if export.artifact_ref is not None:
@@ -2570,23 +2684,18 @@ class CaseManager:
                         "duration_s": export.duration_s,
                     },
                 )
-                resource = RetentionResource(
-                    resource_id=self.ids.new(
-                        "resource",
-                        message.case_id,
-                        "export",
-                        export.export_request_id,
-                    ),
-                    case_id=message.case_id,
-                    kind="FINAL_EXPORT",
-                    retention_class=RetentionClass.CASE_RESULT,
-                    artifact_ref=export.artifact_ref,
-                )
-                self._enqueue(
-                    message.case_id,
-                    OutboxTopic.RETENTION_REGISTER,
-                    f"retention-register:{resource.resource_id}:{resource.retention_class.value}",
-                    {"resource": resource.model_dump(mode="json")},
+                self._enqueue_retention_resource(
+                    RetentionResource(
+                        resource_id=self.ids.new(
+                            "resource",
+                            message.case_id,
+                            export.artifact_ref.object_key,
+                        ),
+                        case_id=message.case_id,
+                        kind="EXPORT",
+                        retention_class=RetentionClass.CASE_RESULT,
+                        artifact_ref=export.artifact_ref,
+                    )
                 )
             self._event(
                 message.case_id,
@@ -2596,6 +2705,32 @@ class CaseManager:
                     else "CASE_EXPORT_FAILED"
                 ),
                 payload=export.model_dump(mode="json"),
+            )
+            return
+
+        if topic == OutboxTopic.CLIP_PURGE:
+            purge = ClipPurgeResult.model_validate(result)
+            command = ClipPurgeCommand.model_validate(message.payload["command"])
+            if (
+                purge.command_id != command.command_id
+                or purge.case_id != command.case_id
+                or purge.case_id != message.case_id
+                or not purge.purged
+            ):
+                raise ValueError("Clip purge result does not match its command")
+            if case.lifecycle != CaseLifecycle.DELETE_REQUESTED:
+                raise ValueError("Clip metadata purge requires DELETE_REQUESTED case")
+            deletion_action = case.pending_retention_action or "DELETE_CASE"
+            self._redact_deleted_case(case, now=now)
+            self.repository.save(case, expected)
+            self.repository.purge_case_content(
+                message.case_id,
+                preserve_outbox_message_id=message.message_id,
+            )
+            self._event(
+                message.case_id,
+                "CASE_DELETED" if deletion_action == "DELETE_CASE" else "CASE_TTL_DELETED",
+                payload={"clip_purge_command_id": purge.command_id},
             )
             return
 
@@ -2626,17 +2761,23 @@ class CaseManager:
                 )
                 return
             if retention.action in {"DELETE_CASE", "TTL_EXPIRED"}:
-                self._redact_deleted_case(case, now=now)
+                purge = ClipPurgeCommand(
+                    command_id=self.ids.new(
+                        "clip_purge", message.case_id, retention.command_id
+                    ),
+                    case_id=message.case_id,
+                    occurred_at=now,
+                )
+                case.pending_retention_action = retention.action
+                case.updated_at = now
                 self.repository.save(case, expected)
-                self.repository.purge_case_content(
+                self._enqueue(
                     message.case_id,
-                    preserve_outbox_message_id=message.message_id,
+                    OutboxTopic.CLIP_PURGE,
+                    f"clip-purge:{purge.command_id}",
+                    {"command": purge.model_dump(mode="json")},
                 )
-                event_type = (
-                    "CASE_DELETED"
-                    if retention.action == "DELETE_CASE"
-                    else "CASE_TTL_DELETED"
-                )
+                event_type = "CASE_MEDIA_DELETED"
             elif retention.action == "CLOSE_CASE":
                 event_type = "RETENTION_APPLIED"
             else:
@@ -2780,13 +2921,59 @@ class CaseManager:
         ]
 
     def get_clips(self, case_id: str) -> list[dict[str, Any]]:
+        return list(self.get_view(case_id).clips)
+
+    def get_clip_media(self, case_id: str, clip_id: str) -> tuple[bytes, str]:
         case = self.repository.get(case_id)
         if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
-            return []
-        return [
-            item.model_dump(mode="json")
-            for item in sorted(case.clips.values(), key=lambda value: value.clip_id)
-        ]
+            raise KeyError("clip is no longer available")
+        clip = case.clips.get(clip_id)
+        if clip is None or clip.status != ClipProcessingStatus.READY:
+            raise KeyError("clip is not available")
+        if clip.artifact_ref is None or clip.artifact_ref.object_key is None:
+            raise KeyError("clip has no product artifact")
+        data, mime_type = self.artifacts.get(clip.artifact_ref.object_key)
+        if clip.artifact_ref.sha256 is not None and hashlib.sha256(data).hexdigest() != clip.artifact_ref.sha256:
+            raise RuntimeError("stored clip checksum mismatch")
+        return data, mime_type
+
+    def get_export_media(self, case_id: str) -> tuple[bytes, str]:
+        case = self.repository.get(case_id)
+        if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
+            raise KeyError("export is no longer available")
+        if case.export_ref is None:
+            raise KeyError("export is not available")
+        export = ExportClipsResult.model_validate(case.export_ref)
+        if (
+            export.status != ClipProcessingStatus.READY
+            or export.artifact_ref is None
+            or export.artifact_ref.object_key is None
+        ):
+            raise KeyError("export is not available")
+        data, mime_type = self.artifacts.get(export.artifact_ref.object_key)
+        if export.artifact_ref.sha256 is not None and hashlib.sha256(data).hexdigest() != export.artifact_ref.sha256:
+            raise RuntimeError("stored export checksum mismatch")
+        return data, mime_type
+
+    def get_candidate_thumbnail(
+        self, case_id: str, candidate_id: str, index: int
+    ) -> tuple[bytes, str]:
+        case = self.repository.get(case_id)
+        if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
+            raise KeyError("candidate thumbnail is no longer available")
+        candidate = case.candidates.get(candidate_id)
+        tracklet = (
+            case.tracklets.get(str(candidate.get("tracklet_id", "")))
+            if candidate is not None
+            else None
+        )
+        paths = list(tracklet.get("crop_paths") or []) if tracklet else []
+        if index < 0 or index >= len(paths):
+            raise KeyError("candidate thumbnail is not available")
+        object_key = str(paths[index])
+        if not object_key.startswith(f"cases/{case_id}/"):
+            raise KeyError("candidate thumbnail is not a case artifact")
+        return self.artifacts.get(object_key)
 
     def get_route_svg(self, case_id: str, route_revision: int, floor_id: str) -> bytes:
         case = self.repository.get(case_id)

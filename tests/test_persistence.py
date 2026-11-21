@@ -315,7 +315,7 @@ def test_packaged_migration_entrypoint(tmp_path):
     engine = create_engine(database_url)
     with engine.connect() as connection:
         assert connection.scalar(text("select version_num from alembic_version")) == (
-            "0006_routing_triggers"
+            "0007_reference_image_uploads"
         )
         tables = {
             row[0]
@@ -323,6 +323,7 @@ def test_packaged_migration_entrypoint(tmp_path):
                 text("select name from sqlite_master where type='table'")
             )
         }
+        assert "reference_image_uploads" in tables
     assert {
         "cases",
         "jobs",

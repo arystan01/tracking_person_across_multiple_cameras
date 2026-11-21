@@ -354,7 +354,7 @@ def test_review_hold_is_retained_until_case_ttl():
     retention_resource_id = next(
         resource_id
         for resource_id, resource in app.retention_worker.resources.items()
-        if resource.kind == "HOLD_CLIP"
+        if resource.kind == "CLIP"
         and resource.artifact_ref is not None
         and clip_id in resource.artifact_ref.identity()
     )

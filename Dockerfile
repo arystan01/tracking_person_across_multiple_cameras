@@ -36,4 +36,12 @@ COPY --from=perception-builder /wheels-perception /wheels
 RUN python -m pip install --no-cache-dir /wheels/* && rm -rf /wheels
 USER 10001:10001
 
+FROM runtime-base AS clip-runtime
+USER root
+RUN apt-get update && apt-get install --no-install-recommends -y ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+USER 10001:10001
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD ["sh", "-c", "kill -0 1"]
+ENTRYPOINT ["javes-clip-worker"]
+
 FROM runtime-base AS runtime

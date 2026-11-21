@@ -383,6 +383,25 @@ class ExportClipsResult(ContractModel):
     error_code: str | None = None
 
 
+class ClipPurgeCommand(ContractModel):
+    contract_version: Literal["clip-purge.v1"] = "clip-purge.v1"
+    command_id: str
+    case_id: str
+    occurred_at: datetime
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
+class ClipPurgeResult(ContractModel):
+    contract_version: Literal["clip-purge-result.v1"] = "clip-purge-result.v1"
+    command_id: str
+    case_id: str
+    purged: bool = True
+
+
 class RetentionClass(str, Enum):
     EPHEMERAL = "EPHEMERAL"
     REVIEW_HOLD = "REVIEW_HOLD"
@@ -401,6 +420,7 @@ class RetentionResource(ContractModel):
     expires_at: datetime | None = None
     legal_hold: bool = False
     deleted: bool = False
+    revision: int = Field(default=1, ge=1)
 
     @field_validator("expires_at", mode="after")
     @classmethod
@@ -631,6 +651,22 @@ class CreateCaseBody(ContractModel):
     profile: Literal["ADULT", "CHILD", "ELDERLY"] = "ADULT"
     site_id: str
     site_version: str
+
+
+class ReferenceImageUploadResponse(ContractModel):
+    upload_id: str
+    case_id: str
+    reference_image_ref: ArtifactRef
+    mime_type: Literal["image/jpeg"] = "image/jpeg"
+    size_bytes: int = Field(gt=0)
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+    expires_at: datetime
+
+    @field_validator("expires_at", mode="after")
+    @classmethod
+    def _aware_expiry(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
 
 
 class ReviewDecisionBody(ContractModel):

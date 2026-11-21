@@ -349,10 +349,20 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
     access_token = login.json()["access_token"]
 
     case_id = "real-cv-blind-gap"
-    reference_key = f"cases/{case_id}/reference.jpg"
     reference_bytes = _reference_jpeg(videos["Cam009"])
-    artifact_store.put(reference_key, reference_bytes, "image/jpeg")
     (run_root / "reference.jpg").write_bytes(reference_bytes)
+    uploaded = main_http.post(
+        f"/v1/cases/{case_id}/reference-image",
+        headers={
+            "authorization": f"Bearer {access_token}",
+            "idempotency-key": "blind-gap-reference-upload",
+        },
+        files={"file": ("reference.jpg", reference_bytes, "image/jpeg")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    reference_ref = ArtifactRef.model_validate(
+        uploaded.json()["reference_image_ref"]
+    )
     created = main_http.post(
         "/v1/cases",
         headers={
@@ -363,7 +373,7 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
             case_id=case_id,
             operator_id=root_user.user_id,
             target_id="pink-overall-worker",
-            reference_image_ref=ArtifactRef(object_key=reference_key),
+            reference_image_ref=reference_ref,
             last_known=LastKnown(
                 camera_id="Cam009",
                 time=base + timedelta(seconds=2),
@@ -385,7 +395,7 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
         "http://archive",
         "archive-secret",
         camera_ids=set(videos),
-        artifact_root=fixture,
+        archive_root=fixture,
         client=archive_http,
     )
     settings = PerceptionSettings(

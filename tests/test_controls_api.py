@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 import httpx
 import pytest
+from PIL import Image
 
 from javes_contracts import (
     ArtifactRef,
@@ -157,6 +159,38 @@ def headers(key: str, token: str) -> dict[str, str]:
     }
 
 
+def reference_jpeg() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (32, 64), (120, 30, 40)).save(output, format="JPEG")
+    return output.getvalue()
+
+
+async def create_case_http(
+    client: httpx.AsyncClient,
+    request: CreateCaseBody,
+    token: str,
+    key: str,
+) -> httpx.Response:
+    uploaded = await client.post(
+        f"/v1/cases/{request.case_id}/reference-image",
+        headers=headers(f"{key}-reference", token),
+        files={"file": ("reference.jpg", reference_jpeg(), "image/jpeg")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    request = request.model_copy(
+        update={
+            "reference_image_ref": ArtifactRef.model_validate(
+                uploaded.json()["reference_image_ref"]
+            )
+        }
+    )
+    return await client.post(
+        "/v1/cases",
+        json=request.model_dump(mode="json"),
+        headers=headers(key, token),
+    )
+
+
 async def login(client: httpx.AsyncClient, username: str, password: str) -> str:
     response = await client.post(
         "/v1/auth/login", json={"username": username, "password": password}
@@ -210,10 +244,8 @@ async def test_controls_http_fake_end_to_end():
         assert changed.status_code == 204
         operator_token = await login(client, "operator", "operator-password-2")
 
-        created = await client.post(
-            "/v1/cases",
-            json=body(operator_id).model_dump(mode="json"),
-            headers=headers("create-1", operator_token),
+        created = await create_case_http(
+            client, body(operator_id), operator_token, "create-1"
         )
         assert created.status_code == 201, created.text
         view = created.json()
@@ -243,10 +275,8 @@ async def test_controls_http_fake_end_to_end():
         assert case_events.status_code == 200
         assert any(item["event_type"] == "CASE_CREATED" for item in case_events.json())
 
-        replay = await client.post(
-            "/v1/cases",
-            json=body(operator_id).model_dump(mode="json"),
-            headers=headers("create-1", operator_token),
+        replay = await create_case_http(
+            client, body(operator_id), operator_token, "create-1"
         )
         assert replay.status_code == 201
         assert replay.json()["revision"] == view["revision"]
@@ -371,10 +401,8 @@ async def test_controls_decision_history_and_revoke_api():
             headers={"authorization": f"Bearer {root_token}"},
         )
         root_id = me.json()["user_id"]
-        created = await client.post(
-            "/v1/cases",
-            json=body(root_id).model_dump(mode="json"),
-            headers=headers("revoke-api-create", root_token),
+        created = await create_case_http(
+            client, body(root_id), root_token, "revoke-api-create"
         )
         assert created.status_code == 201, created.text
         candidate = created.json()["candidates"][0]
@@ -447,10 +475,8 @@ async def test_controls_legal_hold_is_root_only_ticketed_and_idempotent():
             "/v1/auth/me", headers={"authorization": f"Bearer {root_token}"}
         )
         root_id = me.json()["user_id"]
-        created = await client.post(
-            "/v1/cases",
-            json=body(root_id).model_dump(mode="json"),
-            headers=headers("legal-api-create", root_token),
+        created = await create_case_http(
+            client, body(root_id), root_token, "legal-api-create"
         )
         assert created.status_code == 201
         hold = CreateLegalHoldBody(
@@ -547,10 +573,8 @@ async def test_controls_allows_authorised_review_after_close_without_restarting_
 
         operator_id, operator_token = await create_user("reviewer", "OPERATOR")
         viewer_id, viewer_token = await create_user("observer", "VIEWER")
-        created = await client.post(
-            "/v1/cases",
-            json=body(operator_id).model_dump(mode="json"),
-            headers=headers("closed-review-create", operator_token),
+        created = await create_case_http(
+            client, body(operator_id), operator_token, "closed-review-create"
         )
         assert created.status_code == 201, created.text
         candidate = created.json()["candidates"][0]
@@ -652,10 +676,11 @@ async def test_worker_result_endpoint_requires_token_and_is_idempotent():
         service_token = await login(
             client, "perception-service", "service-password-123"
         )
-        response = await client.post(
-            "/v1/cases",
-            json=body(system.root_user.user_id).model_dump(mode="json"),
-            headers=headers("create-worker", root_token),
+        response = await create_case_http(
+            client,
+            body(system.root_user.user_id),
+            root_token,
+            "create-worker",
         )
         assert response.status_code == 201
         system.outbox_dispatcher.drain()
@@ -697,10 +722,11 @@ async def test_live_feed_metadata_is_worker_only_and_stream_is_case_authorised()
     )
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         root_token = await login(client, "root", "root-password-for-tests")
-        created = await client.post(
-            "/v1/cases",
-            json=body(system.root_user.user_id).model_dump(mode="json"),
-            headers=headers("live-create", root_token),
+        created = await create_case_http(
+            client,
+            body(system.root_user.user_id),
+            root_token,
+            "live-create",
         )
         assert created.status_code == 201
         system.outbox_dispatcher.drain()
@@ -790,10 +816,8 @@ async def test_controls_http_with_sql_survives_application_restart(tmp_path):
         base_url="http://test",
     ) as client:
         token = await login(client, "root", "root-password-123")
-        created = await client.post(
-            "/v1/cases",
-            json=body(root.user_id).model_dump(mode="json"),
-            headers=headers("sql-create", token),
+        created = await create_case_http(
+            client, body(root.user_id), token, "sql-create"
         )
         assert created.status_code == 201, created.text
         expected = created.json()

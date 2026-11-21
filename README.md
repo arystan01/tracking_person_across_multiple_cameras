@@ -11,16 +11,21 @@ The Dashboard talks only to the Main/Controls API. It must never read SQLite,
 the artifact directory, CCTV Archive, Perception, or Routing directly.
 
 1. Authenticate with `POST /v1/auth/login`. There is no public signup.
-2. Create and inspect cases with `/v1/cases` and `/v1/cases/{case_id}/view`.
-3. Submit operator decisions and close/export/delete commands with an
+2. Upload the reference JPEG/PNG with authenticated multipart
+   `POST /v1/cases/{case_id}/reference-image`, then pass the returned
+   `reference_image_ref` unchanged to `POST /v1/cases`. The upload is bound to
+   the authenticated operator and case, expires after 24 hours if unused, and
+   cannot be reused.
+3. Create and inspect cases with `/v1/cases` and `/v1/cases/{case_id}/view`.
+4. Submit operator decisions and close/export/delete commands with an
    `idempotency-key` header. Decision history is available from
    `/v1/cases/{case_id}/decisions`; changing a decision is an explicit revoke
    followed by a new decision, never an in-place mutation.
-4. Render `rendered_route_maps[].url` as an image. Routing owns the route
+5. Render `rendered_route_maps[].url` as an image. Routing owns the route
    geometry and SVG; Dashboard only selects a floor and displays it.
-5. Display `mode`, `estimate`, alternatives, candidates, clips, progress,
+6. Display `mode`, `estimate`, alternatives, candidates, clips, progress,
    unobserved windows, and errors exactly as returned by Controls.
-6. Fetch the authorised current JPEG from `/v1/cases/{case_id}/live`; do not
+7. Fetch the authorised current JPEG from `/v1/cases/{case_id}/live`; do not
    expose the internal `object_key` to the browser.
 
 Local API verification:
@@ -53,7 +58,8 @@ not import `javes_main` internals.
 1. Claim tasks with
    `POST /internal/v1/workers/clip/tasks/claim` using the Clip service bearer
    token and a stable `worker_id`.
-2. Process `CLIP_CUT`, `CLIP_STATE`, and `CLIP_EXPORT` payloads using the public
+2. Process `CLIP_CUT`, `CLIP_STATE`, `CLIP_EXPORT`, and internal `CLIP_PURGE`
+   payloads using the public
    models in `javes_contracts`.
 3. Read source footage from the read-only NVIDIA Archive API. Never ask Main or
    Retention to delete an `archive_id`.
@@ -68,14 +74,16 @@ not import `javes_main` internals.
    `/internal/v1/workers/clip/tasks/{task_id}/result`; report retryable or
    terminal failure to the sibling `/failure` endpoint.
 
-Until the media implementation is installed, `javes-clip-worker` explicitly
-marks tasks `CLIP_WORKER_UNAVAILABLE`; it never returns successful fake clips.
+`javes-clip-worker` now implements real FFmpeg extraction, durable clip states,
+and ordered export of confirmed clips. FFmpeg and ffprobe must be on PATH.
+See [Clip worker setup and behavior](javes_clip/README.md) for archive window
+semantics, replay handling, output format, and deployment limitations.
 
 Contract verification:
 
 ```bash
 python -m pytest -q tests/test_adapter_acceptance.py \
-  tests/test_api_first_transport.py
+  tests/test_api_first_transport.py tests/test_clip_worker.py
 ```
 
 ## Runtime topology
@@ -132,8 +140,7 @@ OpenTelemetry traces, metrics and redacted logs are enabled with
 configuration fails startup/readiness instead of silently disabling export.
 The versioned staging topology is under `deploy/staging/`; it contains
 PostgreSQL, the API/scheduler/services/workers, shared artifact storage, NVIDIA
-Archive and an OTel backend. It deliberately does not pretend that the current
-unavailable Clip runner is a real media worker.
+Archive, the FFmpeg Clip worker and an OTel backend.
 
 ## Internal APIs
 
@@ -250,7 +257,14 @@ javes-main-scheduler
 javes-perception-worker --main-url http://127.0.0.1:8080 \
   --token "$PERCEPTION_TOKEN" --worker-id perception-1 \
   --config perception.yaml --artifact-root "$JAVES_ARTIFACT_ROOT" \
+  --archive-root "$NVIDIA_ROOT" \
   --state-db perception-state.sqlite \
+  --archive-url "$NVIDIA_ARCHIVE_URL" --archive-token "$ARCHIVE_TOKEN"
+
+javes-clip-worker --main-url http://127.0.0.1:8080 \
+  --token "$CLIP_TOKEN" --worker-id clip-1 \
+  --artifact-root "$JAVES_ARTIFACT_ROOT" --archive-root "$NVIDIA_ROOT" \
+  --state-db clip-state.sqlite \
   --archive-url "$NVIDIA_ARCHIVE_URL" --archive-token "$ARCHIVE_TOKEN"
 
 javes-retention-worker --main-url http://127.0.0.1:8080 \
@@ -258,7 +272,9 @@ javes-retention-worker --main-url http://127.0.0.1:8080 \
   --artifact-root "$JAVES_ARTIFACT_ROOT" --state-db retention-state.sqlite
 
 javes-clip-worker --main-url http://127.0.0.1:8080 \
-  --token "$CLIP_TOKEN" --worker-id clip-unavailable-1
+  --token "$CLIP_TOKEN" --worker-id clip-1 \
+  --artifact-root "$JAVES_ARTIFACT_ROOT" --state-db clip-state.sqlite \
+  --archive-url "$CCTV_ARCHIVE_URL" --archive-token "$CCTV_ARCHIVE_TOKEN"
 ```
 
 Run API and scheduler as separate processes against the same migrated database.
@@ -316,6 +332,6 @@ durable Routing trigger is retried.
 - `javes_site_config/`: immutable filesystem-backed Site Config service.
 - `javes_perception/`: real CV worker and durable HTTP runtime.
 - `javes_retention/`: durable inventory, deletion journal and HTTP runtime.
-- `javes_clip/`: Clip transport boundary and explicit unavailable runner.
+- `javes_clip/`: durable FFmpeg Clip worker, Archive adapter and media lifecycle.
 - `tests/`: unit, contract, HTTP, persistence, restart and integration tests;
   test doubles are isolated in `tests/support`.

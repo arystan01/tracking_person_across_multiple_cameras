@@ -208,7 +208,7 @@ def test_http_archive_preserves_manifest_source_offset() -> None:
         "http://testserver",
         "archive-secret",
         camera_ids={"Cam001"},
-        artifact_root=FIXTURE,
+        archive_root=FIXTURE,
         client=client,
     )
     window = archive.window(

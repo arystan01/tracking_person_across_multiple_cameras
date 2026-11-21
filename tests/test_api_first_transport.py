@@ -14,6 +14,7 @@ from javes_contracts import (
     CaseCommandBody,
     CaseInfo,
     CaseWindow,
+    CutClipCommand,
     CreateCaseBody,
     LastKnown,
     PerceptionProbeJob,
@@ -35,7 +36,13 @@ from javes_main.adapters.remote_only import RemoteWorkerOnlyPort
 from javes_main.adapters.system import ContentIdGenerator, FixedClock
 from javes_main.application import AuthService, CaseManager
 from javes_main.persistence import InMemoryRepository
-from javes_main.domain import CaseLifecycle, JobRecord, JobState
+from javes_main.domain import (
+    CaseLifecycle,
+    JobRecord,
+    JobState,
+    OutboxState,
+    OutboxTopic,
+)
 from javes_main.scheduler import RoutingTriggerDispatcher
 from javes_retention.core.worker import RetentionWorker
 from javes_retention.runtime.repository import SQLiteRetentionRepository
@@ -46,11 +53,59 @@ from javes_site_config.client import HttpSiteConfigClient
 from javes_routing.core.step import init_state
 from javes_routing.core.facade import step_and_render
 from tests.test_main_infra import BASE, create_body, system
+from tests.test_controls_api import reference_jpeg
 
 
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_cancelled_clip_outbox_heartbeat_requests_worker_cancellation():
+    app_system = system()
+    app_system.manager.create_case(create_body(), idempotency_key="cancel-create")
+    command = CutClipCommand(
+        clip_request_id="cancel-cut",
+        case_id="case-1",
+        candidate_id="candidate-cancel",
+        tracklet_id="tracklet-cancel",
+        camera_id="A",
+        t_from=BASE,
+        t_to=BASE + timedelta(seconds=2),
+        source_ref=ArtifactRef(archive_id="archive-A"),
+    )
+    app_system.manager._enqueue(
+        "case-1",
+        OutboxTopic.CLIP_CUT,
+        "cancel-cut-task",
+        {"command": command.model_dump(mode="json")},
+    )
+    api = create_app(
+        app_system.manager,
+        auth=app_system.auth,
+        worker_tokens={"clip": "clip-secret"},
+        worker_lease_secret="cancel-lease-secret",
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api), base_url="http://main"
+    ) as client:
+        claimed = await client.post(
+            "/internal/v1/workers/clip/tasks/claim",
+            headers={"authorization": "Bearer clip-secret"},
+            json={"worker_id": "clip-cancel", "limit": 1},
+        )
+        task = WorkerTaskEnvelope.model_validate(claimed.json()["tasks"][0])
+        record = app_system.repository.get_outbox(task.task_id)
+        record.state = OutboxState.CANCELLED
+        app_system.repository.save_outbox(record)
+        heartbeat = await client.post(
+            f"/internal/v1/workers/clip/tasks/{task.task_id}/heartbeat",
+            headers={"authorization": "Bearer clip-secret"},
+            json={"lease_token": task.lease_token, "extend_seconds": 30},
+        )
+        assert heartbeat.status_code == 200
+        assert heartbeat.json()["cancel_requested"] is True
 
 
 @pytest.mark.anyio
@@ -142,6 +197,7 @@ async def test_worker_pull_lease_result_and_duplicate_callback():
             json=payload,
         )
         assert completed.status_code == 200
+
         assert completed.json()["duplicate"] is False
         assert app_system.repository.get("case-1").gallery_ref == gallery_key
 
@@ -384,6 +440,15 @@ max_gap_s: 2400
             "authorization": f"Bearer {access}",
             "idempotency-key": "pipeline-create",
         }
+        uploaded = await client.post(
+            "/v1/cases/pipeline-case/reference-image",
+            headers={
+                "authorization": f"Bearer {access}",
+                "idempotency-key": "pipeline-reference",
+            },
+            files={"file": ("reference.jpg", reference_jpeg(), "image/jpeg")},
+        )
+        assert uploaded.status_code == 201, uploaded.text
         create = await client.post(
             "/v1/cases",
             headers=user_headers,
@@ -391,8 +456,8 @@ max_gap_s: 2400
                 case_id="pipeline-case",
                 operator_id=root_user.user_id,
                 target_id="target",
-                reference_image_ref=ArtifactRef(
-                    object_key="cases/pipeline-case/reference.jpg"
+                reference_image_ref=ArtifactRef.model_validate(
+                    uploaded.json()["reference_image_ref"]
                 ),
                 last_known=LastKnown(camera_id="A", time=BASE),
                 window=CaseWindow(
@@ -625,6 +690,30 @@ async def test_real_retention_core_claims_and_completes_through_http(tmp_path):
             },
         )
         assert completed.status_code == 200
+
+        purge_claim = await client.post(
+            "/internal/v1/workers/clip/tasks/claim",
+            headers={"authorization": "Bearer clip-secret"},
+            json={"worker_id": "clip-purge-real", "limit": 1},
+        )
+        purge_task = WorkerTaskEnvelope.model_validate(
+            purge_claim.json()["tasks"][0]
+        )
+        assert purge_task.operation == "CLIP_PURGE"
+        purge_completed = await client.post(
+            f"/internal/v1/workers/clip/tasks/{purge_task.task_id}/result",
+            headers={"authorization": "Bearer clip-secret"},
+            json={
+                "lease_token": purge_task.lease_token,
+                "result": {
+                    "contract_version": "clip-purge-result.v1",
+                    "command_id": purge_task.payload["command_id"],
+                    "case_id": purge_task.case_id,
+                    "purged": True,
+                },
+            },
+        )
+        assert purge_completed.status_code == 200
 
     with pytest.raises(KeyError):
         app_system.artifacts.get(reference_key)

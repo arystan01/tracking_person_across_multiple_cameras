@@ -217,7 +217,7 @@ services:
       dockerfile: Dockerfile
       target: perception-runtime
     entrypoint: [javes-perception-worker]
-    command: [--main-url, http://main-api:8080, --worker-id, perception-1, --config, /config/perception.yaml, --artifact-root, /artifacts, --state-db, /state/perception.sqlite, --archive-url, http://archive:8083]
+    command: [--main-url, http://main-api:8080, --worker-id, perception-1, --config, /config/perception.yaml, --artifact-root, /artifacts, --archive-root, /nvidia, --state-db, /state/perception.sqlite, --archive-url, http://archive:8083]
     environment:
       <<: *telemetry
       JAVES_PERCEPTION_WORKER_TOKEN: ${JAVES_PERCEPTION_WORKER_TOKEN:?set JAVES_PERCEPTION_WORKER_TOKEN}
@@ -240,6 +240,34 @@ services:
       timeout: 3s
       retries: 3
     deploy: {resources: {limits: {cpus: "4", memory: 8G}}}
+
+  clip-worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: clip-runtime
+    entrypoint: [javes-clip-worker]
+    command: [--main-url, http://main-api:8080, --worker-id, clip-1, --artifact-root, /artifacts, --archive-root, /nvidia, --state-db, /state/clip.sqlite, --archive-url, http://archive:8083]
+    environment:
+      <<: *telemetry
+      JAVES_CLIP_WORKER_TOKEN: ${JAVES_CLIP_WORKER_TOKEN:?set JAVES_CLIP_WORKER_TOKEN}
+      JAVES_ARCHIVE_SERVICE_TOKEN: ${JAVES_ARCHIVE_TOKEN:?set JAVES_ARCHIVE_TOKEN}
+      JAVES_INSTANCE_ID: clip-1
+    volumes:
+      - artifacts:/artifacts
+      - worker-state:/state
+      - ${JAVES_NVIDIA_ROOT:-../../data/nvidia_mtmc/mtmc_12cam}:/nvidia:ro
+    depends_on:
+      main-api: {condition: service_healthy}
+      archive: {condition: service_healthy}
+      volume-init: {condition: service_completed_successfully}
+    <<: *hardened
+    healthcheck:
+      test: [CMD-SHELL, "kill -0 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy: {resources: {limits: {cpus: "2", memory: 2G}}}
 
   retention-worker:
     build: *service-build

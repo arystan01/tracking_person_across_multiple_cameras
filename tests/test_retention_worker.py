@@ -50,6 +50,7 @@ def resource(
     expires_at: datetime | None = None,
     legal_hold: bool = False,
     artifact_ref: ArtifactRef | None = None,
+    revision: int = 1,
 ) -> RetentionResource:
     return RetentionResource(
         resource_id=resource_id,
@@ -59,6 +60,7 @@ def resource(
         artifact_ref=artifact_ref or (ArtifactRef(object_key=key) if key else None),
         expires_at=expires_at,
         legal_hold=legal_hold,
+        revision=revision,
     )
 
 
@@ -194,7 +196,7 @@ def test_close_retains_until_delete_and_keeps_audit(tmp_path):
     assert store.keys() == ["legal.mp4"]
     tombstone = retention.get_tombstone(deleted.audit_tombstone_id)
     assert tombstone is not None
-    assert tombstone["policy_version"] == "retention-policy.v1"
+    assert tombstone["policy_version"] == "retention-policy.v2"
     assert tombstone["deleted_count"] == 4
     stored_command = repo.get_command("delete-1")
     assert stored_command is not None
@@ -284,6 +286,7 @@ def test_stale_registration_cannot_resurrect_terminal_resource_class(tmp_path):
             update={
                 "kind": "SUPERSEDED_ROUTE_SVG",
                 "retention_class": RetentionClass.EPHEMERAL,
+                "revision": 2,
             }
         )
     )
@@ -293,6 +296,46 @@ def test_stale_registration_cannot_resurrect_terminal_resource_class(tmp_path):
     assert stored is not None
     assert stored.resource.retention_class == RetentionClass.EPHEMERAL
     assert stored.resource.kind == "SUPERSEDED_ROUTE_SVG"
+
+
+def test_same_retention_revision_with_different_payload_is_rejected(tmp_path):
+    retention = worker(
+        SQLiteRetentionRepository(tmp_path / "retention.db"),
+        InMemoryArtifactStore(),
+    )
+    original = resource("clip", RetentionClass.REVIEW_HOLD, key="clip.mp4")
+    retention.register(original)
+    with pytest.raises(ValueError, match="same retention resource revision"):
+        retention.register(
+            original.model_copy(
+                update={"retention_class": RetentionClass.CONFIRMED_EVIDENCE}
+            )
+        )
+
+
+def test_clip_retention_revision_can_move_both_directions(tmp_path):
+    retention = worker(
+        SQLiteRetentionRepository(tmp_path / "retention.db"),
+        InMemoryArtifactStore(),
+    )
+    retention.register(
+        resource("clip", RetentionClass.REVIEW_HOLD, key="clip.mp4", revision=1)
+    )
+    retention.register(
+        resource(
+            "clip", RetentionClass.CONFIRMED_EVIDENCE, key="clip.mp4", revision=2
+        )
+    )
+    retention.register(
+        resource("clip", RetentionClass.EPHEMERAL, key="clip.mp4", revision=3)
+    )
+    retention.register(
+        resource("clip", RetentionClass.REVIEW_HOLD, key="clip.mp4", revision=4)
+    )
+    stored = retention.get_resource("clip")
+    assert stored is not None
+    assert stored.resource.retention_class == RetentionClass.REVIEW_HOLD
+    assert stored.resource.revision == 4
 
 
 def test_partial_failure_is_durable_and_resumes_after_restart(tmp_path):

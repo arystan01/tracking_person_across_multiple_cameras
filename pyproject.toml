@@ -7,7 +7,13 @@ name = "javes-ai-routing"
 version = "0.1.0"
 description = "JAVES-AI routing, Main Infra controls, durable Retention, and shared contracts"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2,<3", "PyYAML>=6,<7", "argon2-cffi>=21.3,<26"]
+dependencies = [
+  "pydantic>=2,<3",
+  "PyYAML>=6,<7",
+  "argon2-cffi>=21.3,<26",
+  "Pillow>=11,<13",
+  "python-multipart>=0.0.18,<1",
+]
 
 [project.optional-dependencies]
 test = [

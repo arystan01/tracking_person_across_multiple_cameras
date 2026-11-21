@@ -15,6 +15,46 @@ from javes_main.domain.models import (
 )
 
 
+def _clip_view(case_id: str, item) -> dict:
+    return {
+        "clip_id": item.clip_id,
+        "candidate_id": item.candidate_id,
+        "tracklet_id": item.tracklet_id,
+        "status": item.status.value,
+        "state": item.state.value if item.state is not None else None,
+        "camera_id": item.camera_id,
+        "t_start": item.t_start.isoformat(),
+        "t_end": item.t_end.isoformat(),
+        "mime_type": item.mime_type,
+        "duration_s": item.duration_s,
+        "error_code": item.error_code,
+        "revision": item.revision,
+        "url": (
+            f"/v1/cases/{case_id}/clips/{item.clip_id}"
+            if item.status.value == "READY" and item.artifact_ref is not None
+            else None
+        ),
+    }
+
+
+def _export_view(case_id: str, raw: dict | None) -> dict | None:
+    if raw is None:
+        return None
+    return {
+        "export_request_id": raw.get("export_request_id"),
+        "status": raw.get("status"),
+        "ordered_clip_ids": list(raw.get("ordered_clip_ids") or []),
+        "missing_clip_ids": list(raw.get("missing_clip_ids") or []),
+        "duration_s": raw.get("duration_s", 0.0),
+        "error_code": raw.get("error_code"),
+        "url": (
+            f"/v1/cases/{case_id}/export"
+            if raw.get("status") == "READY" and raw.get("artifact_ref")
+            else None
+        ),
+    }
+
+
 def _published_live(case: CaseRecord, now: datetime | None) -> dict | None:
     live_feed = case.live_feed
     if live_feed is None or (
@@ -53,7 +93,10 @@ def _candidate_views(case: CaseRecord) -> list[dict]:
                     "t_end": tracklet.get("t_end"),
                     "bbox_first": tracklet.get("bbox_first"),
                     "bbox_last": tracklet.get("bbox_last"),
-                    "thumbnail_refs": list(tracklet.get("crop_paths") or []),
+                    "thumbnail_refs": [
+                        f"/v1/cases/{case.request.case_id}/candidates/{candidate_id}/thumbnails/{index}"
+                        for index, _ in enumerate(tracklet.get("crop_paths") or [])
+                    ],
                 }
             )
         clip_id = case.candidate_to_clip.get(candidate_id)
@@ -99,7 +142,7 @@ def build_case_view(
 
     def visible_clips() -> list[dict]:
         return [
-            item.model_dump(mode="json")
+            _clip_view(case.request.case_id, item)
             for item in sorted(case.clips.values(), key=lambda value: value.clip_id)
             if not retained_view or item.state == ClipLifecycleState.CONFIRMED
         ]
@@ -180,7 +223,7 @@ def build_case_view(
             lifecycle=case.lifecycle,
             candidates=_candidate_views(case) if reviewable_view else [],
             clips=visible_clips(),
-            export=(dict(case.export_ref) if case.export_ref is not None else None),
+            export=_export_view(case.request.case_id, case.export_ref),
             search_progress=progress,
             errors=errors,
             live=None if retained_view else _published_live(case, now),
@@ -249,7 +292,7 @@ def build_case_view(
         ),
         rendered_route_maps=maps,
         clips=visible_clips(),
-        export=(dict(case.export_ref) if case.export_ref is not None else None),
+        export=_export_view(case.request.case_id, case.export_ref),
         search_progress=progress,
         live=live,
         watch=[] if retained_view else watch,
