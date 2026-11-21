@@ -7,7 +7,11 @@ from collections.abc import Iterable
 
 from fastapi import Body, FastAPI, Header, HTTPException
 
-from javes_contracts import VideoSegmentRequest, VideoSegmentResult
+from javes_contracts import (
+    ServiceHealthResponse,
+    VideoSegmentRequest,
+    VideoSegmentResult,
+)
 
 from .registry import NvidiaArchiveRegistry
 from javes_telemetry import current_runtime, instrument_fastapi, operation
@@ -44,11 +48,19 @@ def create_nvidia_archive_app(
         if not any(secrets.compare_digest(bearer, token) for token in tokens):
             raise HTTPException(status_code=401, detail="valid service token required")
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def live() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/health/ready")
+    @app.get(
+        "/health/ready",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def ready() -> dict[str, str | int]:
         healthy, telemetry_status = current_runtime().readiness()
         if not healthy:

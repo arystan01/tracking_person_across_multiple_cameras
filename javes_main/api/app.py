@@ -21,6 +21,8 @@ from javes_contracts import (
     ProbeResult,
     RevokeDecisionBody,
     ReleaseLegalHoldBody,
+    ServiceHealthResponse,
+    RotationStatusResponse,
     DecisionRecordView,
     ReviewDecisionBody,
     WorkerClaimRequest,
@@ -285,11 +287,19 @@ def create_app(
             },
         )
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def live() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/health/ready")
+    @app.get(
+        "/health/ready",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def ready() -> dict[str, str]:
         try:
             manager.repository.list_cases()
@@ -317,7 +327,10 @@ def create_app(
         require_permission(actor, "audit.read")
         return metrics.snapshot()
 
-    @app.get("/internal/v1/rotation-status")
+    @app.get(
+        "/internal/v1/rotation-status",
+        response_model=RotationStatusResponse,
+    )
     async def service_rotation_status(
         actor: Actor = Depends(current_actor),
     ) -> dict:

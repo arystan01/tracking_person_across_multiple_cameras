@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, RootModel, field_validator, model_validator
 
 from .routing import ContractModel, MapPosition, ProbeRequest
 
@@ -49,6 +49,31 @@ class ProblemDetails(ContractModel):
     retryable: bool = False
     request_id: str | None = None
     errors: list[dict[str, Any]] | None = None
+
+
+class ServiceHealthResponse(ContractModel):
+    """Common live/ready payload; service-specific readiness facts are additive."""
+
+    status: Literal["ok", "ready"]
+    telemetry: str | None = None
+    cameras: int | None = Field(default=None, ge=0)
+    manifest_checksum: str | None = None
+
+
+class RotationKeyStatus(ContractModel):
+    current_key_id: str
+    previous_key_id: str | None = None
+    previous_valid_until: datetime | None = None
+    previous_accepted: bool = False
+
+    @field_validator("previous_valid_until", mode="after")
+    @classmethod
+    def _aware_deadline(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+
+class RotationStatusResponse(RootModel[dict[str, RotationKeyStatus]]):
+    pass
 
 
 class AuditExportRequest(ContractModel):

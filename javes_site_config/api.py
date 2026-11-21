@@ -7,6 +7,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .registry import FilesystemSiteConfigRegistry
+from javes_contracts import ServiceHealthResponse
 from javes_telemetry import current_runtime, instrument_fastapi
 from javes_security import RotationConfigurationError, RotationWindow
 
@@ -57,11 +58,19 @@ def create_site_config_app(
         ):
             raise HTTPException(status_code=401, detail="valid service token required")
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def live() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/health/ready")
+    @app.get(
+        "/health/ready",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def ready() -> dict[str, str]:
         healthy, status = current_runtime().readiness()
         if not healthy:
