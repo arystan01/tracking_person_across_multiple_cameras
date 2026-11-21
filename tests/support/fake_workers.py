@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from javes_contracts import (
+    ClipPurgeCommand,
+    ClipPurgeResult,
     ClipRecord,
     ClipStateCommand,
     CutClipCommand,
@@ -47,6 +49,9 @@ class FakeClipAdapter:
 
     def export(self, command: ExportClipsCommand) -> ExportClipsResult:
         return self.worker.export(command)
+
+    def purge(self, command: ClipPurgeCommand) -> ClipPurgeResult:
+        return self.worker.purge(command)
 
 
 class FakeRetentionAdapter:

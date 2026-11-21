@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 from javes_contracts import (
+    ClipPurgeCommand,
     ClipStateCommand,
     CutClipCommand,
     ExportClipsCommand,
@@ -202,6 +203,10 @@ class OutboxDispatcher:
         if topic == OutboxTopic.CLIP_EXPORT:
             return self.clip.export(
                 ExportClipsCommand.model_validate(message.payload["command"])
+            )
+        if topic == OutboxTopic.CLIP_PURGE:
+            return self.clip.purge(
+                ClipPurgeCommand.model_validate(message.payload["command"])
             )
         if topic == OutboxTopic.RETENTION_REGISTER:
             self.retention.register(

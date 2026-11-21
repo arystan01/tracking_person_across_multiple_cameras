@@ -2,7 +2,6 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import subprocess
 
@@ -10,11 +9,18 @@ import httpx
 import pytest
 
 from javes_clip.archive import HttpClipArchive
-from javes_clip.media import FFmpegMedia, MediaError
+from javes_clip.media import MediaError
 from javes_clip.runner import ClipTaskRunner
 from javes_clip.storage import ClipStore, case_prefix, checksum
 from javes_clip.worker import ClipWorker
-from javes_contracts import CutClipCommand, ClipStateCommand, ExportClipsCommand, WorkerTaskEnvelope, WorkerHeartbeatResponse
+from javes_contracts import (
+    ClipPurgeCommand,
+    CutClipCommand,
+    ClipStateCommand,
+    ExportClipsCommand,
+    WorkerHeartbeatResponse,
+    WorkerTaskEnvelope,
+)
 from javes_contracts.acceptance import check_cut_result, check_clip_state_result, check_export_result
 
 BASE = datetime(2026, 11, 1, tzinfo=timezone.utc)
@@ -51,7 +57,7 @@ def archive(source, *, availability='AVAILABLE', response_change=None):
         if response_change:
             response.update(response_change)
         return httpx.Response(200, json=response)
-    return HttpClipArchive('http://archive', 'test-secret', artifact_root=source.parent,
+    return HttpClipArchive('http://archive', 'test-secret', archive_root=source.parent,
                            client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
@@ -104,11 +110,17 @@ def test_state_rules_replay_case_isolation_and_release(worker):
     confirmed = worker.change_state(cmd)
     check_clip_state_result(cmd, confirmed, previous=original)
     assert worker.change_state(cmd) == confirmed
-    assert worker.manifest(confirmed)[0].retention_class == 'case_14d'
+    assert worker.manifest(confirmed)[0].retention_class == 'confirmed_evidence'
     with pytest.raises(ValueError, match='different payload'):
         worker.change_state(cmd.model_copy(update={'action':'RELEASE'}))
-    with pytest.raises(ValueError, match='reversed'):
-        worker.change_state(cmd.model_copy(update={'command_id':'undo', 'action':'RELEASE'}))
+    released_after_confirm = worker.change_state(
+        cmd.model_copy(update={'command_id':'undo', 'action':'RELEASE'})
+    )
+    assert released_after_confirm.state == 'RELEASED'
+    restored = worker.change_state(
+        cmd.model_copy(update={'command_id':'restore', 'action':'HOLD'})
+    )
+    assert restored.state == 'HOLD'
     with pytest.raises(ValueError, match='unknown clip'):
         worker.change_state(cmd.model_copy(update={'command_id':'other', 'case_id':'case-2'}))
     second = worker.cut(command('cut-2', start=4, end=6))
@@ -156,6 +168,25 @@ def test_archive_correlation_checks(worker, source, change):
     worker.archive = archive(source, response_change=change)
     with pytest.raises(ValueError):
         worker.cut(command())
+
+
+def test_archive_offset_includes_source_offset_and_file_uri_is_confined(source, tmp_path):
+    adapter = archive(source, response_change={'source_offset_s': 1.25})
+    with adapter.segment(command(start=2, end=4), tmp_path) as (resolved, offset):
+        assert resolved == source.resolve()
+        assert offset == pytest.approx(3.25)
+
+    outside = tmp_path.parent / 'outside.mp4'
+    outside.write_bytes(source.read_bytes())
+    adapter = archive(
+        source,
+        response_change={
+            'source_ref': {'archive_id': 'recording-A', 'uri': outside.as_uri()}
+        },
+    )
+    with pytest.raises(ValueError, match='escapes root'):
+        with adapter.segment(command(), tmp_path):
+            pass
 
 
 @pytest.mark.parametrize('case_id', ['../escape','a/b','.','..','a\\b',''])
@@ -249,29 +280,69 @@ def test_export_normalizes_mixed_resolutions(worker, source, tmp_path):
     duration,width,height=worker.media.probe(worker.store.path(result.artifact_ref.object_key))
     assert (width,height)==(320,240)
     assert duration == pytest.approx(4,abs=.1)
+    assert worker.media.probe_info(
+        worker.store.path(result.artifact_ref.object_key)
+    )['fps'] == pytest.approx(25, abs=.05)
+
+
+def test_purge_removes_case_metadata_but_leaves_anonymous_tombstone(worker):
+    record = worker.cut(command())
+    purge = ClipPurgeCommand(command_id='purge-1', case_id='case-1', occurred_at=BASE)
+    result = worker.purge(purge)
+    assert result.purged
+    assert worker.store.get_clip(record.clip_id) is None
+    assert worker.purge(purge) == result
+    row = worker.store.db.execute('SELECT case_hash FROM purge_tombstones').fetchone()
+    assert row is not None and 'case-1' not in row[0]
+
+
+def test_runner_cancellation_stops_media_without_callback(worker):
+    import time
+
+    original = worker.media.cut
+
+    def slow_cut(*args):
+        time.sleep(2)
+        return original(*args)
+
+    worker.media.cut = slow_cut
+    client = Client(task(command()))
+    original_heartbeat = client.heartbeat
+
+    def cancelling_heartbeat(task, **kwargs):
+        reply = original_heartbeat(task, **kwargs)
+        if client.heartbeats >= 2:
+            return reply.model_copy(update={'cancel_requested': True})
+        return reply
+
+    client.heartbeat = cancelling_heartbeat
+    ClipTaskRunner(worker, client).run_once(lease_seconds=5)
+    assert not client.results
+    assert not client.failures
+    assert not list(worker.store.root.glob('cases/case-1/clips/*.mp4'))
 
 
 def test_real_main_http_accepts_clip_cut_and_state(worker):
-    from fastapi.testclient import TestClient
     from javes_main.api import create_app
     from javes_main.adapters.artifacts import FileArtifactStore
     from javes_main.domain import OutboxTopic
     from javes_workers import HttpWorkerClient
     from tests.test_main_infra import system, create_body
+    from tests.support.real_cv_e2e import SyncASGIClient
     app_system = system()
     app_system.manager.artifacts = FileArtifactStore(worker.store.root)
     app_system.manager.create_case(create_body(), idempotency_key='clip-http-create')
     cmd = command()
     app_system.manager._enqueue('case-1', OutboxTopic.CLIP_CUT, 'cut-test', {'command':cmd.model_dump(mode='json')})
     api = create_app(app_system.manager, auth=app_system.auth, worker_tokens={'clip':'clip-secret'}, worker_lease_secret='lease-secret')
-    with TestClient(api) as http:
-        client = HttpWorkerClient('http://testserver','clip','clip-secret','clip-test',client=http)
-        runner = ClipTaskRunner(worker,client)
-        assert runner.run_once() == 1
-        case = app_system.repository.get('case-1')
-        record = next(iter(case.clips.values()))
-        assert record.status == 'READY'
-        state = ClipStateCommand(command_id='confirm-api',case_id='case-1',clip_id=record.clip_id,action='CONFIRM',occurred_at=BASE)
-        app_system.manager._enqueue('case-1',OutboxTopic.CLIP_STATE,'state-test',{'command':state.model_dump(mode='json')})
-        assert runner.run_once() == 1
-        assert app_system.repository.get('case-1').clips[record.clip_id].state == 'CONFIRMED'
+    http = SyncASGIClient(api, base_url='http://testserver')
+    client = HttpWorkerClient('http://testserver','clip','clip-secret','clip-test',client=http)
+    runner = ClipTaskRunner(worker,client)
+    assert runner.run_once() == 1
+    case = app_system.repository.get('case-1')
+    record = next(iter(case.clips.values()))
+    assert record.status == 'READY'
+    state = ClipStateCommand(command_id='confirm-api',case_id='case-1',clip_id=record.clip_id,action='CONFIRM',occurred_at=BASE)
+    app_system.manager._enqueue('case-1',OutboxTopic.CLIP_STATE,'state-test',{'command':state.model_dump(mode='json')})
+    assert runner.run_once() == 1
+    assert app_system.repository.get('case-1').clips[record.clip_id].state == 'CONFIRMED'

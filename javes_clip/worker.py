@@ -6,7 +6,8 @@ from pathlib import Path
 import tempfile
 
 from javes_contracts import (
-    ArtifactManifest, ArtifactRef, ClipLifecycleState, ClipRecord, ClipStateCommand, CutClipCommand,
+    ArtifactManifest, ArtifactRef, ClipLifecycleState, ClipPurgeCommand, ClipPurgeResult,
+    ClipRecord, ClipStateCommand, CutClipCommand,
     ExportClipsCommand, ExportClipsResult,
 )
 
@@ -30,8 +31,21 @@ class ClipWorker:
             previous = self.store.cached(key, digest)
             if previous is not None:
                 return model.model_validate(previous)
-            result = execute()
-            self.store.remember(key, digest, result.model_dump(mode='json'))
+            self.store.reserve(key, command.case_id, digest)
+        # Never hold the SQLite write lock while reading the Archive or running
+        # FFmpeg. The durable reservation makes the crash window observable.
+        self.media.reset_cancel()
+        result = execute()
+        with self.store.transaction():
+            previous = self.store.cached(key, digest)
+            if previous is not None:
+                return model.model_validate(previous)
+            self.store.remember(
+                key,
+                digest,
+                result.model_dump(mode='json'),
+                case_id=command.case_id,
+            )
             return result
 
     def cut(self, command: CutClipCommand) -> ClipRecord:
@@ -75,8 +89,14 @@ class ClipWorker:
             if record.status != 'READY':
                 raise ValueError('cannot change a non-ready clip')
             target = ClipLifecycleState({'HOLD': 'HOLD', 'CONFIRM': 'CONFIRMED', 'RELEASE': 'RELEASED'}[command.action])
-            if record.state != 'HOLD' and record.state != target:
-                raise ValueError('a recorded review decision cannot be reversed')
+            if record.state == target:
+                return record
+            if target == ClipLifecycleState.HOLD:
+                if record.artifact_ref is None or record.artifact_ref.object_key is None:
+                    raise ValueError('released clip has no restorable artifact')
+                source = self.store.path(record.artifact_ref.object_key)
+                if not source.is_file() or checksum(source) != record.artifact_ref.sha256:
+                    raise ValueError('released clip artifact is missing or changed')
             result = record.model_copy(update={'state': target, 'revision': record.revision+1})
             self.store.save_clip(result)
             # Retention owns physical deletion. Keep the reference for registration.
@@ -119,6 +139,24 @@ class ClipWorker:
                                      checksum='sha256:'+digest, duration_s=self.media.probe(path)[0])
         return self._command('export', command.export_request_id, command, execute, ExportClipsResult)
 
+    def purge(self, command: ClipPurgeCommand) -> ClipPurgeResult:
+        digest = fingerprint(command.model_dump(mode='json'))
+        key = f'purge:{command.command_id}'
+        case_prefix(command.case_id)
+        with self.store.transaction():
+            previous = self.store.cached(key, digest)
+            if previous is not None:
+                return ClipPurgeResult.model_validate(previous)
+            self.store.purge_case(command.case_id)
+            result = ClipPurgeResult(
+                command_id=command.command_id,
+                case_id=command.case_id,
+            )
+            # purge_case intentionally removes all case-scoped receipts first;
+            # only this anonymised completion receipt survives.
+            self.store.remember(key, digest, result.model_dump(mode='json'))
+            return result
+
     def manifest(self, result) -> list[ArtifactManifest]:
         if result.artifact_ref is None or result.artifact_ref.object_key is None:
             return []
@@ -130,8 +168,13 @@ class ClipWorker:
         is_clip = isinstance(result, ClipRecord)
         retention = 'case_14d'
         if is_clip:
-            retention = {'HOLD': 'review_hold', 'CONFIRMED': 'case_14d', 'RELEASED': 'ephemeral'}[result.state]
+            retention = {
+                'HOLD': 'review_hold',
+                'CONFIRMED': 'confirmed_evidence',
+                'RELEASED': 'ephemeral',
+            }[result.state]
         return [ArtifactManifest(object_key=key, kind='clip' if is_clip else 'export',
                                  size_bytes=path.stat().st_size, sha256=digest,
                                  created_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
-                                 retention_class=retention, mime_type='video/mp4')]
+                                 retention_class=retention, policy_revision=getattr(result, 'revision', 1),
+                                 mime_type='video/mp4')]

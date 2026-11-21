@@ -323,6 +323,8 @@ MODEL_OWNERS = {
     "SiteConfig": ["RoutingParamsResponse", "SiteVersionResponse"],
     "Archive": ["VideoSegmentRequest", "VideoSegmentResult"],
     "Clip": [
+        "ClipPurgeCommand",
+        "ClipPurgeResult",
         "ClipRecord",
         "ClipStateCommand",
         "CutClipCommand",

@@ -383,6 +383,25 @@ class ExportClipsResult(ContractModel):
     error_code: str | None = None
 
 
+class ClipPurgeCommand(ContractModel):
+    contract_version: Literal["clip-purge.v1"] = "clip-purge.v1"
+    command_id: str
+    case_id: str
+    occurred_at: datetime
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
+class ClipPurgeResult(ContractModel):
+    contract_version: Literal["clip-purge-result.v1"] = "clip-purge-result.v1"
+    command_id: str
+    case_id: str
+    purged: bool = True
+
+
 class RetentionClass(str, Enum):
     EPHEMERAL = "EPHEMERAL"
     REVIEW_HOLD = "REVIEW_HOLD"
@@ -401,6 +420,7 @@ class RetentionResource(ContractModel):
     expires_at: datetime | None = None
     legal_hold: bool = False
     deleted: bool = False
+    revision: int = Field(default=1, ge=1)
 
     @field_validator("expires_at", mode="after")
     @classmethod

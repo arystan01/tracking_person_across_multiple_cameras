@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import ContextManager, Protocol
 
 from javes_contracts import (
+    ClipPurgeCommand,
+    ClipPurgeResult,
     ClipRecord,
     ClipStateCommand,
     CutClipCommand,
@@ -207,6 +209,7 @@ class ClipPort(Protocol):
     def cut(self, command: CutClipCommand) -> ClipRecord: ...
     def change_state(self, command: ClipStateCommand) -> ClipRecord: ...
     def export(self, command: ExportClipsCommand) -> ExportClipsResult: ...
+    def purge(self, command: ClipPurgeCommand) -> ClipPurgeResult: ...
 
 
 class RetentionPort(Protocol):

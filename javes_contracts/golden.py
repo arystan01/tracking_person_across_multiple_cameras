@@ -11,6 +11,8 @@ from . import (
     AuditExportRequest,
     CaseCommandBody,
     CaseView,
+    ClipPurgeCommand,
+    ClipPurgeResult,
     CreateCaseBody,
     CreateLegalHoldBody,
     DecisionRecordView,
@@ -90,6 +92,14 @@ Golden = tuple[type[BaseModel], dict[str, Any]]
 
 
 GOLDEN_FIXTURES: dict[str, Golden] = {
+    "clip/purge-command.json": (
+        ClipPurgeCommand,
+        {"command_id": "purge-001", "case_id": "case-001", "occurred_at": T1},
+    ),
+    "clip/purge-result.json": (
+        ClipPurgeResult,
+        {"command_id": "purge-001", "case_id": "case-001", "purged": True},
+    ),
     "operations/health-ready.json": (
         ServiceHealthResponse,
         {"status": "ready", "telemetry": "ready"},

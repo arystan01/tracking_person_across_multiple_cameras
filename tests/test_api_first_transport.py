@@ -143,6 +143,7 @@ async def test_worker_pull_lease_result_and_duplicate_callback():
             json=payload,
         )
         assert completed.status_code == 200
+
         assert completed.json()["duplicate"] is False
         assert app_system.repository.get("case-1").gallery_ref == gallery_key
 
@@ -635,6 +636,30 @@ async def test_real_retention_core_claims_and_completes_through_http(tmp_path):
             },
         )
         assert completed.status_code == 200
+
+        purge_claim = await client.post(
+            "/internal/v1/workers/clip/tasks/claim",
+            headers={"authorization": "Bearer clip-secret"},
+            json={"worker_id": "clip-purge-real", "limit": 1},
+        )
+        purge_task = WorkerTaskEnvelope.model_validate(
+            purge_claim.json()["tasks"][0]
+        )
+        assert purge_task.operation == "CLIP_PURGE"
+        purge_completed = await client.post(
+            f"/internal/v1/workers/clip/tasks/{purge_task.task_id}/result",
+            headers={"authorization": "Bearer clip-secret"},
+            json={
+                "lease_token": purge_task.lease_token,
+                "result": {
+                    "contract_version": "clip-purge-result.v1",
+                    "command_id": purge_task.payload["command_id"],
+                    "case_id": purge_task.case_id,
+                    "purged": True,
+                },
+            },
+        )
+        assert purge_completed.status_code == 200
 
     with pytest.raises(KeyError):
         app_system.artifacts.get(reference_key)

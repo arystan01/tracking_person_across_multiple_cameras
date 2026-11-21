@@ -11,6 +11,7 @@ from typing import Any
 
 from javes_contracts import (
     ClipRecord,
+    ClipPurgeResult,
     ExportClipsResult,
     ProbeResult,
     TargetGalleryResult,
@@ -38,6 +39,7 @@ COMPONENT_TOPICS: dict[str, set[str]] = {
         OutboxTopic.CLIP_CUT.value,
         OutboxTopic.CLIP_STATE.value,
         OutboxTopic.CLIP_EXPORT.value,
+        OutboxTopic.CLIP_PURGE.value,
     },
     "retention": {
         OutboxTopic.RETENTION_REGISTER.value,
@@ -52,6 +54,7 @@ TOPIC_OPERATIONS = {
     OutboxTopic.CLIP_CUT.value: "CLIP_CUT",
     OutboxTopic.CLIP_STATE.value: "CLIP_STATE",
     OutboxTopic.CLIP_EXPORT.value: "CLIP_EXPORT",
+    OutboxTopic.CLIP_PURGE.value: "CLIP_PURGE",
     OutboxTopic.RETENTION_REGISTER.value: "RETENTION_REGISTER",
     OutboxTopic.RETENTION_COMMAND.value: "RETENTION_DELETE",
     OutboxTopic.RETENTION_HOLD.value: "RETENTION_HOLD",
@@ -308,6 +311,9 @@ class WorkerTaskService:
             elif record.topic == OutboxTopic.CLIP_EXPORT.value:
                 export = ExportClipsResult.model_validate(request.result)
                 key = self._owned_key(export.artifact_ref, case_id=record.case_id)
+            elif record.topic == OutboxTopic.CLIP_PURGE.value:
+                ClipPurgeResult.model_validate(request.result)
+                key = None
             else:
                 key = None
             if key:
@@ -329,6 +335,8 @@ class WorkerTaskService:
                 component, task_id, request.lease_token
             )
             if source == "job" and record.state == JobState.CANCELLED:
+                return WorkerHeartbeatResponse(task_id=task_id, cancel_requested=True)
+            if source == "outbox" and record.state == OutboxState.CANCELLED:
                 return WorkerHeartbeatResponse(task_id=task_id, cancel_requested=True)
             expected_state = JobState.LEASED if source == "job" else OutboxState.LEASED
             if record.state != expected_state:

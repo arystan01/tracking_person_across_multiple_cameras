@@ -143,20 +143,16 @@ class RetentionWorker:
                         raise ValueError(
                             "legal hold release requires an authority workflow"
                         )
-                    if not self.policy.allows_class_transition(
-                        previous.resource.retention_class,
-                        incoming.retention_class,
-                    ):
-                        # An older at-least-once registration arrived after a
-                        # terminal lifecycle update. Keep the newer policy
-                        # state; retrying the stale message is unnecessary.
+                    if incoming.revision < previous.resource.revision:
                         return
-                    # Allow metadata-only registration to be enriched once a stable
-                    # artifact reference becomes known.
-                    if incoming.artifact_ref is None:
-                        incoming = incoming.model_copy(
-                            update={"artifact_ref": previous.resource.artifact_ref}
-                        )
+                    if incoming.revision == previous.resource.revision:
+                        if previous.state == "DELETED":
+                            return
+                        if incoming != previous.resource:
+                            raise ValueError(
+                                "same retention resource revision has different payload"
+                            )
+                        return
                 marker = self.repository.get_case_marker(incoming.case_id)
                 must_delete = self.policy.should_delete_after_case_marker(
                     self._effective_resource(incoming),
@@ -166,7 +162,7 @@ class RetentionWorker:
                         or marker.ttl_expired_at is not None
                     ),
                 )
-                if previous is not None and previous.state == "DELETED" and not must_delete:
+                if previous is not None and previous.state == "DELETED":
                     # A later legal-hold/class update cannot restore bytes that
                     # were already erased.
                     self.repository.save_resource(

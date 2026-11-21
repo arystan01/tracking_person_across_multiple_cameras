@@ -150,7 +150,11 @@ def check_clip_state_result(
     _require(result.status == ClipProcessingStatus.READY, "clip state result must stay READY")
     _require(result.state == expected, "clip lifecycle state does not match command")
     if previous is not None:
-        _require(result.revision > previous.revision, "clip revision must increase")
+        already_applied = previous.state == expected and result == previous
+        _require(
+            already_applied or result.revision > previous.revision,
+            "clip revision must increase unless the state is already reached",
+        )
 
 
 def check_export_result(
