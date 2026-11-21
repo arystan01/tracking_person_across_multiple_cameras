@@ -14,6 +14,7 @@ from javes_contracts import (
     CaseCommandBody,
     CaseInfo,
     CaseWindow,
+    CutClipCommand,
     CreateCaseBody,
     LastKnown,
     PerceptionProbeJob,
@@ -35,7 +36,13 @@ from javes_main.adapters.remote_only import RemoteWorkerOnlyPort
 from javes_main.adapters.system import ContentIdGenerator, FixedClock
 from javes_main.application import AuthService, CaseManager
 from javes_main.persistence import InMemoryRepository
-from javes_main.domain import CaseLifecycle, JobRecord, JobState
+from javes_main.domain import (
+    CaseLifecycle,
+    JobRecord,
+    JobState,
+    OutboxState,
+    OutboxTopic,
+)
 from javes_main.scheduler import RoutingTriggerDispatcher
 from javes_retention.core.worker import RetentionWorker
 from javes_retention.runtime.repository import SQLiteRetentionRepository
@@ -52,6 +59,53 @@ from tests.test_controls_api import reference_jpeg
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_cancelled_clip_outbox_heartbeat_requests_worker_cancellation():
+    app_system = system()
+    app_system.manager.create_case(create_body(), idempotency_key="cancel-create")
+    command = CutClipCommand(
+        clip_request_id="cancel-cut",
+        case_id="case-1",
+        candidate_id="candidate-cancel",
+        tracklet_id="tracklet-cancel",
+        camera_id="A",
+        t_from=BASE,
+        t_to=BASE + timedelta(seconds=2),
+        source_ref=ArtifactRef(archive_id="archive-A"),
+    )
+    app_system.manager._enqueue(
+        "case-1",
+        OutboxTopic.CLIP_CUT,
+        "cancel-cut-task",
+        {"command": command.model_dump(mode="json")},
+    )
+    api = create_app(
+        app_system.manager,
+        auth=app_system.auth,
+        worker_tokens={"clip": "clip-secret"},
+        worker_lease_secret="cancel-lease-secret",
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api), base_url="http://main"
+    ) as client:
+        claimed = await client.post(
+            "/internal/v1/workers/clip/tasks/claim",
+            headers={"authorization": "Bearer clip-secret"},
+            json={"worker_id": "clip-cancel", "limit": 1},
+        )
+        task = WorkerTaskEnvelope.model_validate(claimed.json()["tasks"][0])
+        record = app_system.repository.get_outbox(task.task_id)
+        record.state = OutboxState.CANCELLED
+        app_system.repository.save_outbox(record)
+        heartbeat = await client.post(
+            f"/internal/v1/workers/clip/tasks/{task.task_id}/heartbeat",
+            headers={"authorization": "Bearer clip-secret"},
+            json={"lease_token": task.lease_token, "extend_seconds": 30},
+        )
+        assert heartbeat.status_code == 200
+        assert heartbeat.json()["cancel_requested"] is True
 
 
 @pytest.mark.anyio
