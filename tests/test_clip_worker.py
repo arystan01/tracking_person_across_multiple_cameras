@@ -10,9 +10,9 @@ import pytest
 
 from javes_clip.archive import HttpClipArchive
 from javes_clip.media import MediaError
-from javes_clip.runner import ClipTaskRunner
+from javes_clip.runner import ClipTaskRunner, _failure_code
 from javes_clip.storage import ClipStore, case_prefix, checksum
-from javes_clip.worker import ClipWorker
+from javes_clip.worker import ArtifactMissingError, ClipWorker
 from javes_contracts import (
     ClipPurgeCommand,
     CutClipCommand,
@@ -128,6 +128,18 @@ def test_state_rules_replay_case_isolation_and_release(worker):
     assert released.state == 'RELEASED'
     assert worker.manifest(released)[0].retention_class == 'ephemeral'
     assert worker.store.path(released.artifact_ref.object_key).exists()  # Retention owns deletion.
+    worker.store.path(released.artifact_ref.object_key).unlink()
+    with pytest.raises(ArtifactMissingError):
+        worker.change_state(
+            cmd.model_copy(
+                update={
+                    'command_id': 'restore-missing',
+                    'clip_id': released.clip_id,
+                    'action': 'HOLD',
+                }
+            )
+        )
+    assert _failure_code(ArtifactMissingError('missing')) == 'ARTIFACT_MISSING'
 
 
 def test_export_requires_confirmed_clips_and_preserves_order(worker):

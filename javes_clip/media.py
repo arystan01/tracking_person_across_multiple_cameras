@@ -83,6 +83,34 @@ class FFmpegMedia:
         info = self.probe_info(path)
         return info['duration'], info['width'], info['height']
 
+    def validate_output(
+        self, path: Path, *, expected_duration_s: float | None = None
+    ) -> dict:
+        """Require a decodable first frame and, when known, frame-tight duration."""
+        info = self.probe_info(path)
+        self._run(
+            [
+                'ffmpeg',
+                '-v',
+                'error',
+                '-nostdin',
+                '-i',
+                str(path),
+                '-map',
+                '0:v:0',
+                '-frames:v',
+                '1',
+                '-f',
+                'null',
+                '-',
+            ]
+        )
+        if expected_duration_s is not None and abs(
+            info['duration'] - expected_duration_s
+        ) > max(1 / info['fps'], 0.05):
+            raise MediaError('output duration differs from requested duration')
+        return info
+
     def cut(self, source: Path, output: Path, start: float, duration: float):
         source_duration, _, _ = self.probe(source)
         if not all(math.isfinite(x) for x in (start, duration)) or start < 0 or duration <= 0:
@@ -93,11 +121,9 @@ class FFmpegMedia:
                    '-map', '0:v:0', '-an', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1',
                    '-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20',
                    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(output)])
-        info = self.probe_info(output)
-        measured = info['duration']
-        if abs(measured - duration) > max(1 / info['fps'], 0.05):
-            raise MediaError('output duration differs from requested duration')
-        return measured
+        return self.validate_output(
+            output, expected_duration_s=duration
+        )['duration']
 
     def merge(self, sources: list[Path], output: Path):
         first = self.probe_info(sources[0])
@@ -114,4 +140,4 @@ class FFmpegMedia:
             listing.write_text(''.join(f"file '{i}.mp4'\n" for i in range(len(sources))))
             self._run(['ffmpeg', '-v', 'error', '-nostdin', '-n', '-f', 'concat', '-safe', '1', '-i', str(listing),
                        '-map_metadata', '-1', '-c', 'copy', '-movflags', '+faststart', str(output)])
-        return self.probe(output)[0]
+        return self.validate_output(output)['duration']

@@ -20,6 +20,7 @@ from javes_contracts import (
 
 from .media import MediaCancelled, MediaError
 from .storage import fingerprint
+from .worker import ArtifactMissingError
 
 LOG = logging.getLogger(__name__)
 MODELS = {
@@ -39,6 +40,8 @@ def _failure_code(exc: BaseException) -> str:
         return "TASK_CANCELLED"
     if isinstance(exc, MediaError):
         return "MEDIA_FAILED"
+    if isinstance(exc, ArtifactMissingError):
+        return "ARTIFACT_MISSING"
     if isinstance(exc, httpx.HTTPError):
         return "SOURCE_UNAVAILABLE"
     if isinstance(exc, (ValueError, ValidationError)):

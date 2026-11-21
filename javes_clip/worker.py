@@ -16,6 +16,10 @@ from .media import FFmpegMedia
 from .storage import ClipStore, case_prefix, checksum, fingerprint
 
 
+class ArtifactMissingError(RuntimeError):
+    """A previously published Clip artifact is absent or no longer authentic."""
+
+
 class ClipWorker:
     def __init__(self, store: ClipStore, archive, *, media=None):
         self.store = store
@@ -70,9 +74,9 @@ class ClipWorker:
                         self.store.save_clip(result)
                         return result
                     self.store.publish(directory/'cut.mp4', key)
-            measured = self.media.probe(path)[0]
-            if abs(measured-duration) > 0.2:
-                raise ValueError('existing output has incorrect duration')
+            measured = self.media.validate_output(
+                path, expected_duration_s=duration
+            )['duration']
             digest = checksum(path)
             result = ClipRecord(**{**record, 'duration_s': measured}, status='READY', state='HOLD',
                                 artifact_ref=ArtifactRef(object_key=key, sha256=digest), checksum='sha256:'+digest)
@@ -96,7 +100,9 @@ class ClipWorker:
                     raise ValueError('released clip has no restorable artifact')
                 source = self.store.path(record.artifact_ref.object_key)
                 if not source.is_file() or checksum(source) != record.artifact_ref.sha256:
-                    raise ValueError('released clip artifact is missing or changed')
+                    raise ArtifactMissingError(
+                        'released clip artifact is missing or changed'
+                    )
             result = record.model_copy(update={'state': target, 'revision': record.revision+1})
             self.store.save_clip(result)
             # Retention owns physical deletion. Keep the reference for registration.
@@ -134,6 +140,7 @@ class ClipWorker:
                     output = Path(directory)/'merged.mp4'
                     self.media.merge(sources, output)
                     self.store.publish(output, key)
+            self.media.validate_output(path)
             digest = checksum(path)
             return ExportClipsResult(**result, status='READY', artifact_ref=ArtifactRef(object_key=key, sha256=digest),
                                      checksum='sha256:'+digest, duration_s=self.media.probe(path)[0])
@@ -162,6 +169,8 @@ class ClipWorker:
             return []
         key = result.artifact_ref.object_key
         path = self.store.path(key)
+        if not path.is_file():
+            raise ArtifactMissingError('published artifact is missing')
         digest = checksum(path)
         if result.artifact_ref.sha256 != digest:
             raise ValueError('output artifact checksum mismatch')
