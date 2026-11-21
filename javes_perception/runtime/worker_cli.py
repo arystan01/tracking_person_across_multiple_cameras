@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--worker-id", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--artifact-root", required=True)
+    parser.add_argument("--archive-root", required=True)
     parser.add_argument("--state-db", required=True)
     parser.add_argument("--archive-url")
     parser.add_argument(
@@ -48,7 +49,7 @@ def main() -> None:
             args.archive_url,
             args.archive_token,
             camera_ids=set(settings.cameras),
-            artifact_root=args.artifact_root,
+            archive_root=args.archive_root,
         )
     worker = PerceptionWorker(settings, artifacts, archive=archive, state_store=state)
     client = HttpWorkerClient(args.main_url, "perception", args.token, args.worker_id)

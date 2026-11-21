@@ -34,14 +34,14 @@ class HttpVideoArchive:
         token: str,
         *,
         camera_ids: set[str],
-        artifact_root: str | Path | None = None,
+        archive_root: str | Path | None = None,
         timeout_s: float = 30.0,
         client: httpx.Client | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.camera_ids = set(camera_ids)
-        self.artifact_root = (
-            Path(artifact_root).resolve() if artifact_root is not None else None
+        self.archive_root = (
+            Path(archive_root).resolve() if archive_root is not None else None
         )
         self._headers = {"authorization": f"Bearer {token}"}
         self._client = client or httpx.Client(timeout=timeout_s)
@@ -59,12 +59,12 @@ class HttpVideoArchive:
             if parsed.scheme in {"http", "https", "rtsp"}:
                 return result.source_ref.uri
             raise DecodeError("CCTV Archive returned an unsupported source URI")
-        if result.source_ref.object_key and self.artifact_root is not None:
-            path = (self.artifact_root / result.source_ref.object_key).resolve()
+        if result.source_ref.object_key and self.archive_root is not None:
+            path = (self.archive_root / result.source_ref.object_key).resolve()
             try:
-                path.relative_to(self.artifact_root)
+                path.relative_to(self.archive_root)
             except ValueError as exc:
-                raise DecodeError("CCTV Archive object_key escapes artifact root") from exc
+                raise DecodeError("CCTV Archive object_key escapes archive root") from exc
             return str(path)
         raise DecodeError("CCTV Archive source_ref is not decodable")
 

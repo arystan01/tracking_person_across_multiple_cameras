@@ -44,7 +44,7 @@ def main() -> None:
     archive = HttpClipArchive(
         args.archive_url,
         args.archive_token,
-        artifact_root=args.archive_root,
+        archive_root=args.archive_root,
     )
     runner = ClipTaskRunner(ClipWorker(store, archive), client)
     try:
