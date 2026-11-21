@@ -698,25 +698,37 @@ def test_real_cv_http_pipeline_renders_nvidia_route(
         access_token = login.json()["access_token"]
         operator_headers = {
             "authorization": f"Bearer {access_token}",
-            "idempotency-key": f"{target.case_id}-create",
         }
 
         case_id = target.case_id
-        reference_key = f"cases/{case_id}/reference.jpg"
         reference_camera = target.cameras[0]
         expected_cameras = set(target.cameras)
         expected_evidence_cameras = set(target.evidence_cameras)
         reference_bytes = _reference_jpeg(videos[reference_camera], target)
-        artifact_store.put(reference_key, reference_bytes, "image/jpeg")
         (run_root / "reference.jpg").write_bytes(reference_bytes)
+        uploaded = main_http.post(
+            f"/v1/cases/{case_id}/reference-image",
+            headers={
+                **operator_headers,
+                "idempotency-key": f"{case_id}-reference-upload",
+            },
+            files={"file": ("reference.jpg", reference_bytes, "image/jpeg")},
+        )
+        assert uploaded.status_code == 201, uploaded.text
+        reference_ref = ArtifactRef.model_validate(
+            uploaded.json()["reference_image_ref"]
+        )
         created = main_http.post(
             "/v1/cases",
-            headers=operator_headers,
+            headers={
+                **operator_headers,
+                "idempotency-key": f"{target.case_id}-create",
+            },
             json=CreateCaseBody(
                 case_id=case_id,
                 operator_id=root_user.user_id,
                 target_id=target.target_id,
-                reference_image_ref=ArtifactRef(object_key=reference_key),
+                reference_image_ref=reference_ref,
                 last_known=LastKnown(
                     camera_id=reference_camera,
                     time=base,

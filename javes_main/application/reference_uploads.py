@@ -91,7 +91,13 @@ def canonical_reference_image(data: bytes, content_type: str | None) -> tuple[by
                 return output.getvalue(), width, height
     except ReferenceUploadError:
         raise
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+    except (
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+        ModuleNotFoundError,
+        Image.DecompressionBombError,
+    ) as exc:
         raise ReferenceUploadError(
             "REFERENCE_UPLOAD_INVALID",
             "reference image cannot be decoded safely",
