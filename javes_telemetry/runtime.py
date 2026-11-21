@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import atexit
-import copy
 import logging
 import os
 import re
@@ -377,29 +376,33 @@ def current_span_ids() -> tuple[str | None, str | None]:
 
 
 class _SafeOtelLoggingHandler(logging.Handler):
-    def __init__(self, delegate: logging.Handler) -> None:
-        super().__init__()
-        self.delegate = delegate
+    """Emit a deliberately minimal log record without filesystem/code metadata."""
+
+    def __init__(self, *, level: int, logger_provider) -> None:
+        super().__init__(level=level)
+        self._logger = logger_provider.get_logger("javes.runtime")
+        self._logger_provider = logger_provider
 
     def emit(self, record: logging.LogRecord) -> None:
-        safe = copy.copy(record)
-        safe.msg = _redact_text(record.getMessage())
-        safe.args = ()
-        safe.exc_info = None
-        safe.exc_text = None
-        self.delegate.emit(safe)
+        from opentelemetry.sdk._logs._internal import std_to_otel
+
+        self._logger.emit(
+            timestamp=int(record.created * 1_000_000_000),
+            severity_number=std_to_otel(record.levelno),
+            severity_text=record.levelname,
+            body=_redact_text(record.getMessage()),
+        )
 
     def flush(self) -> None:
-        self.delegate.flush()
+        self._logger_provider.force_flush()
 
 
 def logging_handler(level: int = logging.NOTSET) -> logging.Handler | None:
     if not _RUNTIME.enabled or _RUNTIME.logger_provider is None:
         return None
-    from opentelemetry.sdk._logs import LoggingHandler
-
     return _SafeOtelLoggingHandler(
-        LoggingHandler(level=level, logger_provider=_RUNTIME.logger_provider)
+        level=level,
+        logger_provider=_RUNTIME.logger_provider,
     )
 
 
