@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from javes_main.application import CaseManager
+from javes_telemetry import record_counter
 
 from .dispatcher import DispatchReport, OutboxDispatcher
 from .routing_triggers import RoutingDispatchReport, RoutingTriggerDispatcher
@@ -81,6 +82,12 @@ class SchedulerRunner:
                 heartbeats += 1
         retention_expiries = self.manager.enqueue_due_retention()
         reference_upload_expiries = self.manager.cleanup_expired_reference_uploads()
+        if reference_upload_expiries:
+            record_counter(
+                "javes.reference_uploads",
+                reference_upload_expiries,
+                {"component": "main", "operation": "cleanup", "outcome": "expired"},
+            )
         jobs = self.manager.run_pending_jobs(limit=job_limit)
         routing = self.routing.drain()
         return SchedulerReport(

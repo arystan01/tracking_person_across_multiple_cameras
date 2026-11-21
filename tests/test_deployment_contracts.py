@@ -59,6 +59,8 @@ def test_container_and_proxy_contract_run_unprivileged_with_tls() -> None:
     assert "COPY javes_telemetry javes_telemetry" in dockerfile
     assert "COPY javes_archive javes_archive" in dockerfile
     assert "AS perception-runtime" in dockerfile
+    assert "AS clip-runtime" in dockerfile
+    assert "apt-get install --no-install-recommends -y ffmpeg" in dockerfile
 
 
 def test_staging_compose_is_api_first_private_and_persistent() -> None:
@@ -74,12 +76,12 @@ def test_staging_compose_is_api_first_private_and_persistent() -> None:
         "routing",
         "site-config",
         "perception-worker",
+        "clip-worker",
         "retention-worker",
         "archive",
         "otel-collector",
         "observability-backend",
     } <= set(services)
-    assert "clip" not in services
     assert compose["networks"]["javes-internal"]["internal"] is True
     assert {"postgres-data", "artifacts", "site-config", "worker-state"} <= set(
         compose["volumes"]
@@ -94,6 +96,9 @@ def test_staging_compose_is_api_first_private_and_persistent() -> None:
         == "service_completed_successfully"
     )
     assert services["perception-worker"]["build"]["target"] == "perception-runtime"
+    assert services["clip-worker"]["build"]["target"] == "clip-runtime"
+    assert "/nvidia" in " ".join(services["clip-worker"]["command"])
+    assert any(str(volume).endswith(":/nvidia:ro") for volume in services["clip-worker"]["volumes"])
 
 
 def test_staging_templates_have_no_real_secrets_or_fake_services() -> None:
@@ -104,7 +109,7 @@ def test_staging_templates_have_no_real_secrets_or_fake_services() -> None:
     assert "javes_fakes" not in compose
     assert "fake" not in compose.lower()
     assert "JAVES_CLIP_WORKER_TOKEN" in compose
-    assert "clip-worker:" not in compose
+    assert "clip-worker:" in compose
 
 
 def test_collector_exports_all_three_signals_to_local_backend() -> None:

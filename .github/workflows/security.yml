@@ -31,3 +31,15 @@ jobs:
           format: table
           exit-code: "1"
           severity: CRITICAL,HIGH
+
+  clip-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target clip-runtime -t javes-clip:${{ github.sha }} .
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: javes-clip:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH

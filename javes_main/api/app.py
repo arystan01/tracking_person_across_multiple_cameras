@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import time
 from collections.abc import Callable, Iterable
 from fastapi import (
     Depends,
@@ -82,6 +83,7 @@ from javes_telemetry import (
     instrument_fastapi,
     operation,
     record_counter,
+    record_histogram,
 )
 from javes_security import RotationWindow
 from javes_main.application.reference_uploads import MAX_UPLOAD_BYTES
@@ -600,6 +602,7 @@ def create_app(
         actor: Actor = Depends(current_actor),
     ) -> ReferenceImageUploadResponse:
         require_permission(actor, "case.create")
+        started = time.monotonic()
         data = await file.read(MAX_UPLOAD_BYTES + 1)
         await file.close()
         try:
@@ -630,6 +633,16 @@ def create_app(
                 "outcome": "accepted",
             },
         )
+        record_histogram(
+            "javes.reference_upload.size_bytes",
+            float(min(len(data), MAX_UPLOAD_BYTES + 1)),
+            attributes={"component": "main", "operation": "upload"},
+        )
+        record_histogram(
+            "javes.reference_upload.duration_s",
+            time.monotonic() - started,
+            attributes={"component": "main", "operation": "upload"},
+        )
         return result
 
     @app.post("/v1/cases", response_model=CaseView, status_code=201)
@@ -644,6 +657,14 @@ def create_app(
             body,
             idempotency_key=idempotency_key,
             reference_owner_id=actor.user_id,
+        )
+        record_counter(
+            "javes.reference_uploads",
+            attributes={
+                "component": "main",
+                "operation": "consume",
+                "outcome": "accepted",
+            },
         )
         if run_fake_jobs_inline:
             assert scheduler is not None
