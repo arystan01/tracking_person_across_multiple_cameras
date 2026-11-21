@@ -1103,10 +1103,6 @@ def test_real_cv_http_pipeline_renders_nvidia_route(
             is target.visible_at_interval_end
         )
         assert presentation["search_area_as_of"] is None
-        expected_layers = {"CAMERAS", "LAST_POSITION", "OBSERVED"}
-        if gap_transitions:
-            expected_layers.add("INFERRED")
-        assert set(presentation["shown_layers"]) == expected_layers
         assert view["estimate"]["zones_operator_display"] == "TECHNICAL_ONLY"
         route_map = view["rendered_route_maps"][0]
         route_response = main_http.get(
@@ -1140,7 +1136,10 @@ def test_real_cv_http_pipeline_renders_nvidia_route(
             if element.attrib.get("data-role") == "alternative-path"
         ]
         assert len(rendered_observed_paths) == len(observed_segments)
-        assert len(rendered_inferred_paths) == len(gap_transitions)
+        # Routing may retain an approximate GAP hypothesis whose walk-graph
+        # geometry fails the render-time endpoint-continuity check.  Such a
+        # path must stay hidden instead of drawing a corridor-crossing line.
+        assert len(rendered_inferred_paths) <= len(gap_transitions)
         assert not rendered_alternative_paths
         assert all(
             element.attrib.get("data-kind") == "GAP"
@@ -1154,6 +1153,10 @@ def test_real_cv_http_pipeline_renders_nvidia_route(
             and not element.attrib.get("stroke-dasharray")
             for element in rendered_observed_paths
         )
+        expected_layers = {"CAMERAS", "LAST_POSITION", "OBSERVED"}
+        if rendered_inferred_paths:
+            expected_layers.add("INFERRED")
+        assert set(presentation["shown_layers"]) == expected_layers
         visible_text = " ".join(
             text.strip()
             for text in svg_root.itertext()
@@ -1186,7 +1189,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route(
         assert "Last confirmed position" in visible_text
         assert (
             "Estimated between sightings" in visible_text
-        ) is bool(gap_transitions)
+        ) is bool(rendered_inferred_paths)
         assert "Possible area after last sighting" not in visible_text
 
         result_payloads = [
@@ -1215,7 +1218,7 @@ def test_real_cv_http_pipeline_renders_nvidia_route(
             ),
             "observed_distance_m": observed_distance_m,
             "observed_segment_count": len(observed_segments),
-            "gap_bridge_count": len(gap_transitions),
+            "gap_bridge_count": len(rendered_inferred_paths),
             "manual_checkpoint_median_error_m": median(checkpoint_errors_m),
             "manual_checkpoint_max_error_m": max(checkpoint_errors_m),
             "negative_checkpoint_min_distance_m": min(negative_distances_m),
