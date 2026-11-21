@@ -189,6 +189,48 @@ def test_archive_offset_includes_source_offset_and_file_uri_is_confined(source, 
             pass
 
 
+def test_archive_http_download_is_bounded_and_does_not_forward_token(tmp_path):
+    seen_media_authorization = None
+
+    def handler(request):
+        nonlocal seen_media_authorization
+        if request.url.path == '/v1/video-segments':
+            body = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    'request_id': body['request_id'],
+                    'camera_id': body['camera_id'],
+                    'availability': 'AVAILABLE',
+                    'requested_from': body['t_from'],
+                    'requested_to': body['t_to'],
+                    'covered_from': body['t_from'],
+                    'covered_to': body['t_to'],
+                    'coverage_ratio': 1.0,
+                    'source_ref': {
+                        'archive_id': 'recording-A',
+                        'uri': 'https://media.invalid/source.mp4',
+                    },
+                },
+            )
+        seen_media_authorization = request.headers.get('authorization')
+        return httpx.Response(200, content=b'x' * 11)
+
+    adapter = HttpClipArchive(
+        'http://archive',
+        'archive-secret',
+        archive_root=tmp_path,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    adapter.MAX_DOWNLOAD_BYTES = 10
+    with pytest.raises(ValueError, match='download limit'):
+        with adapter.segment(command(), tmp_path):
+            pass
+    assert seen_media_authorization is None
+    assert not (tmp_path / 'source.mp4').exists()
+    assert not (tmp_path / '.source.mp4.partial').exists()
+
+
 @pytest.mark.parametrize('case_id', ['../escape','a/b','.','..','a\\b',''])
 def test_unsafe_case_ids_rejected(case_id):
     with pytest.raises(ValueError):
@@ -346,3 +388,19 @@ def test_real_main_http_accepts_clip_cut_and_state(worker):
     app_system.manager._enqueue('case-1',OutboxTopic.CLIP_STATE,'state-test',{'command':state.model_dump(mode='json')})
     assert runner.run_once() == 1
     assert app_system.repository.get('case-1').clips[record.clip_id].state == 'CONFIRMED'
+    projected = app_system.manager.get_view('case-1').clips[0]
+    assert projected['url'] == f'/v1/cases/case-1/clips/{record.clip_id}'
+    assert 'artifact_ref' not in projected
+    assert 'object_key' not in json.dumps(projected)
+    login = http.post(
+        '/v1/auth/login',
+        json={'username': 'root', 'password': 'root-password-for-tests'},
+    )
+    assert login.status_code == 200
+    media = http.get(
+        projected['url'],
+        headers={'authorization': f"Bearer {login.json()['access_token']}"},
+    )
+    assert media.status_code == 200
+    assert media.headers['content-type'] == 'video/mp4'
+    assert hashlib.sha256(media.content).hexdigest() == record.artifact_ref.sha256

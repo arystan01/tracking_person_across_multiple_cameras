@@ -704,6 +704,49 @@ def create_app(
         require_permission(actor, "case.read")
         return manager.get_clips(case_id)
 
+    @app.get("/v1/cases/{case_id}/clips/{clip_id}")
+    async def clip_media(
+        case_id: str,
+        clip_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_clip_media(case_id, clip_id)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
+
+    @app.get("/v1/cases/{case_id}/export")
+    async def export_media(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_export_media(case_id)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
+
+    @app.get(
+        "/v1/cases/{case_id}/candidates/{candidate_id}/thumbnails/{index}"
+    )
+    async def candidate_thumbnail(
+        case_id: str,
+        candidate_id: str,
+        index: int,
+        actor: Actor = Depends(current_actor),
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_candidate_thumbnail(case_id, candidate_id, index)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
+
     @app.get("/v1/cases/{case_id}/live")
     async def live_stream(
         case_id: str, actor: Actor = Depends(current_actor)

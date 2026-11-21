@@ -2921,13 +2921,59 @@ class CaseManager:
         ]
 
     def get_clips(self, case_id: str) -> list[dict[str, Any]]:
+        return list(self.get_view(case_id).clips)
+
+    def get_clip_media(self, case_id: str, clip_id: str) -> tuple[bytes, str]:
         case = self.repository.get(case_id)
         if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
-            return []
-        return [
-            item.model_dump(mode="json")
-            for item in sorted(case.clips.values(), key=lambda value: value.clip_id)
-        ]
+            raise KeyError("clip is no longer available")
+        clip = case.clips.get(clip_id)
+        if clip is None or clip.status != ClipProcessingStatus.READY:
+            raise KeyError("clip is not available")
+        if clip.artifact_ref is None or clip.artifact_ref.object_key is None:
+            raise KeyError("clip has no product artifact")
+        data, mime_type = self.artifacts.get(clip.artifact_ref.object_key)
+        if clip.artifact_ref.sha256 is not None and hashlib.sha256(data).hexdigest() != clip.artifact_ref.sha256:
+            raise RuntimeError("stored clip checksum mismatch")
+        return data, mime_type
+
+    def get_export_media(self, case_id: str) -> tuple[bytes, str]:
+        case = self.repository.get(case_id)
+        if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
+            raise KeyError("export is no longer available")
+        if case.export_ref is None:
+            raise KeyError("export is not available")
+        export = ExportClipsResult.model_validate(case.export_ref)
+        if (
+            export.status != ClipProcessingStatus.READY
+            or export.artifact_ref is None
+            or export.artifact_ref.object_key is None
+        ):
+            raise KeyError("export is not available")
+        data, mime_type = self.artifacts.get(export.artifact_ref.object_key)
+        if export.artifact_ref.sha256 is not None and hashlib.sha256(data).hexdigest() != export.artifact_ref.sha256:
+            raise RuntimeError("stored export checksum mismatch")
+        return data, mime_type
+
+    def get_candidate_thumbnail(
+        self, case_id: str, candidate_id: str, index: int
+    ) -> tuple[bytes, str]:
+        case = self.repository.get(case_id)
+        if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
+            raise KeyError("candidate thumbnail is no longer available")
+        candidate = case.candidates.get(candidate_id)
+        tracklet = (
+            case.tracklets.get(str(candidate.get("tracklet_id", "")))
+            if candidate is not None
+            else None
+        )
+        paths = list(tracklet.get("crop_paths") or []) if tracklet else []
+        if index < 0 or index >= len(paths):
+            raise KeyError("candidate thumbnail is not available")
+        object_key = str(paths[index])
+        if not object_key.startswith(f"cases/{case_id}/"):
+            raise KeyError("candidate thumbnail is not a case artifact")
+        return self.artifacts.get(object_key)
 
     def get_route_svg(self, case_id: str, route_revision: int, floor_id: str) -> bytes:
         case = self.repository.get(case_id)
