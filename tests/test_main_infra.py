@@ -11,20 +11,25 @@ from javes_contracts import (
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
+    CreateLegalHoldBody,
     LastKnown,
     ProbeRequest,
     ProbeResult,
     ProbeStatus,
     ReviewDecisionBody,
+    RevokeDecisionBody,
+    ReleaseLegalHoldBody,
 )
 from javes_main.application import MetricsService
+from javes_main.application import ReplayEvidenceIncomplete
+from javes_main.application import audit_case_replay_ledger
 from javes_main.adapters import (
     FileArtifactStore,
     InMemoryLiveFeedStore,
     InMemorySiteConfig,
 )
 from javes_main.adapters.system import FixedClock
-from javes_main.domain import CaseLifecycle, JobState, ProbeResultRecord
+from javes_main.domain import CaseLifecycle, JobState, OutboxTopic, ProbeResultRecord
 from javes_main.persistence import RevisionConflict
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
@@ -503,6 +508,328 @@ def test_closed_case_discards_probes_returned_by_routing_defence_in_depth(
     assert reviewed.latest_route is not None
     assert reviewed.latest_route.step_result.probes == []
     assert [item.job_id for item in app.repository.list_jobs("case-1")] == jobs_before
+
+
+@pytest.mark.parametrize("decision", ["CONFIRM", "REJECT"])
+def test_decision_revoke_replays_immutable_evidence_and_allows_new_decision(decision):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key=f"revoke-{decision}-create")
+    app.scheduler.run_case_once("case-1")
+    view = app.manager.get_view("case-1")
+    candidate = view.candidates[0]
+    original = ReviewDecisionBody(
+        decision_id=f"original-{decision}",
+        candidate_id=candidate["candidate_id"],
+        tracklet_id=candidate["tracklet_id"],
+        decision=decision,
+        operator_id="operator-1",
+        occurred_at=BASE + timedelta(seconds=70),
+    )
+    app.manager.decide(
+        "case-1", original, idempotency_key=f"original-{decision}"
+    )
+    app.routing_dispatcher.drain()
+    app.outbox_dispatcher.drain()
+    route_before = app.manager.get_view("case-1").route_revision
+
+    revocation = RevokeDecisionBody(
+        revocation_id=f"revoke-{decision}",
+        decision_id=original.decision_id,
+        operator_id="operator-1",
+        reason="operator corrected the review",
+        occurred_at=BASE + timedelta(seconds=75),
+        expected_case_revision=app.repository.get("case-1").revision,
+    )
+    app.manager.revoke_decision(
+        "case-1", revocation, idempotency_key=f"revoke-{decision}"
+    )
+    app.routing_dispatcher.drain()
+    app.outbox_dispatcher.drain()
+
+    replayed = app.manager.get_view("case-1")
+    assert replayed.route_revision > route_before
+    history = app.manager.list_decisions("case-1")
+    assert len(history) == 1
+    assert history[0].active is False
+    assert history[0].revocation_id == revocation.revocation_id
+    assert history[0].revocation_reason == revocation.reason
+    assert any(
+        item["event_type"] == "ROUTING_REPLAYED"
+        for item in app.manager.get_events("case-1")
+    )
+    replay_runs = [
+        item
+        for item in app.repository.list_case_data(
+            "case-1", kinds={"ROUTING_RUN"}
+        )
+        if item.payload.get("trigger_type") == "DECISION_REVOKE"
+    ]
+    assert len(replay_runs) == 1
+
+    opposite = "REJECT" if decision == "CONFIRM" else "CONFIRM"
+    app.manager.decide(
+        "case-1",
+        ReviewDecisionBody(
+            decision_id=f"replacement-{opposite}",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision=opposite,
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ),
+        idempotency_key=f"replacement-{opposite}",
+    )
+    assert [item.active for item in app.manager.list_decisions("case-1")] == [
+        False,
+        True,
+    ]
+
+
+def test_closed_decision_revoke_preserves_terminal_state_and_has_no_new_jobs():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="closed-revoke-create")
+    app.scheduler.run_case_once("case-1")
+    candidate = app.manager.get_view("case-1").candidates[0]
+    app.manager.decide(
+        "case-1",
+        ReviewDecisionBody(
+            decision_id="closed-confirm",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=65),
+        ),
+        idempotency_key="closed-confirm",
+    )
+    app.routing_dispatcher.drain()
+    app.outbox_dispatcher.drain()
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="close-before-revoke",
+            action="CLOSE",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="close-before-revoke",
+    )
+    app.routing_dispatcher.drain()
+    before = app.repository.get("case-1")
+    closed_at = before.closed_at
+    retention_due_at = before.retention_due_at
+    job_ids = [item.job_id for item in app.repository.list_jobs("case-1")]
+    gallery_messages = [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == OutboxTopic.TARGET_GALLERY.value
+    ]
+
+    app.manager.revoke_decision(
+        "case-1",
+        RevokeDecisionBody(
+            revocation_id="closed-revoke",
+            decision_id="closed-confirm",
+            operator_id="operator-1",
+            reason="closed-case correction",
+            occurred_at=BASE + timedelta(seconds=80),
+            expected_case_revision=before.revision,
+        ),
+        idempotency_key="closed-revoke",
+    )
+    app.routing_dispatcher.drain()
+    after = app.repository.get("case-1")
+    assert after.lifecycle == CaseLifecycle.CLOSED
+    assert after.closed_at == closed_at
+    assert after.retention_due_at == retention_due_at
+    assert after.next_heartbeat_at is None
+    assert after.live_feed is None
+    assert after.latest_route is not None
+    assert after.latest_route.step_result.mode.value == "PAST_SUMMARY"
+    assert after.latest_route.step_result.probes == []
+    assert [item.job_id for item in app.repository.list_jobs("case-1")] == job_ids
+    assert [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == OutboxTopic.TARGET_GALLERY.value
+    ] == gallery_messages
+
+
+def test_decision_revoke_fails_closed_without_complete_replay_ledger():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="legacy-revoke-create")
+    app.scheduler.run_case_once("case-1")
+    candidate = app.manager.get_view("case-1").candidates[0]
+    app.manager.decide(
+        "case-1",
+        ReviewDecisionBody(
+            decision_id="legacy-decision",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="REJECT",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="legacy-decision",
+    )
+    case = app.repository.get("case-1")
+    expected = case.revision
+    case.replay_capability = "INCOMPLETE"
+    app.repository.save(case, expected)
+    revision = app.repository.get("case-1").revision
+    with pytest.raises(ReplayEvidenceIncomplete, match="replay_evidence_incomplete"):
+        app.manager.revoke_decision(
+            "case-1",
+            RevokeDecisionBody(
+                revocation_id="unsafe-revoke",
+                decision_id="legacy-decision",
+                operator_id="operator-1",
+                reason="must not guess",
+                occurred_at=BASE + timedelta(seconds=75),
+                expected_case_revision=revision,
+            ),
+            idempotency_key="unsafe-revoke",
+        )
+    assert app.repository.get("case-1").revision == revision
+    assert app.manager.list_decisions("case-1")[0].active is True
+
+
+def test_legacy_replay_ledger_backfill_requires_complete_persisted_triggers():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="ledger-backfill-create")
+    app.scheduler.run_case_once("case-1")
+    for key in list(app.repository._case_data):
+        if key[0] == "case-1" and key[1] == "ROUTING_INPUT":
+            del app.repository._case_data[key]
+    case = app.repository.get("case-1")
+    expected = case.revision
+    case.replay_capability = "INCOMPLETE"
+    app.repository.save(case, expected)
+
+    dry_run = audit_case_replay_ledger(
+        app.repository, app.repository.get("case-1"), migrate=False
+    )
+    assert dry_run["complete"] is True
+    assert dry_run["backfillable"] == dry_run["routing_runs"] > 0
+    assert dry_run["migrated"] == 0
+
+    migrated = audit_case_replay_ledger(
+        app.repository, app.repository.get("case-1"), migrate=True
+    )
+    assert migrated["migrated"] == migrated["routing_runs"]
+    assert app.repository.get("case-1").replay_capability == "COMPLETE"
+
+
+def test_case_delete_waits_for_all_legal_holds_and_resumes_after_last_release():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="legal-hold-create")
+    app.scheduler.run_case_once("case-1")
+    for index in (1, 2):
+        revision = app.repository.get("case-1").revision
+        app.manager.set_legal_hold(
+            "case-1",
+            CreateLegalHoldBody(
+                hold_id=f"hold-{index}",
+                external_ticket_id=f"LEGAL-{index}",
+                reason="preserve evidence for investigation",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=70 + index),
+                expected_case_revision=revision,
+            ),
+            idempotency_key=f"hold-{index}",
+        )
+        app.outbox_dispatcher.drain()
+    assert app.retention_worker.active_holds["case-1"] == {"hold-1", "hold-2"}
+
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="delete-under-hold",
+            action="DELETE",
+            operator_id="root-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ),
+        idempotency_key="delete-under-hold",
+    )
+    app.outbox_dispatcher.drain()
+    blocked = app.repository.get("case-1")
+    assert blocked.lifecycle == CaseLifecycle.DELETE_REQUESTED
+    assert blocked.content_redacted is False
+    assert blocked.pending_retention_action == "DELETE_CASE"
+    assert not any(
+        item.topic == OutboxTopic.RETENTION_COMMAND.value
+        and item.payload.get("command", {}).get("action") == "DELETE_CASE"
+        for item in app.repository.list_outbox(case_id="case-1")
+    )
+    assert any(
+        event["event_type"] == "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD"
+        for event in app.manager.get_events("case-1")
+    )
+
+    for index in (1, 2):
+        current = app.repository.get("case-1")
+        app.manager.release_legal_hold(
+            "case-1",
+            ReleaseLegalHoldBody(
+                release_id=f"release-{index}",
+                hold_id=f"hold-{index}",
+                external_ticket_id=f"LEGAL-{index}",
+                reason="legal approved release",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=90 + index),
+                expected_case_revision=current.revision,
+            ),
+            idempotency_key=f"release-{index}",
+        )
+        app.outbox_dispatcher.drain()
+        if index == 1:
+            assert app.repository.get("case-1").lifecycle == CaseLifecycle.DELETE_REQUESTED
+
+    deleted = app.repository.get("case-1")
+    assert deleted.lifecycle == CaseLifecycle.DELETED
+    assert deleted.content_redacted is True
+    holds = app.manager.list_legal_holds("case-1")
+    assert [item.active for item in holds] == [False, False]
+    assert all(not item.release_pending for item in holds)
+    events = app.manager.get_events("case-1")
+    assert sum(item["event_type"] == "LEGAL_HOLD_SET" for item in events) == 2
+    assert sum(item["event_type"] == "LEGAL_HOLD_RELEASED" for item in events) == 2
+
+
+def test_legal_hold_cannot_race_an_existing_delete_request():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="delete-race-create")
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="delete-before-hold",
+            action="DELETE",
+            operator_id="root-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="delete-before-hold",
+    )
+    revision = app.repository.get("case-1").revision
+
+    with pytest.raises(ValueError, match="after deletion was requested"):
+        app.manager.set_legal_hold(
+            "case-1",
+            CreateLegalHoldBody(
+                hold_id="too-late-hold",
+                external_ticket_id="LEGAL-LATE",
+                reason="request arrived after destructive workflow started",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=71),
+                expected_case_revision=revision,
+            ),
+            idempotency_key="too-late-hold",
+        )
+
+    assert any(
+        event["event_type"] == "LEGAL_HOLD_SET_DENIED"
+        and event["payload"]["reason"] == "deletion_requested"
+        for event in app.manager.get_events("case-1")
+    )
 
 
 def test_repository_optimistic_revision_check():

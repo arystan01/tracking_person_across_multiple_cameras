@@ -16,6 +16,12 @@ test = [
   "sqlalchemy>=2,<3",
   "alembic>=1.13,<2",
   "httpx>=0.27,<1",
+  "opentelemetry-sdk>=1.28,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.28,<2",
+  "opentelemetry-instrumentation-fastapi>=0.49b0,<1",
+  "opentelemetry-instrumentation-httpx>=0.49b0,<1",
+  "opentelemetry-instrumentation-logging>=0.49b0,<1",
+  "protobuf<7",
 ]
 infra = [
   "fastapi>=0.115,<1",
@@ -24,6 +30,12 @@ infra = [
   "alembic>=1.13,<2",
   "httpx>=0.27,<1",
   "psycopg[binary]>=3.2,<4",
+  "opentelemetry-sdk>=1.28,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.28,<2",
+  "opentelemetry-instrumentation-fastapi>=0.49b0,<1",
+  "opentelemetry-instrumentation-httpx>=0.49b0,<1",
+  "opentelemetry-instrumentation-logging>=0.49b0,<1",
+  "protobuf<7",
 ]
 
 perception = [
@@ -43,6 +55,10 @@ javes-routing-calibrate = "javes_routing.service.timing_calibration:main"
 javes-routing-shadow = "javes_routing.service.shadow_benchmark:main"
 javes-main-migrate = "javes_main.persistence.migrate:main"
 javes-main-backup = "javes_main.persistence.backup:main"
+javes-main-replay-audit = "javes_main.replay_audit:main"
+javes-main-audit-export = "javes_main.application.audit_export_cli:main"
+javes-main-incident-snapshot = "javes_main.application.incident_snapshot_cli:main"
+javes-token-rotation = "javes_security.cli:main"
 javes-main-bootstrap-root = "javes_main.application.auth_cli:main"
 javes-contract-schemas = "javes_contracts.schema:main"
 javes-contract-bundle = "javes_contracts.bundle:main"
@@ -54,6 +70,7 @@ javes-main-dlq = "javes_main.application.dlq_cli:main"
 javes-routing-api = "javes_routing.service.cli:main"
 javes-site-config-api = "javes_site_config.cli:main"
 javes-site-config-publish = "javes_site_config.publisher_cli:main"
+javes-site-config-nvidia = "javes_site_config.nvidia_cli:main"
 javes-perception-worker = "javes_perception.runtime.worker_cli:main"
 javes-retention-worker = "javes_retention.runtime.worker_cli:main"
 javes-clip-worker = "javes_clip.worker_cli:main"
@@ -62,7 +79,7 @@ javes-nvidia-archive-inspect = "javes_archive.cli:inspect_main"
 javes-nvidia-acceptance = "javes_release.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*"]
+include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*", "javes_telemetry*", "javes_security*"]
 
 [tool.setuptools.package-data]
 "javes_main.persistence.migrations" = ["script.py.mako"]

@@ -11,15 +11,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from javes_contracts import (
     Anchors,
     CaseLifecycle,
-    CaseSummary,
-    CaseView,
+    CaseSummary as CaseSummary,
+    CaseView as CaseView,
     ClipRecord,
     CreateCaseBody,
     LiveFeedUpdate,
     PerceptionProbeJob,
     ProbeResult,
     RenderedRouteBundle,
-    RouteMapView,
+    RouteMapView as RouteMapView,
     SearchState,
     StepResult,
 )
@@ -70,16 +70,21 @@ class OutboxTopic(str, Enum):
     CLIP_EXPORT = "CLIP_EXPORT"
     RETENTION_REGISTER = "RETENTION_REGISTER"
     RETENTION_COMMAND = "RETENTION_COMMAND"
+    RETENTION_HOLD = "RETENTION_HOLD"
 
 
 class CaseDataKind(str, Enum):
     ROUTING_STATE = "ROUTING_STATE"
     ROUTING_RUN = "ROUTING_RUN"
+    ROUTING_INPUT = "ROUTING_INPUT"
     ROUTE_REVISION = "ROUTE_REVISION"
     PROBE_REQUEST = "PROBE_REQUEST"
     TRACKLET = "TRACKLET"
     CANDIDATE = "CANDIDATE"
     OPERATOR_DECISION = "OPERATOR_DECISION"
+    OPERATOR_DECISION_REVOCATION = "OPERATOR_DECISION_REVOCATION"
+    LEGAL_HOLD = "LEGAL_HOLD"
+    LEGAL_HOLD_RELEASE = "LEGAL_HOLD_RELEASE"
     ARTIFACT = "ARTIFACT"
 
 
@@ -181,6 +186,26 @@ class AuditEvent(DomainModel):
     @classmethod
     def _aware(cls, value: datetime) -> datetime:
         return _utc(value)  # type: ignore[return-value]
+
+
+class LegalHoldRecord(DomainModel):
+    hold_id: str
+    case_id: str
+    external_ticket_id: str
+    reason: str
+    set_by: str
+    set_at: datetime
+    active: bool = True
+    release_pending: bool = False
+    released_by: str | None = None
+    released_at: datetime | None = None
+    release_id: str | None = None
+    release_reason: str | None = None
+
+    @field_validator("set_at", "released_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return _utc(value)
 
 
 class JobRecord(DomainModel):
@@ -300,6 +325,9 @@ class CaseRecord(DomainModel):
     deleted_at: datetime | None = None
     next_heartbeat_at: datetime | None = None
     content_redacted: bool = False
+    replay_capability: str = "INCOMPLETE"
+    legal_holds: dict[str, LegalHoldRecord] = Field(default_factory=dict)
+    pending_retention_action: str | None = None
 
     @field_validator(
         "created_at",

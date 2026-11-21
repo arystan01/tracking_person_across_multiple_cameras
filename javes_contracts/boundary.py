@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, RootModel, field_validator, model_validator
 
 from .routing import ContractModel, MapPosition, ProbeRequest
 
@@ -49,6 +49,75 @@ class ProblemDetails(ContractModel):
     retryable: bool = False
     request_id: str | None = None
     errors: list[dict[str, Any]] | None = None
+
+
+class ServiceHealthResponse(ContractModel):
+    """Common live/ready payload; service-specific readiness facts are additive."""
+
+    status: Literal["ok", "ready"]
+    telemetry: str | None = None
+    cameras: int | None = Field(default=None, ge=0)
+    manifest_checksum: str | None = None
+
+
+class RotationKeyStatus(ContractModel):
+    current_key_id: str
+    previous_key_id: str | None = None
+    previous_valid_until: datetime | None = None
+    previous_accepted: bool = False
+
+    @field_validator("previous_valid_until", mode="after")
+    @classmethod
+    def _aware_deadline(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+
+class RotationStatusResponse(RootModel[dict[str, RotationKeyStatus]]):
+    pass
+
+
+class AuditExportRequest(ContractModel):
+    export_id: str = Field(
+        min_length=1, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    )
+    from_time: datetime | None = None
+    to_time: datetime | None = None
+    case_ids: list[str] = Field(default_factory=list, max_length=100)
+    actor_ids: list[str] = Field(default_factory=list, max_length=100)
+    event_types: list[str] = Field(default_factory=list, max_length=100)
+    page_size: int = Field(default=500, ge=1, le=2000)
+
+    @field_validator("from_time", "to_time", mode="after")
+    @classmethod
+    def _aware_filter_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+    @model_validator(mode="after")
+    def _ordered_filter(self) -> AuditExportRequest:
+        if self.from_time and self.to_time and self.to_time < self.from_time:
+            raise ValueError("audit export to_time must not precede from_time")
+        return self
+
+
+class AuditExportManifest(ContractModel):
+    format: Literal["javes-audit-export.v1"] = "javes-audit-export.v1"
+    export_id: str
+    created_at: datetime
+    created_by: str
+    filters: dict[str, Any]
+    row_count: int = Field(ge=0)
+    first_event_id: str | None = None
+    last_event_id: str | None = None
+    schema_version: Literal["javes-audit-event.v1"] = "javes-audit-event.v1"
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    events_url: str
+    manifest_url: str
+
+    @field_validator("created_at", mode="after")
+    @classmethod
+    def _aware_created(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
 
 
 class ActorView(ContractModel):
@@ -163,9 +232,11 @@ class TargetGalleryCommand(ContractModel):
     contract_version: Literal["target-gallery.v1"] = "target-gallery.v1"
     command_id: str
     case_id: str
-    source: Literal["reference", "confirmed_tracklet"]
+    source: Literal["reference", "confirmed_tracklet", "rebuild"]
     image_ref: ArtifactRef | None = None
     tracklet_id: str | None = None
+    tracklet_ids: list[str] = Field(default_factory=list)
+    base_gallery_ref: str | None = None
     model_version: str = "osnet_ain_x1_0_msmt17"
 
     @model_validator(mode="after")
@@ -174,6 +245,9 @@ class TargetGalleryCommand(ContractModel):
             raise ValueError("reference gallery command requires image_ref")
         if self.source == "confirmed_tracklet" and not self.tracklet_id:
             raise ValueError("confirmed_tracklet command requires tracklet_id")
+        if self.source == "rebuild" and self.image_ref is None:
+            raise ValueError("rebuild gallery command requires image_ref")
+        self.tracklet_ids = sorted(set(self.tracklet_ids))
         return self
 
 
@@ -263,6 +337,8 @@ class ClipRecord(ContractModel):
     @classmethod
     def _aware_times(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
 class ClipStateCommand(ContractModel):
     contract_version: Literal["clip-state-command.v1"] = "clip-state-command.v1"
     command_id: str
@@ -276,6 +352,7 @@ class ClipStateCommand(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
 
 class ExportClipsCommand(ContractModel):
     contract_version: Literal["clip-export.v1"] = "clip-export.v1"
@@ -373,6 +450,7 @@ class RetentionResult(ContractModel):
     action: Literal["CLOSE_CASE", "DELETE_CASE", "TTL_EXPIRED"]
     deleted_resource_ids: list[str] = Field(default_factory=list)
     preserved_resource_ids: list[str] = Field(default_factory=list)
+    held_resource_ids: list[str] = Field(default_factory=list)
     audit_tombstone_id: str
     receipts: list[RetentionDeletionReceipt] = Field(default_factory=list)
 
@@ -392,6 +470,105 @@ class RetentionResult(ContractModel):
                 "every deleted resource requires terminal physical deletion proof"
             )
         return self
+
+
+class RetentionHoldCommand(ContractModel):
+    contract_version: Literal["retention-hold-command.v1"] = "retention-hold-command.v1"
+    command_id: str
+    case_id: str
+    hold_id: str
+    action: Literal["SET", "RELEASE"]
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    actor_id: str
+    occurred_at: datetime
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class RetentionHoldResult(ContractModel):
+    contract_version: Literal["retention-hold-result.v1"] = "retention-hold-result.v1"
+    command_id: str
+    case_id: str
+    hold_id: str
+    action: Literal["SET", "RELEASE"]
+    active_hold_ids: list[str] = Field(default_factory=list)
+
+
+class CreateLegalHoldBody(ContractModel):
+    hold_id: str
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    operator_id: str
+    occurred_at: datetime
+    expected_case_revision: int = Field(ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class ReleaseLegalHoldBody(ContractModel):
+    release_id: str
+    hold_id: str
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    operator_id: str
+    occurred_at: datetime
+    expected_case_revision: int = Field(ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class LegalHoldView(ContractModel):
+    hold_id: str
+    case_id: str
+    external_ticket_id: str
+    reason: str
+    set_by: str
+    set_at: datetime
+    active: bool = True
+    release_pending: bool = False
+    released_by: str | None = None
+    released_at: datetime | None = None
+    release_id: str | None = None
+    release_reason: str | None = None
+
+    @field_validator("set_at", "released_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
 
 
 class CaseWindow(ContractModel):
@@ -468,6 +645,48 @@ class ReviewDecisionBody(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
+class RevokeDecisionBody(ContractModel):
+    revocation_id: str
+    decision_id: str
+    operator_id: str
+    reason: str = Field(min_length=1, max_length=1000)
+    occurred_at: datetime
+    expected_case_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def _non_blank_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("revocation reason must not be blank")
+        return value
+
+
+class DecisionRecordView(ContractModel):
+    decision_id: str
+    candidate_id: str
+    tracklet_id: str
+    decision: Literal["CONFIRM", "REJECT"]
+    operator_id: str
+    occurred_at: datetime
+    active: bool = True
+    revocation_id: str | None = None
+    revoked_by: str | None = None
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
+    resulting_route_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("occurred_at", "revoked_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
 
 
 class CaseCommandBody(ContractModel):

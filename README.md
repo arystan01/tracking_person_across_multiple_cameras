@@ -13,7 +13,9 @@ the artifact directory, CCTV Archive, Perception, or Routing directly.
 1. Authenticate with `POST /v1/auth/login`. There is no public signup.
 2. Create and inspect cases with `/v1/cases` and `/v1/cases/{case_id}/view`.
 3. Submit operator decisions and close/export/delete commands with an
-   `idempotency-key` header.
+   `idempotency-key` header. Decision history is available from
+   `/v1/cases/{case_id}/decisions`; changing a decision is an explicit revoke
+   followed by a new decision, never an in-place mutation.
 4. Render `rendered_route_maps[].url` as an image. Routing owns the route
    geometry and SVG; Dashboard only selects a floor and displays it.
 5. Display `mode`, `estimate`, alternatives, candidates, clips, progress,
@@ -53,8 +55,8 @@ not import `javes_main` internals.
    token and a stable `worker_id`.
 2. Process `CLIP_CUT`, `CLIP_STATE`, and `CLIP_EXPORT` payloads using the public
    models in `javes_contracts`.
-3. Read source footage from the external read-only CCTV Archive API. Never ask
-   Main or Retention to delete an `archive_id`.
+3. Read source footage from the read-only NVIDIA Archive API. Never ask Main or
+   Retention to delete an `archive_id`.
 4. Write output atomically below `cases/{case_id}/...` in the shared private
    artifact filesystem.
 5. Return a `ClipRecord` or `ExportClipsResult` plus an
@@ -95,11 +97,43 @@ Main owns case state, durable Perception jobs, transactional outbox messages,
 Routing triggers, optimistic case revisions, idempotency records, and permanent
 append-only security audit. Routing remains pure below its HTTP shell. Site
 Config exposes only exact immutable versions; `latest` is not an API concept.
+Operator decisions are append-only. Revoke rebuilds Routing deterministically
+from the immutable input ledger and cannot reopen a closed search.
 
 There is no cloud object store. Binary component results are exchanged as
 `object_key` manifests, not uploaded in API bodies. Case-owned content is
 retained for 14 calendar days after close; complete security audit is kept
-indefinitely. CCTV Archive is external and read-only.
+indefinitely. The agreed final product scope uses the tracked NVIDIA
+`mtmc_12cam` videos through the read-only NVIDIA Archive service; a vendor CCTV
+integration and cloud storage are not release requirements.
+
+## Root/admin and operations
+
+Only `ROOT` has `case.legal_hold.manage` and `audit.export` by default. A legal
+hold requires a unique hold ID, external ticket, reason, actor, timestamp,
+idempotency key and expected case revision. Multiple holds may coexist. Delete
+and TTL work remains paused until the last hold is released; a hold cannot be
+added after deletion has already been requested.
+
+Audit exports are ordered redacted NDJSON plus a SHA-256/size manifest. Export
+artifacts use the permanent `AUDIT` retention class. Service and worker tokens
+support a bounded current/previous rotation window; readiness rejects expired
+overlap or development defaults. Operational commands include:
+
+```bash
+javes-main-audit-export --help
+javes-token-rotation --help
+javes-main-backup --help
+javes-main-incident-snapshot --help
+```
+
+OpenTelemetry traces, metrics and redacted logs are enabled with
+`JAVES_OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT`. Invalid enabled
+configuration fails startup/readiness instead of silently disabling export.
+The versioned staging topology is under `deploy/staging/`; it contains
+PostgreSQL, the API/scheduler/services/workers, shared artifact storage, NVIDIA
+Archive and an OTel backend. It deliberately does not pretend that the current
+unavailable Clip runner is a real media worker.
 
 ## Internal APIs
 
@@ -172,6 +206,11 @@ CI keeps fast contract/unit tests and the real-CV job separate. The real-CV job
 is available through manual workflow dispatch because model execution is much
 heavier than the normal test suite.
 
+Release evidence is accepted only through `javes-nvidia-acceptance` v2. Every
+referenced dataset/site/params/model/report file is confined to the bundle
+root, opened, size-checked, SHA-256 checked and schema-checked where applicable.
+Recorded hashes without readable bytes cannot produce `PASS`.
+
 ## Configuration and start order
 
 Site Config uses this filesystem layout:
@@ -187,6 +226,8 @@ Start the services in dependency order:
 
 ```bash
 javes-site-config-api --root "$SITE_CONFIG_ROOT" --token "$SITE_TOKEN"
+javes-nvidia-archive-api --root data/nvidia_mtmc/mtmc_12cam \
+  --token "$ARCHIVE_TOKEN" --verify
 javes-routing-api --site-config-url http://127.0.0.1:8082 \
   --site-config-token "$SITE_TOKEN" --token "$ROUTING_TOKEN"
 
@@ -210,7 +251,7 @@ javes-perception-worker --main-url http://127.0.0.1:8080 \
   --token "$PERCEPTION_TOKEN" --worker-id perception-1 \
   --config perception.yaml --artifact-root "$JAVES_ARTIFACT_ROOT" \
   --state-db perception-state.sqlite \
-  --archive-url "$CCTV_ARCHIVE_URL" --archive-token "$CCTV_ARCHIVE_TOKEN"
+  --archive-url "$NVIDIA_ARCHIVE_URL" --archive-token "$ARCHIVE_TOKEN"
 
 javes-retention-worker --main-url http://127.0.0.1:8080 \
   --token "$RETENTION_TOKEN" --worker-id retention-1 \
@@ -223,6 +264,12 @@ javes-clip-worker --main-url http://127.0.0.1:8080 \
 Run API and scheduler as separate processes against the same migrated database.
 Production composition is API-first. Deterministic doubles and in-memory
 assembly helpers live only under `tests/support`.
+
+The final product is not release-ready yet: real-CV quality remains below its
+12/12 identity/trajectory gates, the replacement Dashboard is pending, and the
+real Clip media worker is not implemented. `javes-boundary.v1` remains blocked
+until those two consumers pass their contract suites; current contracts are
+`v1alpha1`.
 
 ## Perception
 

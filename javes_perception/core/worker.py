@@ -293,21 +293,63 @@ class PerceptionWorker:
         if command.source == "reference":
             source_id = command.image_ref.identity()
             vector = self._embed_reference(command)
-        else:
+            sources = self._load_sources(command.case_id)
+            if source_id not in sources:
+                sources[source_id] = vector
+        elif command.source == "confirmed_tracklet":
             source_id = f"tracklet:{command.tracklet_id}"
             data, _ = self.artifacts.get(self._embedding_key(command.case_id, command.tracklet_id))
             vector = _from_npy(data)
+            if command.base_gallery_ref:
+                data, _ = self.artifacts.get(command.base_gallery_ref)
+                base = _from_npy(data)
+                matrix = np.concatenate([base, vector.reshape(1, -1)], axis=0)
+                names = [command.base_gallery_ref, source_id]
+                sources = {}
+            else:
+                sources = self._load_sources(command.case_id)
+                if source_id not in sources:
+                    sources[source_id] = vector
+        else:
+            sources = {
+                command.image_ref.identity(): self._embed_reference(command),
+            }
+            for tracklet_id in command.tracklet_ids:
+                data, _ = self.artifacts.get(
+                    self._embedding_key(command.case_id, tracklet_id)
+                )
+                sources[f"tracklet:{tracklet_id}"] = _from_npy(data)
+            self._gallery_sources[command.case_id] = dict(sources)
 
-        sources = self._load_sources(command.case_id)
-        if source_id not in sources:
-            sources[source_id] = vector
-            buffer = io.BytesIO()
-            np.savez(buffer, name=np.array(source_id), vector=vector.astype(np.float32))
-            key = f"cases/{command.case_id}/perception/gallery/sources/{len(sources) - 1:04d}.npz"
-            self.artifacts.put(key, buffer.getvalue(), "application/x-npz")
-        names = sorted(sources)
-        gallery_id = _stable_id("gallery", command.case_id, command.model_version, *names)
-        matrix = np.stack([sources[name] for name in names])
+        if command.source != "confirmed_tracklet" or not command.base_gallery_ref:
+            # Persist source vectors for compatibility with standalone workers.
+            # Rebuild commands intentionally replace the in-memory active set;
+            # the authoritative follow-up path uses base_gallery_ref and cannot
+            # resurrect an older, revoked source after restart.
+            for index, (name, saved_vector) in enumerate(sorted(sources.items())):
+                buffer = io.BytesIO()
+                np.savez(
+                    buffer,
+                    name=np.array(name),
+                    vector=saved_vector.astype(np.float32),
+                )
+                key = (
+                    f"cases/{command.case_id}/perception/gallery/sources/"
+                    f"{command.command_id}/{index:04d}.npz"
+                )
+                self._put(key, buffer.getvalue(), "application/x-npz")
+                if command.source != "rebuild":
+                    legacy_key = (
+                        f"cases/{command.case_id}/perception/gallery/sources/"
+                        f"{index:04d}.npz"
+                    )
+                    self._put(legacy_key, buffer.getvalue(), "application/x-npz")
+        if command.source != "confirmed_tracklet" or not command.base_gallery_ref:
+            names = sorted(sources)
+            matrix = np.stack([sources[name] for name in names])
+        gallery_id = _stable_id(
+            "gallery", command.case_id, command.model_version, *names
+        )
         gallery_ref = self._gallery_key(command.case_id, gallery_id)
         self._galleries[gallery_ref] = matrix
         self._put(gallery_ref, _to_npy(matrix), "application/x-npy")
@@ -315,7 +357,7 @@ class PerceptionWorker:
             command_id=command.command_id,
             case_id=command.case_id,
             gallery_ref=gallery_ref,
-            source_count=len(names),
+            source_count=int(matrix.shape[0]),
             model_version=command.model_version,
         )
         self._gallery_commands[command.command_id] = (fingerprint, result)

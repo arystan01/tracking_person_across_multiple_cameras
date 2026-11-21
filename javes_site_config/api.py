@@ -1,17 +1,30 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Iterable
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .registry import FilesystemSiteConfigRegistry
+from javes_contracts import ServiceHealthResponse
+from javes_telemetry import current_runtime, instrument_fastapi
+from javes_security import RotationConfigurationError, RotationWindow
 
 
 def create_site_config_app(
-    registry: FilesystemSiteConfigRegistry, *, service_token: str
+    registry: FilesystemSiteConfigRegistry,
+    *,
+    service_token: str | Iterable[str] | RotationWindow,
 ) -> FastAPI:
-    if not service_token:
+    accepted_tokens = (
+        service_token.accepted()
+        if isinstance(service_token, RotationWindow)
+        else (
+            (service_token,) if isinstance(service_token, str) else tuple(service_token)
+        )
+    )
+    if not accepted_tokens:
         raise ValueError("Site Config service token is required")
     app = FastAPI(title="JAVES-AI Site Config", version="1.0.0")
 
@@ -28,6 +41,11 @@ def create_site_config_app(
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     def authorise(authorization: str | None, x_service_token: str | None) -> None:
+        tokens = (
+            service_token.accepted()
+            if isinstance(service_token, RotationWindow)
+            else accepted_tokens
+        )
         bearer = (
             authorization[7:].strip()
             if authorization and authorization.lower().startswith("bearer ")
@@ -35,14 +53,36 @@ def create_site_config_app(
         )
         if not any(
             candidate is not None
-            and secrets.compare_digest(candidate, service_token)
+            and any(secrets.compare_digest(candidate, token) for token in tokens)
             for candidate in (bearer, x_service_token)
         ):
             raise HTTPException(status_code=401, detail="valid service token required")
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def live() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get(
+        "/health/ready",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
+    async def ready() -> dict[str, str]:
+        healthy, status = current_runtime().readiness()
+        if not healthy:
+            raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        if isinstance(service_token, RotationWindow):
+            try:
+                service_token.require_ready()
+            except RotationConfigurationError as exc:
+                raise HTTPException(
+                    status_code=503, detail="token rotation is invalid"
+                ) from exc
+        return {"status": "ready", "telemetry": status}
 
     @app.get("/internal/v1/sites/{site_id}/versions/{version}")
     async def get_site(
@@ -79,4 +119,5 @@ def create_site_config_app(
         authorise(authorization, x_service_token)
         return registry.params(version)
 
+    instrument_fastapi(app)
     return app

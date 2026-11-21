@@ -21,6 +21,13 @@ PROBLEM_POLICIES: dict[str, ProblemPolicy] = {
         ProblemPolicy(
             "revision-conflict", "REVISION_CONFLICT", 409, True, "reload-and-retry"
         ),
+        ProblemPolicy(
+            "replay-evidence-incomplete",
+            "REPLAY_EVIDENCE_INCOMPLETE",
+            409,
+            False,
+            "disable-revoke-for-case",
+        ),
         ProblemPolicy("worker-lease", "WORKER_LEASE_INVALID", 409, True, "reclaim"),
         ProblemPolicy("conflict", "CONFLICT", 409, False, "operator-or-new-command"),
         ProblemPolicy("authentication", "AUTHENTICATION_REQUIRED", 401, False, "login"),
@@ -28,7 +35,11 @@ PROBLEM_POLICIES: dict[str, ProblemPolicy] = {
         ProblemPolicy("validation", "VALIDATION_FAILED", 422, False, "fix-request"),
         ProblemPolicy("timeout", "UPSTREAM_TIMEOUT", 504, True, "retry-with-backoff"),
         ProblemPolicy(
-            "service-unavailable", "SERVICE_UNAVAILABLE", 503, True, "retry-with-backoff"
+            "service-unavailable",
+            "SERVICE_UNAVAILABLE",
+            503,
+            True,
+            "retry-with-backoff",
         ),
         ProblemPolicy("rate-limit", "RATE_LIMITED", 429, True, "retry-after"),
         ProblemPolicy("internal", "INTERNAL_ERROR", 500, True, "retry-with-backoff"),
@@ -60,8 +71,6 @@ def conventions_document() -> dict:
         "release_blockers": [
             "dashboard-contract-tests",
             "clip-worker-contract-tests",
-            "operator-decision-revoke-semantics",
-            "legal-hold-authority",
         ],
         "timestamps": {
             "wire_format": "RFC3339",
@@ -79,6 +88,16 @@ def conventions_document() -> dict:
                 "heartbeat cancel_requested=true is terminal for new work; a worker may "
                 "return a cancellation acknowledgement but must not publish later artifacts"
             ),
+        },
+        "operator_decisions": {
+            "revoke": "immutable revocation followed by deterministic evidence replay",
+            "revoke_idempotency": "revocation_id plus Idempotency-Key",
+            "closed_case": "replay may revise route but must not restart search",
+        },
+        "legal_hold": {
+            "authority": "ROOT with case.legal_hold.manage",
+            "external_ticket_id": "required for set and release",
+            "retention": "deletion remains paused until the final active hold is released",
         },
         "id_ownership": {
             "case_id": "Controls client; made immutable by Main",

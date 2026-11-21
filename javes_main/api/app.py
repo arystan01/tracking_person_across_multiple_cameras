@@ -3,18 +3,27 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from javes_contracts import (
+    AuditExportManifest,
+    AuditExportRequest,
     CaseCommandBody,
     CreateCaseBody,
+    CreateLegalHoldBody,
+    LegalHoldView,
     LiveFeedUpdate,
     ProblemDetails,
     ProbeResult,
+    RevokeDecisionBody,
+    ReleaseLegalHoldBody,
+    ServiceHealthResponse,
+    RotationStatusResponse,
+    DecisionRecordView,
     ReviewDecisionBody,
     WorkerClaimRequest,
     WorkerClaimResponse,
@@ -27,11 +36,13 @@ from javes_contracts import (
 from javes_contracts.conventions import classify_problem
 from javes_main.application import (
     Actor,
+    AuditExportService,
     AuthenticationError,
     AuthorizationError,
     AuthService,
     CaseManager,
     MetricsService,
+    ReplayEvidenceIncomplete,
     LeaseError,
     WorkerTaskService,
 )
@@ -54,11 +65,22 @@ from .auth import (
     user_view,
 )
 from .middleware import install_boundary_middleware
+from javes_telemetry import (
+    current_runtime,
+    instrument_fastapi,
+    operation,
+    record_counter,
+)
+from javes_security import RotationWindow
 
 
-async def _idempotency(value: str | None = Header(default=None, alias="idempotency-key")) -> str:
+async def _idempotency(
+    value: str | None = Header(default=None, alias="idempotency-key")
+) -> str:
     if not value or not value.strip():
-        raise HTTPException(status_code=400, detail="idempotency-key header is required")
+        raise HTTPException(
+            status_code=400, detail="idempotency-key header is required"
+        )
     value = value.strip()
     if len(value) > 200:
         raise HTTPException(status_code=400, detail="idempotency-key is too long")
@@ -71,11 +93,14 @@ def create_app(
     auth: AuthService,
     scheduler: SchedulerRunner | None = None,
     run_fake_jobs_inline: bool = False,
-    worker_tokens: dict[str, str | Iterable[str]] | None = None,
+    worker_tokens: dict[str, str | Iterable[str] | RotationWindow] | None = None,
     worker_lease_secret: str | None = None,
+    worker_lease_secret_previous: str | None = None,
+    worker_lease_secret_previous_valid_until=None,
     require_https: bool = False,
     trusted_proxies: Iterable[str] = (),
     cors_origins: Iterable[str] = (),
+    rotation_status: dict | Callable[[], dict] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="JAVES-AI Controls", version="1.0.0-alpha")
     origins = tuple(cors_origins)
@@ -85,7 +110,13 @@ def create_app(
             allow_origins=list(origins),
             allow_credentials=False,
             allow_methods=["GET", "POST", "PUT"],
-            allow_headers=["authorization", "content-type", "idempotency-key", "x-request-id", "traceparent"],
+            allow_headers=[
+                "authorization",
+                "content-type",
+                "idempotency-key",
+                "x-request-id",
+                "traceparent",
+            ],
             expose_headers=["x-request-id", "traceparent"],
             max_age=600,
         )
@@ -95,11 +126,25 @@ def create_app(
     current_actor = BearerAuthenticator(auth)
     metrics = MetricsService(manager.repository, manager.clock)
     configured_worker_tokens = dict(worker_tokens or {})
+
+    def current_rotation_status() -> dict:
+        value = rotation_status() if callable(rotation_status) else rotation_status
+        return dict(value or {})
+
     task_service = WorkerTaskService(
         repository=manager.repository,
         manager=manager,
         clock=manager.clock,
         lease_secret=worker_lease_secret or "development-only-worker-lease-secret",
+        lease_secret_previous=worker_lease_secret_previous,
+        lease_secret_previous_valid_until=worker_lease_secret_previous_valid_until,
+    )
+    audit_exports = AuditExportService(
+        repository=manager.repository,
+        artifacts=manager.artifacts,
+        clock=manager.clock,
+        ids=manager.ids,
+        register_artifact=manager.register_audit_artifact,
     )
     if run_fake_jobs_inline and scheduler is None:
         raise ValueError("run_fake_jobs_inline requires a SchedulerRunner")
@@ -112,9 +157,13 @@ def create_app(
     ) -> None:
         configured = configured_worker_tokens.get(component)
         component_tokens = (
-            (configured,)
-            if isinstance(configured, str)
-            else tuple(configured or ())
+            configured.accepted()
+            if isinstance(configured, RotationWindow)
+            else (
+                (configured,)
+                if isinstance(configured, str)
+                else tuple(configured or ())
+            )
         )
         bearer_token = None
         if authorization and authorization.lower().startswith("bearer "):
@@ -136,11 +185,11 @@ def create_app(
             except (AuthenticationError, HTTPException):
                 authenticated = False
         if not authenticated:
-            raise HTTPException(status_code=401, detail="valid worker token is required")
+            raise HTTPException(
+                status_code=401, detail="valid worker token is required"
+            )
 
-    def iam_idempotency(
-        key: str, action: str, payload: dict, operation
-    ) -> dict:
+    def iam_idempotency(key: str, action: str, payload: dict, operation) -> dict:
         storage_key = f"iam:{action}:{key}"
         fingerprint = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -156,7 +205,9 @@ def create_app(
             auth.repository.remember_idempotency(storage_key, fingerprint, response)
             return response
 
-    def problem(status: int, title: str, detail: str, problem_type: str) -> JSONResponse:
+    def problem(
+        status: int, title: str, detail: str, problem_type: str
+    ) -> JSONResponse:
         policy = classify_problem(problem_type, status)
         return JSONResponse(
             status_code=status,
@@ -182,6 +233,15 @@ def create_app(
     @app.exception_handler(LeaseError)
     async def lease_error_handler(_, exc: LeaseError):
         return problem(409, "Invalid Worker Lease", str(exc), "worker-lease")
+
+    @app.exception_handler(ReplayEvidenceIncomplete)
+    async def replay_evidence_handler(_, exc: ReplayEvidenceIncomplete):
+        return problem(
+            409,
+            "Replay Evidence Incomplete",
+            str(exc),
+            "replay-evidence-incomplete",
+        )
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_, exc: ValueError):
@@ -227,23 +287,100 @@ def create_app(
             },
         )
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def live() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/health/ready")
+    @app.get(
+        "/health/ready",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def ready() -> dict[str, str]:
         try:
             manager.repository.list_cases()
             manager.repository.list_users()
         except Exception as exc:
-            raise HTTPException(status_code=503, detail="persistence is unavailable") from exc
-        return {"status": "ready"}
+            raise HTTPException(
+                status_code=503, detail="persistence is unavailable"
+            ) from exc
+        telemetry_ready, telemetry_status = current_runtime().readiness()
+        if not telemetry_ready:
+            raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        stale_rotations = [
+            component
+            for component, status in current_rotation_status().items()
+            if status.get("previous_key_id") and not status.get("previous_accepted")
+        ]
+        if stale_rotations:
+            raise HTTPException(
+                status_code=503, detail="token rotation overlap expired"
+            )
+        return {"status": "ready", "telemetry": telemetry_status}
 
     @app.get("/internal/v1/metrics")
     async def operational_metrics(actor: Actor = Depends(current_actor)) -> dict:
         require_permission(actor, "audit.read")
         return metrics.snapshot()
+
+    @app.get(
+        "/internal/v1/rotation-status",
+        response_model=RotationStatusResponse,
+    )
+    async def service_rotation_status(
+        actor: Actor = Depends(current_actor),
+    ) -> dict:
+        require_permission(actor, "audit.read")
+        return current_rotation_status()
+
+    @app.post("/v1/audit/exports", response_model=AuditExportManifest, status_code=201)
+    async def create_audit_export(
+        body: AuditExportRequest,
+        actor: Actor = Depends(current_actor),
+    ) -> AuditExportManifest:
+        require_permission(actor, "audit.export")
+        with operation(
+            "audit.export", {"component": "main", "operation": "audit_export"}
+        ):
+            result = audit_exports.create(body, actor_id=actor.user_id)
+        record_counter(
+            "javes.audit.exports",
+            attributes={"component": "main", "outcome": "completed"},
+        )
+        return result
+
+    @app.get("/v1/audit/exports/{export_id}/events")
+    async def download_audit_events(
+        export_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> StreamingResponse:
+        require_permission(actor, "audit.export")
+        chunks, mime_type = audit_exports.iter_read(export_id, "events")
+
+        async def body():
+            for chunk in chunks:
+                yield chunk
+
+        return StreamingResponse(
+            body(),
+            media_type=mime_type,
+            headers={
+                "content-disposition": f'attachment; filename="{export_id}.ndjson"'
+            },
+        )
+
+    @app.get("/v1/audit/exports/{export_id}/manifest")
+    async def download_audit_manifest(
+        export_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> Response:
+        require_permission(actor, "audit.export")
+        data, mime_type = audit_exports.read(export_id, "manifest")
+        return Response(data, media_type=mime_type)
 
     @app.post("/v1/auth/login", response_model=LoginResponse)
     async def login(body: LoginRequest) -> LoginResponse:
@@ -422,12 +559,16 @@ def create_app(
         return manager.get_view(case_id)
 
     @app.get("/v1/cases/{case_id}/events")
-    async def get_events(case_id: str, actor: Actor = Depends(current_actor)) -> list[dict]:
+    async def get_events(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> list[dict]:
         require_permission(actor, "case.events.read")
         return manager.get_events(case_id)
 
     @app.get("/v1/cases/{case_id}/clips")
-    async def get_clips(case_id: str, actor: Actor = Depends(current_actor)) -> list[dict]:
+    async def get_clips(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> list[dict]:
         require_permission(actor, "case.read")
         return manager.get_clips(case_id)
 
@@ -462,6 +603,130 @@ def create_app(
             scheduler.routing.drain()
             scheduler.outbox.drain()
             view = manager.get_view(case_id)
+        return view
+
+    @app.get(
+        "/v1/cases/{case_id}/decisions",
+        response_model=list[DecisionRecordView],
+    )
+    async def decision_history(
+        case_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> list[DecisionRecordView]:
+        require_permission(actor, "case.review")
+        return manager.list_decisions(case_id)
+
+    @app.post(
+        "/v1/cases/{case_id}/decisions/{decision_id}/revoke",
+        response_model=CaseView,
+    )
+    async def revoke_decision(
+        case_id: str,
+        decision_id: str,
+        body: RevokeDecisionBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> CaseView:
+        require_permission(actor, "case.review")
+        require_same_actor(actor, body.operator_id)
+        if body.decision_id != decision_id:
+            raise ValueError("path decision_id does not match request body")
+        with operation("decision.replay", {"component": "main", "operation": "revoke"}):
+            view = manager.revoke_decision(
+                case_id,
+                body,
+                idempotency_key=idempotency_key,
+            )
+        record_counter(
+            "javes.decision.replay",
+            attributes={"component": "main", "outcome": "accepted"},
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.routing.drain()
+            scheduler.outbox.drain()
+            view = manager.get_view(case_id)
+        return view
+
+    @app.get(
+        "/v1/cases/{case_id}/legal-holds",
+        response_model=list[LegalHoldView],
+    )
+    async def legal_holds(
+        case_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> list[LegalHoldView]:
+        require_permission(actor, "case.legal_hold.manage")
+        return manager.list_legal_holds(case_id)
+
+    @app.post(
+        "/v1/cases/{case_id}/legal-holds",
+        response_model=LegalHoldView,
+        status_code=201,
+    )
+    async def set_legal_hold(
+        case_id: str,
+        body: CreateLegalHoldBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> LegalHoldView:
+        require_permission(actor, "case.legal_hold.manage")
+        require_same_actor(actor, body.operator_id)
+        with operation("legal_hold.set", {"component": "main", "operation": "set"}):
+            view = manager.set_legal_hold(
+                case_id, body, idempotency_key=idempotency_key
+            )
+        record_counter(
+            "javes.legal_hold.operations",
+            attributes={"component": "main", "operation": "set", "outcome": "accepted"},
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.outbox.drain()
+            view = next(
+                item
+                for item in manager.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
+        return view
+
+    @app.post(
+        "/v1/cases/{case_id}/legal-holds/{hold_id}/release",
+        response_model=LegalHoldView,
+    )
+    async def release_legal_hold(
+        case_id: str,
+        hold_id: str,
+        body: ReleaseLegalHoldBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> LegalHoldView:
+        require_permission(actor, "case.legal_hold.manage")
+        require_same_actor(actor, body.operator_id)
+        if body.hold_id != hold_id:
+            raise ValueError("path hold_id does not match request body")
+        with operation(
+            "legal_hold.release", {"component": "main", "operation": "release"}
+        ):
+            view = manager.release_legal_hold(
+                case_id, body, idempotency_key=idempotency_key
+            )
+        record_counter(
+            "javes.legal_hold.operations",
+            attributes={
+                "component": "main",
+                "operation": "release",
+                "outcome": "accepted",
+            },
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.outbox.drain()
+            view = next(
+                item
+                for item in manager.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
         return view
 
     def case_command(
@@ -620,4 +885,5 @@ def create_app(
         require_worker(component, authorization)
         return task_service.fail(component, task_id, body)
 
+    instrument_fastapi(app)
     return app

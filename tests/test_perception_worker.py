@@ -464,6 +464,48 @@ def test_gallery_is_idempotent_and_survives_restart():
         )
 
 
+def test_gallery_rebuild_removes_revoked_confirmed_sources():
+    worker, artifacts = make_worker()
+    reference_gallery = add_reference(worker, artifacts)
+    result = worker.execute(
+        job(reference_gallery), T0 + timedelta(minutes=1)
+    )
+    best = max(result.candidates, key=lambda candidate: candidate.score)
+    confirmed = worker.update_gallery(
+        TargetGalleryCommand(
+            command_id="gallery-confirm",
+            case_id="c1",
+            source="confirmed_tracklet",
+            tracklet_id=best.tracklet_id,
+            base_gallery_ref=reference_gallery,
+        )
+    )
+    assert confirmed.source_count == 2
+
+    rebuilt = worker.update_gallery(
+        TargetGalleryCommand(
+            command_id="gallery-rebuild",
+            case_id="c1",
+            source="rebuild",
+            image_ref=ArtifactRef(object_key="cases/c1/reference.png"),
+            tracklet_ids=[],
+        )
+    )
+    assert rebuilt.source_count == 1
+    assert rebuilt.gallery_ref == reference_gallery
+
+    reconfirmed = worker.update_gallery(
+        TargetGalleryCommand(
+            command_id="gallery-reconfirm",
+            case_id="c1",
+            source="confirmed_tracklet",
+            tracklet_id=best.tracklet_id,
+            base_gallery_ref=rebuilt.gallery_ref,
+        )
+    )
+    assert reconfirmed.source_count == 2
+
+
 def test_open_probe_before_its_start_is_done_empty():
     worker, artifacts = make_worker()
     probe = job(add_reference(worker, artifacts), t_from=10, t_to=None)

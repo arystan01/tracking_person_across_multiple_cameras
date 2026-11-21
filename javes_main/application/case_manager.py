@@ -15,6 +15,7 @@ from javes_contracts import (
     ArtifactRef,
     CaseCommandBody,
     CaseInfo,
+    CreateLegalHoldBody,
     ClipLifecycleState,
     ClipProcessingStatus,
     ClipRecord,
@@ -25,14 +26,22 @@ from javes_contracts import (
     ExportClipsResult,
     Hypothesis,
     LiveFeedUpdate,
+    LegalHoldView,
     PerceptionProbeJob,
     ProbeResult,
     ProbeStatus,
     RetentionClass,
     RetentionCommand,
+    RetentionHoldCommand,
+    RetentionHoldResult,
     RetentionResource,
     RetentionResult,
+    RevokeDecisionBody,
+    ReleaseLegalHoldBody,
+    DecisionRecordView,
     ReviewDecisionBody,
+    RoutingWorkerResult,
+    SearchMode,
     TargetGalleryCommand,
     TargetGalleryResult,
 )
@@ -47,6 +56,7 @@ from javes_main.domain.models import (
     CaseView,
     JobRecord,
     JobState,
+    LegalHoldRecord,
     OutboxRecord,
     OutboxTopic,
     ProbeResultRecord,
@@ -66,6 +76,7 @@ from javes_main.ports import (
     SiteConfigPort,
 )
 from javes_main.projections import build_case_view
+from javes_main.application.errors import ReplayEvidenceIncomplete
 
 
 logger = logging.getLogger(__name__)
@@ -79,7 +90,9 @@ DEFAULT_RETENTION_TTL_S = DEFAULT_RETENTION_DAYS * 24 * 60 * 60
 def _fingerprint(value: Any) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -138,15 +151,266 @@ class CaseManager:
         )
         self.repository.append_event(event)
 
-    def _idempotent_response(
-        self, key: str, fingerprint: str
-    ) -> dict[str, Any] | None:
+    def _idempotent_response(self, key: str, fingerprint: str) -> dict[str, Any] | None:
         previous = self.repository.get_idempotency(key)
         if previous is None:
             return None
         if previous[0] != fingerprint:
             raise ValueError("idempotency key reused with different payload")
         return previous[1]
+
+    def _decision_history(self, case_id: str) -> list[DecisionRecordView]:
+        decisions = {
+            item.record_id: ReviewDecisionBody.model_validate(item.payload)
+            for item in self.repository.list_case_data(
+                case_id, kinds={CaseDataKind.OPERATOR_DECISION.value}
+            )
+        }
+        revocations = {
+            str(item.payload["decision_id"]): RevokeDecisionBody.model_validate(
+                item.payload
+            )
+            for item in self.repository.list_case_data(
+                case_id,
+                kinds={CaseDataKind.OPERATOR_DECISION_REVOCATION.value},
+            )
+        }
+        route_by_decision: dict[str, int] = {}
+        for item in self.repository.list_case_data(
+            case_id, kinds={CaseDataKind.ROUTING_INPUT.value}
+        ):
+            decision_id = item.payload.get("source_decision_id")
+            route_revision = item.payload.get("output_route_revision")
+            if decision_id is not None and route_revision is not None:
+                route_by_decision[str(decision_id)] = int(route_revision)
+        values: list[DecisionRecordView] = []
+        for decision_id, decision in decisions.items():
+            revoked = revocations.get(decision_id)
+            values.append(
+                DecisionRecordView(
+                    **decision.model_dump(mode="python"),
+                    active=revoked is None,
+                    revocation_id=(revoked.revocation_id if revoked else None),
+                    revoked_by=(revoked.operator_id if revoked else None),
+                    revoked_at=(revoked.occurred_at if revoked else None),
+                    revocation_reason=(revoked.reason if revoked else None),
+                    resulting_route_revision=route_by_decision.get(decision_id),
+                )
+            )
+        return sorted(values, key=lambda item: (item.occurred_at, item.decision_id))
+
+    def list_decisions(self, case_id: str) -> list[DecisionRecordView]:
+        self.repository.get(case_id)
+        return self._decision_history(case_id)
+
+    def _active_decisions(self, case_id: str) -> list[DecisionRecordView]:
+        return [item for item in self._decision_history(case_id) if item.active]
+
+    @staticmethod
+    def _legal_hold_view(record: LegalHoldRecord) -> LegalHoldView:
+        return LegalHoldView.model_validate(record.model_dump(mode="python"))
+
+    def list_legal_holds(self, case_id: str) -> list[LegalHoldView]:
+        case = self.repository.get(case_id)
+        return [
+            self._legal_hold_view(item)
+            for item in sorted(
+                case.legal_holds.values(),
+                key=lambda value: (value.set_at, value.hold_id),
+            )
+        ]
+
+    def set_legal_hold(
+        self,
+        case_id: str,
+        body: CreateLegalHoldBody,
+        *,
+        idempotency_key: str,
+    ) -> LegalHoldView:
+        storage_key = f"case:{case_id}:legal-hold:set:{idempotency_key}"
+        fingerprint = _fingerprint(body)
+        replay = self._idempotent_response(storage_key, fingerprint)
+        if replay is not None:
+            return next(
+                item
+                for item in self.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
+        case = self.repository.get(case_id)
+        if case.lifecycle == CaseLifecycle.DELETED:
+            self._event(
+                case_id,
+                "LEGAL_HOLD_SET_DENIED",
+                actor_id=body.operator_id,
+                payload={"hold_id": body.hold_id, "reason": "case_deleted"},
+            )
+            raise ValueError("cannot set legal hold on a deleted case")
+        if case.lifecycle == CaseLifecycle.DELETE_REQUESTED:
+            self._event(
+                case_id,
+                "LEGAL_HOLD_SET_DENIED",
+                actor_id=body.operator_id,
+                payload={"hold_id": body.hold_id, "reason": "deletion_requested"},
+            )
+            raise ValueError("cannot set legal hold after deletion was requested")
+        with self.repository.transaction():
+            self.repository.lock_idempotency(storage_key)
+            replay = self._idempotent_response(storage_key, fingerprint)
+            if replay is not None:
+                return next(
+                    item
+                    for item in self.list_legal_holds(case_id)
+                    if item.hold_id == body.hold_id
+                )
+            case = self.repository.get(case_id)
+            if body.expected_case_revision != case.revision:
+                raise ValueError(
+                    "expected_case_revision does not match current case revision"
+                )
+            if body.hold_id in case.legal_holds:
+                raise ValueError("hold_id already exists")
+            expected = case.revision
+            record = LegalHoldRecord(
+                hold_id=body.hold_id,
+                case_id=case_id,
+                external_ticket_id=body.external_ticket_id,
+                reason=body.reason,
+                set_by=body.operator_id,
+                set_at=body.occurred_at,
+            )
+            case.legal_holds[body.hold_id] = record
+            case.updated_at = self.clock.now()
+            self.repository.save(case, expected)
+            command = RetentionHoldCommand(
+                command_id=self.ids.new("retention_hold", case_id, "set", body.hold_id),
+                case_id=case_id,
+                hold_id=body.hold_id,
+                action="SET",
+                external_ticket_id=body.external_ticket_id,
+                reason=body.reason,
+                actor_id=body.operator_id,
+                occurred_at=body.occurred_at,
+            )
+            self._enqueue(
+                case_id,
+                OutboxTopic.RETENTION_HOLD,
+                f"retention-hold:{command.command_id}",
+                {"command": command.model_dump(mode="json")},
+            )
+            self._record_case_data(
+                case_id,
+                CaseDataKind.LEGAL_HOLD,
+                body.hold_id,
+                body.model_dump(mode="json"),
+                schema_version="legal-hold.v1alpha1",
+                occurred_at=body.occurred_at,
+            )
+            self._event(
+                case_id,
+                "LEGAL_HOLD_SET",
+                actor_id=body.operator_id,
+                payload={
+                    "hold_id": body.hold_id,
+                    "external_ticket_id": body.external_ticket_id,
+                },
+            )
+            self.repository.remember_idempotency(
+                storage_key, fingerprint, {"case_id": case_id, "hold_id": body.hold_id}
+            )
+        return self._legal_hold_view(record)
+
+    def release_legal_hold(
+        self,
+        case_id: str,
+        body: ReleaseLegalHoldBody,
+        *,
+        idempotency_key: str,
+    ) -> LegalHoldView:
+        storage_key = f"case:{case_id}:legal-hold:release:{idempotency_key}"
+        fingerprint = _fingerprint(body)
+        replay = self._idempotent_response(storage_key, fingerprint)
+        if replay is not None:
+            return next(
+                item
+                for item in self.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
+        case = self.repository.get(case_id)
+        if case.lifecycle == CaseLifecycle.DELETED:
+            self._event(
+                case_id,
+                "LEGAL_HOLD_RELEASE_DENIED",
+                actor_id=body.operator_id,
+                payload={"hold_id": body.hold_id, "reason": "case_deleted"},
+            )
+            raise ValueError("cannot release legal hold on a deleted case")
+        with self.repository.transaction():
+            self.repository.lock_idempotency(storage_key)
+            replay = self._idempotent_response(storage_key, fingerprint)
+            if replay is not None:
+                return next(
+                    item
+                    for item in self.list_legal_holds(case_id)
+                    if item.hold_id == body.hold_id
+                )
+            case = self.repository.get(case_id)
+            if body.expected_case_revision != case.revision:
+                raise ValueError(
+                    "expected_case_revision does not match current case revision"
+                )
+            record = case.legal_holds.get(body.hold_id)
+            if record is None:
+                raise KeyError(f"unknown legal hold {body.hold_id!r}")
+            if not record.active:
+                raise ValueError("legal hold is already released")
+            if record.release_pending:
+                raise ValueError("legal hold release is already pending")
+            expected = case.revision
+            record.release_pending = True
+            record.release_id = body.release_id
+            record.release_reason = body.reason
+            record.released_by = body.operator_id
+            record.released_at = body.occurred_at
+            case.updated_at = self.clock.now()
+            self.repository.save(case, expected)
+            command = RetentionHoldCommand(
+                command_id=body.release_id,
+                case_id=case_id,
+                hold_id=body.hold_id,
+                action="RELEASE",
+                external_ticket_id=body.external_ticket_id,
+                reason=body.reason,
+                actor_id=body.operator_id,
+                occurred_at=body.occurred_at,
+            )
+            self._enqueue(
+                case_id,
+                OutboxTopic.RETENTION_HOLD,
+                f"retention-hold:{command.command_id}",
+                {"command": command.model_dump(mode="json")},
+            )
+            self._record_case_data(
+                case_id,
+                CaseDataKind.LEGAL_HOLD_RELEASE,
+                body.release_id,
+                body.model_dump(mode="json"),
+                schema_version="legal-hold-release.v1alpha1",
+                occurred_at=body.occurred_at,
+            )
+            self._event(
+                case_id,
+                "LEGAL_HOLD_RELEASE_REQUESTED",
+                actor_id=body.operator_id,
+                payload={
+                    "hold_id": body.hold_id,
+                    "release_id": body.release_id,
+                    "external_ticket_id": body.external_ticket_id,
+                },
+            )
+            self.repository.remember_idempotency(
+                storage_key, fingerprint, {"case_id": case_id, "hold_id": body.hold_id}
+            )
+        return self._legal_hold_view(record)
 
     def _enqueue(
         self,
@@ -176,13 +440,17 @@ class CaseManager:
         kind: CaseDataKind,
         record_id: str,
         payload: dict[str, Any],
+        *,
+        schema_version: str = "case-data.v1",
+        occurred_at: datetime | None = None,
     ) -> None:
         self.repository.add_case_data(
             CaseDataRecord(
                 record_id=record_id,
                 case_id=case_id,
                 kind=kind,
-                occurred_at=self.clock.now(),
+                schema_version=schema_version,
+                occurred_at=occurred_at or self.clock.now(),
                 payload=payload,
             )
         )
@@ -220,7 +488,9 @@ class CaseManager:
                 if hashlib.sha256(data).hexdigest() != manifest.sha256:
                     raise ValueError("worker artifact checksum does not match manifest")
                 if manifest.mime_type is not None and mime_type != manifest.mime_type:
-                    raise ValueError("worker artifact MIME type does not match manifest")
+                    raise ValueError(
+                        "worker artifact MIME type does not match manifest"
+                    )
                 record_id = self.ids.new(
                     "artifact", case_id, task_id, manifest.object_key, manifest.sha256
                 )
@@ -250,6 +520,25 @@ class CaseManager:
             f"{resource.retention_class.value}:{_fingerprint(resource)}",
             {"resource": resource.model_dump(mode="json")},
         )
+
+    def register_audit_artifact(
+        self,
+        export_id: str,
+        object_key: str,
+        kind: str,
+        size_bytes: int,
+        sha256: str,
+    ) -> None:
+        """Register a permanent audit artifact without exposing its filesystem path."""
+
+        resource = RetentionResource(
+            resource_id=self.ids.new("audit-resource", export_id, kind, sha256),
+            case_id="__audit__",
+            kind=kind,
+            retention_class=RetentionClass.AUDIT,
+            artifact_ref=ArtifactRef(object_key=object_key, sha256=sha256),
+        )
+        self._enqueue_retention_resource(resource)
 
     def _enqueue_routing(
         self,
@@ -291,6 +580,19 @@ class CaseManager:
             )
         ):
             return self.repository.get(trigger.case_id)
+        if trigger.trigger_type == "DECISION_REVOKE":
+            return self._replay_case(trigger)
+        if trigger.trigger_type == "OPERATOR_DECISION":
+            marker = ":decision:"
+            decision_id = (
+                trigger.dedupe_key.rsplit(marker, 1)[1]
+                if marker in trigger.dedupe_key
+                else None
+            )
+            if decision_id is not None and decision_id not in {
+                item.decision_id for item in self._active_decisions(trigger.case_id)
+            }:
+                return current_case
         anchors = trigger.anchors
         if (
             trigger.trigger_type == "OPERATOR_DECISION"
@@ -303,7 +605,319 @@ class CaseManager:
             anchors=anchors,
             trigger_id=trigger.trigger_id,
             trigger_type=trigger.trigger_type,
+            trigger_dedupe_key=trigger.dedupe_key,
         )
+
+    @staticmethod
+    def _case_info(case: CaseRecord) -> CaseInfo:
+        body = case.request
+        return CaseInfo(
+            case_id=body.case_id,
+            target_id=body.target_id,
+            start_time=body.last_known.time,
+            profile=body.profile,
+            window_start=body.window.start,
+            window_end=body.window.end,
+            last_known_camera=body.last_known.camera_id,
+            last_known_zone=body.last_known.zone_id,
+            last_known_time=body.last_known.time,
+            last_known_bbox_xywh=body.last_known.bbox_xywh,
+            last_known_footpoint_px=body.last_known.footpoint_px,
+            last_known_map_position=body.last_known.map_position,
+        )
+
+    @staticmethod
+    def _initial_anchors(case: CaseRecord) -> Anchors:
+        value = case.request.last_known
+        return Anchors(
+            last_known_camera=value.camera_id,
+            last_known_zone=value.zone_id,
+            last_known_time=value.time,
+            last_known_bbox_xywh=value.bbox_xywh,
+            last_known_footpoint_px=value.footpoint_px,
+            last_known_map_position=value.map_position,
+        )
+
+    def _replay_case(self, trigger: RoutingTriggerRecord) -> CaseRecord:
+        case = self.repository.get(trigger.case_id)
+        if case.lifecycle not in {CaseLifecycle.SEARCHING, CaseLifecycle.CLOSED}:
+            raise ValueError(
+                f"cannot replay decisions while case is {case.lifecycle.value}"
+            )
+        if case.replay_capability != "COMPLETE":
+            raise ReplayEvidenceIncomplete(
+                "replay_evidence_incomplete: case has no complete immutable routing ledger"
+            )
+        records = self.repository.list_case_data(
+            trigger.case_id, kinds={CaseDataKind.ROUTING_INPUT.value}
+        )
+        if not records:
+            raise ReplayEvidenceIncomplete(
+                "replay_evidence_incomplete: case has no immutable routing inputs"
+            )
+        ordered = sorted(
+            records,
+            key=lambda item: (int(item.payload.get("sequence", -1)), item.record_id),
+        )
+        expected_sequences = list(range(len(ordered)))
+        actual_sequences = [int(item.payload.get("sequence", -1)) for item in ordered]
+        if actual_sequences != expected_sequences:
+            raise ReplayEvidenceIncomplete(
+                "replay_evidence_incomplete: routing input sequence has gaps"
+            )
+
+        graph = self.sites.get_graph(case.request.site_id, case.request.site_version)
+        params = self.sites.get_params(case.params_version)
+        floor_assets = self.sites.get_floor_assets(
+            case.request.site_id, case.request.site_version
+        )
+        state = self.routing.initialise(
+            self._case_info(case),
+            graph,
+            params,
+            self._initial_anchors(case),
+            case.created_at,
+        )
+        active_ids = {
+            item.decision_id for item in self._active_decisions(case.request.case_id)
+        }
+        last_result: RoutingWorkerResult | None = None
+        replayed_inputs: list[str] = []
+        for record in ordered:
+            payload = dict(record.payload)
+            supplied_fingerprint = payload.pop("fingerprint", None)
+            if (
+                not supplied_fingerprint
+                or _fingerprint(payload) != supplied_fingerprint
+            ):
+                raise ReplayEvidenceIncomplete(
+                    f"replay_evidence_incomplete: routing input {record.record_id!r} failed fingerprint verification"
+                )
+            if (
+                payload.get("site_id") != case.request.site_id
+                or payload.get("site_version") != case.request.site_version
+                or payload.get("params_version") != case.params_version
+            ):
+                raise ReplayEvidenceIncomplete(
+                    "replay_evidence_incomplete: pinned site or params version changed"
+                )
+            source_decision_id = payload.get("source_decision_id")
+            if source_decision_id is not None and source_decision_id not in active_ids:
+                continue
+            try:
+                effective_now = datetime.fromisoformat(str(payload["effective_now"]))
+                probe_results = [
+                    ProbeResult.model_validate(item)
+                    for item in payload.get("probe_results", [])
+                ]
+                anchors = Anchors.model_validate(payload.get("anchors", {}))
+            except Exception as exc:
+                raise ReplayEvidenceIncomplete(
+                    f"replay_evidence_incomplete: invalid routing input {record.record_id!r}"
+                ) from exc
+            last_result = self.routing.advance(
+                state,
+                probe_results,
+                graph,
+                anchors,
+                params,
+                effective_now,
+                floor_assets,
+            )
+            state = last_result.step_result.state
+            replayed_inputs.append(record.record_id)
+
+        if last_result is None:
+            raise ReplayEvidenceIncomplete(
+                "replay_evidence_incomplete: revocation removed every replayable routing input"
+            )
+        if case.lifecycle == CaseLifecycle.CLOSED:
+            previous_stop_reason = (
+                case.latest_route.step_result.stop_reason
+                if case.latest_route is not None
+                else last_result.step_result.stop_reason
+            )
+            closed_step = last_result.step_result.model_copy(
+                update={
+                    "probes": [],
+                    "done": True,
+                    "mode": SearchMode.PAST_SUMMARY,
+                    "stop_reason": previous_stop_reason,
+                },
+                deep=True,
+            )
+            last_result = last_result.model_copy(
+                update={"step_result": closed_step}, deep=True
+            )
+        return self._persist_replayed_routing_result(
+            case,
+            last_result,
+            trigger=trigger,
+            replayed_inputs=replayed_inputs,
+        )
+
+    def _persist_replayed_routing_result(
+        self,
+        case: CaseRecord,
+        worker_result: RoutingWorkerResult,
+        *,
+        trigger: RoutingTriggerRecord,
+        replayed_inputs: list[str],
+    ) -> CaseRecord:
+        expected_revision = case.revision
+        now = self.clock.now()
+        previous_route = case.latest_route
+        next_route_revision = max(
+            (previous_route.revision + 1 if previous_route is not None else 1),
+            worker_result.rendered_route.route_revision,
+        )
+        rendered = worker_result.rendered_route.model_copy(
+            update={"route_revision": next_route_revision}, deep=True
+        )
+        step = worker_result.step_result
+        route_resources: list[RetentionResource] = []
+        route_artifacts: list[dict[str, Any]] = []
+        for item in rendered.maps:
+            key = (
+                f"cases/{case.request.case_id}/routes/"
+                f"{next_route_revision}/{item.floor_id}.svg"
+            )
+            svg_bytes = item.svg.encode("utf-8")
+            self.artifacts.put(key, svg_bytes, item.mime_type)
+            manifest = ArtifactManifest(
+                object_key=key,
+                kind="route_svg",
+                size_bytes=len(svg_bytes),
+                sha256=hashlib.sha256(svg_bytes).hexdigest(),
+                created_at=now,
+                retention_class="case_14d",
+                mime_type=item.mime_type,
+            )
+            route_artifacts.append(
+                {
+                    "artifact_id": self.ids.new("artifact", key),
+                    "manifest": manifest.model_dump(mode="json"),
+                    "floor_id": item.floor_id,
+                    "width": item.width,
+                    "height": item.height,
+                    "alt_text": item.alt_text,
+                }
+            )
+            route_resources.append(
+                RetentionResource(
+                    resource_id=self.ids.new(
+                        "resource",
+                        case.request.case_id,
+                        "route",
+                        next_route_revision,
+                        item.floor_id,
+                    ),
+                    case_id=case.request.case_id,
+                    kind="ROUTE_SVG",
+                    retention_class=RetentionClass.CASE_RESULT,
+                    artifact_ref=ArtifactRef(object_key=key),
+                )
+            )
+        superseded_resources: list[RetentionResource] = []
+        if previous_route is not None:
+            for item in previous_route.rendered.maps:
+                key = (
+                    f"cases/{case.request.case_id}/routes/"
+                    f"{previous_route.revision}/{item.floor_id}.svg"
+                )
+                superseded_resources.append(
+                    RetentionResource(
+                        resource_id=self.ids.new(
+                            "resource",
+                            case.request.case_id,
+                            "route",
+                            previous_route.revision,
+                            item.floor_id,
+                        ),
+                        case_id=case.request.case_id,
+                        kind="SUPERSEDED_ROUTE_SVG",
+                        retention_class=RetentionClass.EPHEMERAL,
+                        artifact_ref=ArtifactRef(object_key=key),
+                    )
+                )
+
+        case.routing_state = step.state
+        case.latest_route = StoredRoute(
+            revision=next_route_revision,
+            step_result=step,
+            rendered=rendered,
+            created_at=now,
+        )
+        case.updated_at = now
+        if case.lifecycle == CaseLifecycle.CLOSED:
+            case.live_feed = None
+            case.next_heartbeat_at = None
+        with self.repository.transaction():
+            saved = self.repository.save(case, expected_revision)
+            if saved.lifecycle == CaseLifecycle.SEARCHING:
+                self._create_probe_jobs(saved, step.probes)
+            for resource in route_resources:
+                self._enqueue_retention_resource(resource)
+            for resource in superseded_resources:
+                self._enqueue_retention_resource(resource)
+            for artifact in route_artifacts:
+                self._record_case_data(
+                    saved.request.case_id,
+                    CaseDataKind.ARTIFACT,
+                    artifact["artifact_id"],
+                    artifact,
+                )
+            self._record_case_data(
+                saved.request.case_id,
+                CaseDataKind.ROUTING_STATE,
+                f"{saved.request.case_id}:state:{step.state.state_version}:replay:{trigger.trigger_id}",
+                step.state.model_dump(mode="json"),
+            )
+            self._record_case_data(
+                saved.request.case_id,
+                CaseDataKind.ROUTE_REVISION,
+                f"{saved.request.case_id}:route:{next_route_revision}",
+                {
+                    "revision": next_route_revision,
+                    "step_result": step.model_dump(mode="json"),
+                    "maps": [
+                        {
+                            "floor_id": item.floor_id,
+                            "mime_type": item.mime_type,
+                            "width": item.width,
+                            "height": item.height,
+                            "alt_text": item.alt_text,
+                        }
+                        for item in rendered.maps
+                    ],
+                    "replay_trigger_id": trigger.trigger_id,
+                },
+            )
+            self._record_case_data(
+                saved.request.case_id,
+                CaseDataKind.ROUTING_RUN,
+                trigger.trigger_id,
+                {
+                    "input_case_revision": expected_revision,
+                    "output_case_revision": saved.revision,
+                    "route_revision": next_route_revision,
+                    "trigger_type": "DECISION_REVOKE",
+                    "probe_result_ids": [],
+                    "anchors": {},
+                    "replayed_input_ids": replayed_inputs,
+                    "status": "DONE",
+                },
+            )
+            self._event(
+                saved.request.case_id,
+                "ROUTING_REPLAYED",
+                payload={
+                    "trigger_id": trigger.trigger_id,
+                    "route_revision": next_route_revision,
+                    "replayed_input_count": len(replayed_inputs),
+                },
+            )
+        return saved
 
     def create_case(self, body: CreateCaseBody, *, idempotency_key: str) -> CaseView:
         storage_key = f"case:create:{idempotency_key}"
@@ -356,6 +970,7 @@ class CaseManager:
             routing_state=state,
             created_at=now,
             updated_at=now,
+            replay_capability="COMPLETE",
         )
         replay_case_id: str | None = None
         with self.repository.transaction():
@@ -408,6 +1023,7 @@ class CaseManager:
         anchors: Anchors,
         trigger_id: str | None = None,
         trigger_type: str = "DIRECT",
+        trigger_dedupe_key: str | None = None,
     ) -> CaseRecord:
         case = self.repository.get(case_id)
         if case.routing_state is None:
@@ -416,6 +1032,11 @@ class CaseManager:
         graph = self.sites.get_graph(case.request.site_id, case.request.site_version)
         params = self.sites.get_params(case.params_version)
         now = self.clock.now()
+        routing_input_sequence = len(
+            self.repository.list_case_data(
+                case_id, kinds={CaseDataKind.ROUTING_INPUT.value}
+            )
+        )
         evidence_resources: list[RetentionResource] = []
 
         for result in probe_results:
@@ -509,10 +1130,7 @@ class CaseManager:
         for rendered in worker_result.rendered_route.maps:
             if not route_changed:
                 continue
-            key = (
-                f"cases/{case_id}/routes/{route_revision}/"
-                f"{rendered.floor_id}.svg"
-            )
+            key = f"cases/{case_id}/routes/{route_revision}/" f"{rendered.floor_id}.svg"
             svg_bytes = rendered.svg.encode("utf-8")
             self.artifacts.put(key, svg_bytes, rendered.mime_type)
             manifest = ArtifactManifest(
@@ -623,11 +1241,7 @@ class CaseManager:
                     case_id,
                     OutboxTopic.RETENTION_COMMAND,
                     f"retention-command:{automatic_retention_command.command_id}",
-                    {
-                        "command": automatic_retention_command.model_dump(
-                            mode="json"
-                        )
-                    },
+                    {"command": automatic_retention_command.model_dump(mode="json")},
                 )
                 self._event(
                     case_id,
@@ -695,6 +1309,43 @@ class CaseManager:
                 route_revision,
                 [item.probe_id for item in probe_results],
                 anchors.model_dump(mode="json"),
+            )
+            source_decision_id = None
+            if trigger_type == "OPERATOR_DECISION" and trigger_dedupe_key:
+                marker = ":decision:"
+                if marker in trigger_dedupe_key:
+                    source_decision_id = trigger_dedupe_key.rsplit(marker, 1)[1]
+            routing_input = {
+                "sequence": routing_input_sequence,
+                "trigger_id": run_id,
+                "trigger_type": trigger_type,
+                "trigger_dedupe_key": trigger_dedupe_key,
+                "source_decision_id": source_decision_id,
+                "effective_now": now.isoformat(),
+                "site_id": case.request.site_id,
+                "site_version": case.request.site_version,
+                "params_version": case.params_version,
+                "contracts_version": "javes-boundary.v1alpha1",
+                "input_case_revision": expected_revision,
+                "output_case_revision": saved.revision,
+                "output_route_revision": route_revision,
+                "probe_results": [
+                    item.model_dump(mode="json", by_alias=True)
+                    for item in probe_results
+                ],
+                "anchors": anchors.model_dump(mode="json"),
+                "active_decision_ids": [
+                    item.decision_id for item in self._active_decisions(case_id)
+                ],
+            }
+            routing_input["fingerprint"] = _fingerprint(routing_input)
+            self._record_case_data(
+                case_id,
+                CaseDataKind.ROUTING_INPUT,
+                run_id,
+                routing_input,
+                schema_version="routing-input.v1",
+                occurred_at=now,
             )
             self._record_case_data(
                 case_id,
@@ -849,7 +1500,9 @@ class CaseManager:
             else:
                 job.state = JobState.DONE
             job.lease_owner = None if job.state != JobState.LEASED else job.lease_owner
-            job.lease_expires_at = None if job.state != JobState.LEASED else job.lease_expires_at
+            job.lease_expires_at = (
+                None if job.state != JobState.LEASED else job.lease_expires_at
+            )
             self.repository.save_job(job)
             self._event(
                 job.case_id,
@@ -941,7 +1594,10 @@ class CaseManager:
         processed: list[str] = []
         for job in jobs:
             current_time = self.clock.now()
-            if job.payload.deadline is not None and job.payload.deadline <= current_time:
+            if (
+                job.payload.deadline is not None
+                and job.payload.deadline <= current_time
+            ):
                 result = ProbeResult(
                     probe_id=job.payload.probe.probe_id,
                     status=ProbeStatus.TIMEOUT,
@@ -1088,15 +1744,11 @@ class CaseManager:
             if candidate is None or candidate.get("tracklet_id") != body.tracklet_id:
                 raise KeyError("unknown candidate/tracklet pair")
             prior_decisions = [
-                item.payload
-                for item in self.repository.list_case_data(
-                    case_id, kinds={CaseDataKind.OPERATOR_DECISION.value}
-                )
-                if item.payload.get("tracklet_id") == body.tracklet_id
+                item
+                for item in self._active_decisions(case_id)
+                if item.tracklet_id == body.tracklet_id
             ]
-            if any(
-                item.get("decision") != body.decision for item in prior_decisions
-            ):
+            if any(item.decision != body.decision for item in prior_decisions):
                 raise ValueError(
                     "contradictory review requires the future revoke workflow"
                 )
@@ -1106,12 +1758,12 @@ class CaseManager:
                 )
                 return self.get_view(case_id)
             anchors = Anchors(
-                confirm_tracklet_ids=[body.tracklet_id]
-                if body.decision == "CONFIRM"
-                else [],
-                reject_tracklet_ids=[body.tracklet_id]
-                if body.decision == "REJECT"
-                else [],
+                confirm_tracklet_ids=(
+                    [body.tracklet_id] if body.decision == "CONFIRM" else []
+                ),
+                reject_tracklet_ids=(
+                    [body.tracklet_id] if body.decision == "REJECT" else []
+                ),
             )
             searching = case.lifecycle == CaseLifecycle.SEARCHING
             expected = case.revision
@@ -1139,9 +1791,9 @@ class CaseManager:
                     case_id=case_id,
                     source="confirmed_tracklet",
                     tracklet_id=body.tracklet_id,
+                    base_gallery_ref=case.gallery_ref,
                     model_version=(
-                        case.gallery_model_version
-                        or "osnet_ain_x1_0_msmt17"
+                        case.gallery_model_version or "osnet_ain_x1_0_msmt17"
                     ),
                 )
                 self._enqueue(
@@ -1182,6 +1834,158 @@ class CaseManager:
                 storage_key, fingerprint, {"case_id": case_id}
             )
         return self.get_view(case_id)
+
+    def revoke_decision(
+        self,
+        case_id: str,
+        body: RevokeDecisionBody,
+        *,
+        idempotency_key: str,
+    ) -> CaseView:
+        storage_key = f"case:{case_id}:decision-revoke:{idempotency_key}"
+        fingerprint = _fingerprint(body)
+        replay = self._idempotent_response(storage_key, fingerprint)
+        if replay is not None:
+            return self.get_view(case_id)
+        with self.repository.transaction():
+            self.repository.lock_idempotency(storage_key)
+            replay = self._idempotent_response(storage_key, fingerprint)
+            if replay is not None:
+                return self.get_view(case_id)
+            case = self.repository.get(case_id)
+            if case.lifecycle not in {CaseLifecycle.SEARCHING, CaseLifecycle.CLOSED}:
+                raise ValueError(
+                    f"cannot revoke decisions while case is {case.lifecycle.value}"
+                )
+            if (
+                body.expected_case_revision is not None
+                and body.expected_case_revision != case.revision
+            ):
+                raise ValueError(
+                    "expected_case_revision does not match current case revision"
+                )
+            if (
+                case.replay_capability != "COMPLETE"
+                or not self.repository.list_case_data(
+                    case_id, kinds={CaseDataKind.ROUTING_INPUT.value}
+                )
+            ):
+                raise ReplayEvidenceIncomplete(
+                    "replay_evidence_incomplete: decision cannot be revoked safely"
+                )
+            history = {
+                item.decision_id: item for item in self._decision_history(case_id)
+            }
+            decision = history.get(body.decision_id)
+            if decision is None:
+                raise KeyError(f"unknown decision {body.decision_id!r}")
+            if not decision.active:
+                raise ValueError("decision is already revoked")
+
+            expected_revision = case.revision
+            case.updated_at = self.clock.now()
+            if decision.decision == "CONFIRM":
+                if decision.tracklet_id not in case.pending_reject_tracklet_ids:
+                    case.pending_reject_tracklet_ids.append(decision.tracklet_id)
+                    case.pending_reject_tracklet_ids.sort()
+                case.pending_confirm_tracklet_ids = [
+                    item
+                    for item in case.pending_confirm_tracklet_ids
+                    if item != decision.tracklet_id
+                ]
+            else:
+                case.pending_reject_tracklet_ids = [
+                    item
+                    for item in case.pending_reject_tracklet_ids
+                    if item != decision.tracklet_id
+                ]
+            saved = self.repository.save(case, expected_revision)
+            self._record_case_data(
+                case_id,
+                CaseDataKind.OPERATOR_DECISION_REVOCATION,
+                body.revocation_id,
+                body.model_dump(mode="json"),
+                schema_version="operator-decision-revocation.v1alpha1",
+                occurred_at=body.occurred_at,
+            )
+
+            remaining = self._active_decisions(case_id)
+            clip_id = case.candidate_to_clip.get(decision.candidate_id)
+            another_confirm = any(
+                item.decision == "CONFIRM" and item.tracklet_id == decision.tracklet_id
+                for item in remaining
+            )
+            if clip_id is not None and not another_confirm:
+                clip_action = "RELEASE" if decision.decision == "CONFIRM" else "HOLD"
+                clip_command = ClipStateCommand(
+                    command_id=self.ids.new(
+                        "clip_state", body.revocation_id, clip_action
+                    ),
+                    case_id=case_id,
+                    clip_id=clip_id,
+                    action=clip_action,
+                    operator_id=body.operator_id,
+                    occurred_at=body.occurred_at,
+                )
+                self._enqueue(
+                    case_id,
+                    OutboxTopic.CLIP_STATE,
+                    f"clip-state:{clip_command.command_id}",
+                    {"command": clip_command.model_dump(mode="json")},
+                )
+
+            if (
+                decision.decision == "CONFIRM"
+                and saved.lifecycle == CaseLifecycle.SEARCHING
+            ):
+                confirmed_tracklets = sorted(
+                    {
+                        item.tracklet_id
+                        for item in remaining
+                        if item.decision == "CONFIRM"
+                    }
+                )
+                gallery_command = TargetGalleryCommand(
+                    command_id=self.ids.new(
+                        "gallery_cmd", case_id, "rebuild", body.revocation_id
+                    ),
+                    case_id=case_id,
+                    source="rebuild",
+                    image_ref=case.request.reference_image_ref,
+                    tracklet_ids=confirmed_tracklets,
+                    base_gallery_ref=case.gallery_ref,
+                    model_version=(
+                        case.gallery_model_version or "osnet_ain_x1_0_msmt17"
+                    ),
+                )
+                self._enqueue(
+                    case_id,
+                    OutboxTopic.TARGET_GALLERY,
+                    f"target-gallery:{gallery_command.command_id}",
+                    {"command": gallery_command.model_dump(mode="json")},
+                )
+
+            self._enqueue_routing(
+                case_id,
+                "DECISION_REVOKE",
+                f"decision-revoke:{body.revocation_id}",
+            )
+            self._event(
+                case_id,
+                "DECISION_REVOKED",
+                actor_id=body.operator_id,
+                payload={
+                    "revocation_id": body.revocation_id,
+                    "decision_id": body.decision_id,
+                    "candidate_id": decision.candidate_id,
+                    "tracklet_id": decision.tracklet_id,
+                    "reason": body.reason,
+                },
+            )
+            self.repository.remember_idempotency(
+                storage_key, fingerprint, {"case_id": case_id}
+            )
+        return self.get_view(saved.request.case_id)
 
     def command(
         self,
@@ -1295,10 +2099,7 @@ class CaseManager:
         for visit in best.visits:
             for tracklet_id in visit.tracklet_ids:
                 clip = clip_by_tracklet.get(tracklet_id)
-                if (
-                    clip is not None
-                    and clip.clip_id not in ordered
-                ):
+                if clip is not None and clip.clip_id not in ordered:
                     ordered.append(clip.clip_id)
         return ordered
 
@@ -1351,29 +2152,41 @@ class CaseManager:
             self.repository.save_job(job)
         expected = case.revision
         case.lifecycle = CaseLifecycle.DELETE_REQUESTED
+        case.pending_retention_action = "DELETE_CASE"
         case.live_feed = None
         case.next_heartbeat_at = None
         case.updated_at = now
         self.repository.save(case, expected)
-        command = RetentionCommand(
-            command_id=self.ids.new("retention", case_id, body.command_id),
-            case_id=case_id,
-            action="DELETE_CASE",
-            actor_id=body.operator_id,
-            occurred_at=body.occurred_at,
+        active_holds = sorted(
+            hold.hold_id for hold in case.legal_holds.values() if hold.active
         )
-        self._enqueue(
-            case_id,
-            OutboxTopic.RETENTION_COMMAND,
-            f"retention-command:{command.command_id}",
-            {"command": command.model_dump(mode="json")},
-        )
-        self._event(
-            case_id,
-            "CASE_DELETE_REQUESTED",
-            actor_id=body.operator_id,
-            payload={"retention_command_id": command.command_id},
-        )
+        if active_holds:
+            self._event(
+                case_id,
+                "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD",
+                actor_id=body.operator_id,
+                payload={"active_hold_ids": active_holds},
+            )
+        else:
+            command = RetentionCommand(
+                command_id=self.ids.new("retention", case_id, body.command_id),
+                case_id=case_id,
+                action="DELETE_CASE",
+                actor_id=body.operator_id,
+                occurred_at=body.occurred_at,
+            )
+            self._enqueue(
+                case_id,
+                OutboxTopic.RETENTION_COMMAND,
+                f"retention-command:{command.command_id}",
+                {"command": command.model_dump(mode="json")},
+            )
+            self._event(
+                case_id,
+                "CASE_DELETE_REQUESTED",
+                actor_id=body.operator_id,
+                payload={"retention_command_id": command.command_id},
+            )
 
     def enqueue_due_retention(self) -> int:
         """Schedule case-level TTL expiry exactly once per retained case."""
@@ -1404,27 +2217,38 @@ class CaseManager:
                     CaseLifecycle.SAVED,
                 }:
                     continue
-                if (
-                    current.retention_due_at is None
-                    or current.retention_due_at > now
-                ):
+                if current.retention_due_at is None or current.retention_due_at > now:
                     continue
                 expected = current.revision
                 current.lifecycle = CaseLifecycle.DELETE_REQUESTED
+                current.pending_retention_action = "TTL_EXPIRED"
                 current.updated_at = now
                 self.repository.save(current, expected)
-                self._enqueue(
-                    current.request.case_id,
-                    OutboxTopic.RETENTION_COMMAND,
-                    f"retention-command:{command.command_id}",
-                    {"command": command.model_dump(mode="json")},
+                active_holds = sorted(
+                    hold.hold_id
+                    for hold in current.legal_holds.values()
+                    if hold.active
                 )
-                self._event(
-                    current.request.case_id,
-                    "CASE_RETENTION_EXPIRED",
-                    actor_id="retention-scheduler",
-                    payload={"retention_command_id": command.command_id},
-                )
+                if active_holds:
+                    self._event(
+                        current.request.case_id,
+                        "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD",
+                        actor_id="retention-scheduler",
+                        payload={"active_hold_ids": active_holds},
+                    )
+                else:
+                    self._enqueue(
+                        current.request.case_id,
+                        OutboxTopic.RETENTION_COMMAND,
+                        f"retention-command:{command.command_id}",
+                        {"command": command.model_dump(mode="json")},
+                    )
+                    self._event(
+                        current.request.case_id,
+                        "CASE_RETENTION_EXPIRED",
+                        actor_id="retention-scheduler",
+                        payload={"retention_command_id": command.command_id},
+                    )
             scheduled += 1
         return scheduled
 
@@ -1452,6 +2276,7 @@ class CaseManager:
         case.export_ref = None
         case.live_feed = None
         case.content_redacted = True
+        case.pending_retention_action = None
         case.lifecycle = CaseLifecycle.DELETED
         case.deleted_at = now
         case.retention_due_at = None
@@ -1607,7 +2432,10 @@ class CaseManager:
             self._event(
                 message.case_id,
                 "CLIP_READY",
-                payload={"clip_id": record.clip_id, "candidate_id": record.candidate_id},
+                payload={
+                    "clip_id": record.clip_id,
+                    "candidate_id": record.candidate_id,
+                },
             )
             return
 
@@ -1762,7 +2590,11 @@ class CaseManager:
                 )
             self._event(
                 message.case_id,
-                "CASE_EXPORTED" if export.status == ClipProcessingStatus.READY else "CASE_EXPORT_FAILED",
+                (
+                    "CASE_EXPORTED"
+                    if export.status == ClipProcessingStatus.READY
+                    else "CASE_EXPORT_FAILED"
+                ),
                 payload=export.model_dump(mode="json"),
             )
             return
@@ -1777,6 +2609,22 @@ class CaseManager:
                 or retention.action != command.action
             ):
                 raise ValueError("Retention result does not match its command")
+            if (
+                retention.action in {"DELETE_CASE", "TTL_EXPIRED"}
+                and retention.held_resource_ids
+            ):
+                case.pending_retention_action = retention.action
+                case.updated_at = now
+                self.repository.save(case, expected)
+                self._event(
+                    message.case_id,
+                    "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD",
+                    payload={
+                        "retention_command_id": retention.command_id,
+                        "held_resource_ids": retention.held_resource_ids,
+                    },
+                )
+                return
             if retention.action in {"DELETE_CASE", "TTL_EXPIRED"}:
                 self._redact_deleted_case(case, now=now)
                 self.repository.save(case, expected)
@@ -1800,6 +2648,74 @@ class CaseManager:
             )
             return
 
+        if topic == OutboxTopic.RETENTION_HOLD:
+            hold_result = RetentionHoldResult.model_validate(result)
+            hold_command = RetentionHoldCommand.model_validate(
+                message.payload["command"]
+            )
+            if (
+                hold_result.command_id != hold_command.command_id
+                or hold_result.case_id != hold_command.case_id
+                or hold_result.case_id != message.case_id
+                or hold_result.hold_id != hold_command.hold_id
+                or hold_result.action != hold_command.action
+            ):
+                raise ValueError(
+                    "Retention legal-hold result does not match its command"
+                )
+            hold = case.legal_holds.get(hold_result.hold_id)
+            if hold is None:
+                raise ValueError("Retention returned an unknown legal hold")
+            expected_active = {
+                hold_id
+                for hold_id, item in case.legal_holds.items()
+                if item.active
+                and not (
+                    hold_result.action == "RELEASE" and hold_id == hold_result.hold_id
+                )
+            }
+            if set(hold_result.active_hold_ids) != expected_active:
+                raise ValueError("Retention active legal-hold projection diverged")
+            if hold_result.action == "RELEASE":
+                hold.active = False
+                hold.release_pending = False
+                case.updated_at = now
+                self.repository.save(case, expected)
+                if (
+                    not expected_active
+                    and case.lifecycle == CaseLifecycle.DELETE_REQUESTED
+                    and case.pending_retention_action in {"DELETE_CASE", "TTL_EXPIRED"}
+                ):
+                    retry = RetentionCommand(
+                        command_id=self.ids.new(
+                            "retention",
+                            message.case_id,
+                            "hold-release",
+                            hold_result.command_id,
+                            case.pending_retention_action,
+                        ),
+                        case_id=message.case_id,
+                        action=case.pending_retention_action,
+                        actor_id=hold.released_by,
+                        occurred_at=hold.released_at or now,
+                    )
+                    self._enqueue(
+                        message.case_id,
+                        OutboxTopic.RETENTION_COMMAND,
+                        f"retention-command:{retry.command_id}",
+                        {"command": retry.model_dump(mode="json")},
+                    )
+                event_type = "LEGAL_HOLD_RELEASED"
+            else:
+                event_type = "LEGAL_HOLD_APPLIED"
+            self._event(
+                message.case_id,
+                event_type,
+                actor_id=hold_command.actor_id,
+                payload=hold_result.model_dump(mode="json"),
+            )
+            return
+
         raise ValueError(f"unsupported outbox topic {message.topic!r}")
 
     def get_case(self, case_id: str) -> dict[str, Any]:
@@ -1818,7 +2734,9 @@ class CaseManager:
             "updated_at": case.updated_at.isoformat(),
         }
 
-    def list_cases(self, *, lifecycle: CaseLifecycle | None = None) -> list[CaseSummary]:
+    def list_cases(
+        self, *, lifecycle: CaseLifecycle | None = None
+    ) -> list[CaseSummary]:
         states = {lifecycle.value} if lifecycle is not None else None
         summaries: list[CaseSummary] = []
         for case in self.repository.list_cases(lifecycles=states):
@@ -1828,7 +2746,9 @@ class CaseManager:
                     target_id=case.request.target_id,
                     lifecycle=case.lifecycle,
                     revision=case.revision,
-                    route_revision=(case.latest_route.revision if case.latest_route else 0),
+                    route_revision=(
+                        case.latest_route.revision if case.latest_route else 0
+                    ),
                     mode=(
                         case.latest_route.step_result.mode.value
                         if case.latest_route is not None
@@ -1868,9 +2788,7 @@ class CaseManager:
             for item in sorted(case.clips.values(), key=lambda value: value.clip_id)
         ]
 
-    def get_route_svg(
-        self, case_id: str, route_revision: int, floor_id: str
-    ) -> bytes:
+    def get_route_svg(self, case_id: str, route_revision: int, floor_id: str) -> bytes:
         case = self.repository.get(case_id)
         if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
             raise KeyError("route is no longer available")

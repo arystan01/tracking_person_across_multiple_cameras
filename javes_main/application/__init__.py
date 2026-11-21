@@ -4,6 +4,9 @@ from .case_manager import (
     CaseManager,
 )
 from .metrics import MetricsService
+from .errors import ReplayEvidenceIncomplete
+from .replay_audit import audit_case_replay_ledger, audit_replay_ledgers
+from .audit_export import AuditExportService
 from .worker_tasks import LeaseError, WorkerTaskService
 from .dlq import DeadLetterService
 from .auth_service import (
@@ -25,6 +28,10 @@ __all__ = [
     "DeadLetterService",
     "LoginResult",
     "MetricsService",
+    "ReplayEvidenceIncomplete",
+    "audit_case_replay_ledger",
+    "audit_replay_ledgers",
+    "AuditExportService",
     "LeaseError",
     "WorkerTaskService",
 ]

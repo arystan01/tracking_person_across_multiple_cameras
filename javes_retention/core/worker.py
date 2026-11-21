@@ -14,6 +14,8 @@ from typing import Callable
 from javes_contracts import (
     RetentionCommand,
     RetentionDeletionReceipt,
+    RetentionHoldCommand,
+    RetentionHoldResult,
     RetentionResource,
     RetentionResult,
 )
@@ -101,6 +103,21 @@ class RetentionWorker:
             return True
         return first.artifact_ref == second.artifact_ref
 
+    def _effective_resource(self, resource: RetentionResource) -> RetentionResource:
+        if resource.legal_hold or not self.repository.active_hold_ids(resource.case_id):
+            return resource
+        return resource.model_copy(update={"legal_hold": True})
+
+    def apply_hold(self, command: RetentionHoldCommand) -> RetentionHoldResult:
+        """Apply a case-wide hold command without mutating resource identity."""
+
+        with self._lock, self.repository.command_lock():
+            return self.repository.apply_hold_command(
+                command,
+                _fingerprint(command),
+                now=self._now(),
+            ).model_copy(deep=True)
+
     def register(self, resource: RetentionResource) -> None:
         """Upsert inventory and immediately enforce any existing tombstone."""
 
@@ -142,7 +159,7 @@ class RetentionWorker:
                         )
                 marker = self.repository.get_case_marker(incoming.case_id)
                 must_delete = self.policy.should_delete_after_case_marker(
-                    incoming,
+                    self._effective_resource(incoming),
                     closed=marker.closed_at is not None,
                     deleted_or_expired=(
                         marker.deleted_at is not None
@@ -390,7 +407,9 @@ class RetentionWorker:
                 for item in self.repository.list_resources(command.case_id):
                     if item.state == "DELETED":
                         continue
-                    candidate = item.resource.model_copy(update={"deleted": False})
+                    candidate = self._effective_resource(
+                        item.resource.model_copy(update={"deleted": False})
+                    )
                     if self.policy.should_delete(candidate, command):
                         targets.append(candidate.resource_id)
                     else:
@@ -471,6 +490,16 @@ class RetentionWorker:
                 for item in items
                 if item.disposition == "PRESERVE"
             )
+            held = sorted(
+                resource_id
+                for resource_id in preserved
+                if (
+                    (stored := self.repository.get_resource(resource_id)) is not None
+                    and stored.resource.retention_class
+                    not in self.policy.always_preserve_classes
+                    and self._effective_resource(stored.resource).legal_hold
+                )
+            )
             self._redact_completed_deletions(command.command_id)
             items = self.repository.list_command_items(command.command_id)
             receipts = [
@@ -487,6 +516,7 @@ class RetentionWorker:
                 action=command.action,
                 deleted_resource_ids=deleted,
                 preserved_resource_ids=preserved,
+                held_resource_ids=held,
                 audit_tombstone_id=_tombstone(command),
                 receipts=receipts,
             )
@@ -526,7 +556,14 @@ class RetentionWorker:
         return {
             "policy_version": self.policy.version,
             "resources_by_state": dict(sorted(states.items())),
-            "legal_holds": sum(item.resource.legal_hold for item in resources),
+            "legal_holds": sum(
+                self._effective_resource(item.resource).legal_hold
+                for item in resources
+            ),
+            "active_case_holds": sum(
+                len(self.repository.active_hold_ids(case_id))
+                for case_id in {item.resource.case_id for item in resources}
+            ),
             "failed_deletions": len(failures),
             "oldest_failure_age_s": (
                 max((now - min(item.updated_at for item in failures)).total_seconds(), 0.0)
@@ -555,7 +592,7 @@ class RetentionWorker:
             if (
                 item.state != "DELETED"
                 and (marker.deleted_at is not None or marker.ttl_expired_at is not None)
-                and not value.legal_hold
+                and not self._effective_resource(value).legal_hold
                 and value.retention_class not in self.policy.always_preserve_classes
                 and value.expires_at is not None
                 and value.expires_at <= cutoff
