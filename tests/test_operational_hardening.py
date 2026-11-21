@@ -16,8 +16,15 @@ from javes_main.adapters.system import FixedClock
 from javes_main.application import DeadLetterService
 from javes_main.domain import OutboxRecord, OutboxState
 from javes_main.observability import JsonFormatter, redact
-from javes_main.persistence.backup import backup_database, restore_database
+from javes_main.persistence.backup import (
+    backup_database,
+    rehearse_restore,
+    restore_database,
+    safe_restore_database,
+    verify_backup,
+)
 from javes_main.persistence.memory import InMemoryRepository
+from javes_main.persistence.migrate import upgrade_database
 from javes_main.security import scan_files
 from javes_workers import HttpWorkerClient
 
@@ -27,7 +34,9 @@ NOW = datetime(2026, 11, 20, 1, 0, tzinfo=timezone.utc)
 
 def test_redaction_and_structured_logs_never_expose_boundary_secrets() -> None:
     secret = "top-secret-worker-token"
-    assert redact({"authorization": f"Bearer {secret}", "nested": {"password": secret}}) == {
+    assert redact(
+        {"authorization": f"Bearer {secret}", "nested": {"password": secret}}
+    ) == {
         "authorization": "[REDACTED]",
         "nested": {"password": "[REDACTED]"},
     }
@@ -44,7 +53,9 @@ def test_trace_context_propagates_to_worker_http_client() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(request.headers)
-        return httpx.Response(200, json={"contract_version": "worker-claim-result.v1", "tasks": []})
+        return httpx.Response(
+            200, json={"contract_version": "worker-claim-result.v1", "tasks": []}
+        )
 
     tokens = bind_request_context(
         "case-correlation-001",
@@ -121,7 +132,9 @@ def test_bounded_multi_worker_lease_soak_has_no_duplicate_claims() -> None:
         )
 
     with ThreadPoolExecutor(max_workers=4) as pool:
-        batches = list(pool.map(claim, ["worker-1", "worker-2", "worker-3", "worker-4"]))
+        batches = list(
+            pool.map(claim, ["worker-1", "worker-2", "worker-3", "worker-4"])
+        )
     identifiers = [item.message_id for batch in batches for item in batch]
     assert len(identifiers) == 100
     assert len(set(identifiers)) == 100
@@ -153,7 +166,67 @@ def test_sqlite_backup_is_verified_and_really_restorable(tmp_path: Path) -> None
         restore_database(f"sqlite:///{live}", backup)
 
 
-def test_secret_scanner_reports_locations_without_echoing_secret(tmp_path: Path) -> None:
+def test_safe_restore_requires_dry_run_or_explicit_nonempty_confirmation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.db"
+    target = tmp_path / "target.db"
+    for path, value in ((source, "source"), (target, "target")):
+        with sqlite3.connect(path) as connection:
+            connection.execute("create table evidence (value text)")
+            connection.execute("insert into evidence values (?)", (value,))
+    backup = backup_database(f"sqlite:///{source}", tmp_path / "safe-backup.db")
+    assert verify_backup(f"sqlite:///{target}", backup)["size_bytes"] > 0
+    with pytest.raises(ValueError, match="non-empty"):
+        safe_restore_database(f"sqlite:///{target}", backup)
+    dry_run = safe_restore_database(
+        f"sqlite:///{target}",
+        backup,
+        confirmation="RESTORE_OVER_EXISTING_DATA",
+        dry_run=True,
+    )
+    assert dry_run["restored"] is False
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("select value from evidence").fetchone() == (
+            "target",
+        )
+    result = safe_restore_database(
+        f"sqlite:///{target}",
+        backup,
+        confirmation="RESTORE_OVER_EXISTING_DATA",
+    )
+    assert result["restored"] is True
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("select value from evidence").fetchone() == (
+            "source",
+        )
+
+
+def test_isolated_restore_rehearsal_reports_real_invariants_and_timings(
+    tmp_path: Path,
+) -> None:
+    live = tmp_path / "migrated.db"
+    restored = tmp_path / "isolated.db"
+    report_path = tmp_path / "rehearsal.json"
+    upgrade_database(f"sqlite:///{live}")
+    backup = backup_database(f"sqlite:///{live}", tmp_path / "migrated-backup.db")
+    report = rehearse_restore(
+        f"sqlite:///{restored}",
+        backup,
+        report_path,
+    )
+    assert report["status"] == "PASS"
+    assert report["invariants"]["valid"] is True
+    assert report["rto_seconds"] >= 0
+    assert report["rpo_seconds"] >= 0
+    serialized = report_path.read_text(encoding="utf-8")
+    assert str(tmp_path) not in serialized
+    assert "sqlite:///" not in serialized
+
+
+def test_secret_scanner_reports_locations_without_echoing_secret(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "config.py"
     fake_secret = "ghp_" + "abcdefghijklmnopqrstuvwxyz1234567890"
     source.write_text(f"TOKEN = '{fake_secret}'\n")
