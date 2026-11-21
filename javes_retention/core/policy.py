@@ -62,4 +62,3 @@ class RetentionPolicy:
         if deleted_or_expired:
             return True
         return False
-
