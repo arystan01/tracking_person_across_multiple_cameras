@@ -9,6 +9,7 @@ import os
 from .api import create_nvidia_archive_app
 from .registry import NvidiaArchiveRegistry
 from javes_telemetry import configure_telemetry, shutdown_telemetry
+from javes_security import RotationWindow
 
 
 def api_main() -> None:
@@ -24,6 +25,12 @@ def api_main() -> None:
     args = parser.parse_args()
     if not args.token:
         parser.error("--token or JAVES_ARCHIVE_SERVICE_TOKEN is required")
+    rotation = RotationWindow.from_strings(
+        args.token,
+        os.environ.get("JAVES_ARCHIVE_SERVICE_TOKEN_PREVIOUS"),
+        os.environ.get("JAVES_ARCHIVE_SERVICE_TOKEN_PREVIOUS_VALID_UNTIL"),
+    )
+    rotation.require_ready()
     configure_telemetry("javes-nvidia-archive-api")
     registry = NvidiaArchiveRegistry(
         args.root,
@@ -34,7 +41,7 @@ def api_main() -> None:
 
     try:
         uvicorn.run(
-            create_nvidia_archive_app(registry, service_token=args.token),
+            create_nvidia_archive_app(registry, service_token=rotation),
             host=args.host,
             port=args.port,
         )

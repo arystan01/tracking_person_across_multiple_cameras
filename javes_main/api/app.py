@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from javes_contracts import (
+    AuditExportManifest,
+    AuditExportRequest,
     CaseCommandBody,
     CreateCaseBody,
     CreateLegalHoldBody,
@@ -32,6 +34,7 @@ from javes_contracts import (
 from javes_contracts.conventions import classify_problem
 from javes_main.application import (
     Actor,
+    AuditExportService,
     AuthenticationError,
     AuthorizationError,
     AuthService,
@@ -66,6 +69,7 @@ from javes_telemetry import (
     operation,
     record_counter,
 )
+from javes_security import RotationWindow
 
 
 async def _idempotency(
@@ -87,11 +91,14 @@ def create_app(
     auth: AuthService,
     scheduler: SchedulerRunner | None = None,
     run_fake_jobs_inline: bool = False,
-    worker_tokens: dict[str, str | Iterable[str]] | None = None,
+    worker_tokens: dict[str, str | Iterable[str] | RotationWindow] | None = None,
     worker_lease_secret: str | None = None,
+    worker_lease_secret_previous: str | None = None,
+    worker_lease_secret_previous_valid_until=None,
     require_https: bool = False,
     trusted_proxies: Iterable[str] = (),
     cors_origins: Iterable[str] = (),
+    rotation_status: dict | Callable[[], dict] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="JAVES-AI Controls", version="1.0.0-alpha")
     origins = tuple(cors_origins)
@@ -117,11 +124,25 @@ def create_app(
     current_actor = BearerAuthenticator(auth)
     metrics = MetricsService(manager.repository, manager.clock)
     configured_worker_tokens = dict(worker_tokens or {})
+
+    def current_rotation_status() -> dict:
+        value = rotation_status() if callable(rotation_status) else rotation_status
+        return dict(value or {})
+
     task_service = WorkerTaskService(
         repository=manager.repository,
         manager=manager,
         clock=manager.clock,
         lease_secret=worker_lease_secret or "development-only-worker-lease-secret",
+        lease_secret_previous=worker_lease_secret_previous,
+        lease_secret_previous_valid_until=worker_lease_secret_previous_valid_until,
+    )
+    audit_exports = AuditExportService(
+        repository=manager.repository,
+        artifacts=manager.artifacts,
+        clock=manager.clock,
+        ids=manager.ids,
+        register_artifact=manager.register_audit_artifact,
     )
     if run_fake_jobs_inline and scheduler is None:
         raise ValueError("run_fake_jobs_inline requires a SchedulerRunner")
@@ -134,7 +155,13 @@ def create_app(
     ) -> None:
         configured = configured_worker_tokens.get(component)
         component_tokens = (
-            (configured,) if isinstance(configured, str) else tuple(configured or ())
+            configured.accepted()
+            if isinstance(configured, RotationWindow)
+            else (
+                (configured,)
+                if isinstance(configured, str)
+                else tuple(configured or ())
+            )
         )
         bearer_token = None
         if authorization and authorization.lower().startswith("bearer "):
@@ -274,12 +301,73 @@ def create_app(
         telemetry_ready, telemetry_status = current_runtime().readiness()
         if not telemetry_ready:
             raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        stale_rotations = [
+            component
+            for component, status in current_rotation_status().items()
+            if status.get("previous_key_id") and not status.get("previous_accepted")
+        ]
+        if stale_rotations:
+            raise HTTPException(
+                status_code=503, detail="token rotation overlap expired"
+            )
         return {"status": "ready", "telemetry": telemetry_status}
 
     @app.get("/internal/v1/metrics")
     async def operational_metrics(actor: Actor = Depends(current_actor)) -> dict:
         require_permission(actor, "audit.read")
         return metrics.snapshot()
+
+    @app.get("/internal/v1/rotation-status")
+    async def service_rotation_status(
+        actor: Actor = Depends(current_actor),
+    ) -> dict:
+        require_permission(actor, "audit.read")
+        return current_rotation_status()
+
+    @app.post("/v1/audit/exports", response_model=AuditExportManifest, status_code=201)
+    async def create_audit_export(
+        body: AuditExportRequest,
+        actor: Actor = Depends(current_actor),
+    ) -> AuditExportManifest:
+        require_permission(actor, "audit.export")
+        with operation(
+            "audit.export", {"component": "main", "operation": "audit_export"}
+        ):
+            result = audit_exports.create(body, actor_id=actor.user_id)
+        record_counter(
+            "javes.audit.exports",
+            attributes={"component": "main", "outcome": "completed"},
+        )
+        return result
+
+    @app.get("/v1/audit/exports/{export_id}/events")
+    async def download_audit_events(
+        export_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> StreamingResponse:
+        require_permission(actor, "audit.export")
+        chunks, mime_type = audit_exports.iter_read(export_id, "events")
+
+        async def body():
+            for chunk in chunks:
+                yield chunk
+
+        return StreamingResponse(
+            body(),
+            media_type=mime_type,
+            headers={
+                "content-disposition": f'attachment; filename="{export_id}.ndjson"'
+            },
+        )
+
+    @app.get("/v1/audit/exports/{export_id}/manifest")
+    async def download_audit_manifest(
+        export_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> Response:
+        require_permission(actor, "audit.export")
+        data, mime_type = audit_exports.read(export_id, "manifest")
+        return Response(data, media_type=mime_type)
 
     @app.post("/v1/auth/login", response_model=LoginResponse)
     async def login(body: LoginRequest) -> LoginResponse:

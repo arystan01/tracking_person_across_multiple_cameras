@@ -16,6 +16,10 @@ def test_settings_require_explicit_storage_and_hide_worker_secret(
     monkeypatch.setenv("TEST_ARTIFACT_ROOT", str(tmp_path))
     monkeypatch.setenv("TEST_PERCEPTION_WORKER_TOKEN", "top-secret")
     monkeypatch.setenv("TEST_PERCEPTION_WORKER_TOKEN_PREVIOUS", "previous-secret")
+    monkeypatch.setenv(
+        "TEST_PERCEPTION_WORKER_TOKEN_PREVIOUS_VALID_UNTIL",
+        "2099-01-01T00:00:00Z",
+    )
     monkeypatch.setenv("TEST_JOB_LEASE_S", "45")
     monkeypatch.setenv("TEST_REQUIRE_HTTPS", "true")
     monkeypatch.setenv("TEST_TRUSTED_PROXY_CIDRS", "10.0.0.0/8,192.0.2.10/32")

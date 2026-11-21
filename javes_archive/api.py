@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Iterable
 
 from fastapi import Body, FastAPI, Header, HTTPException
 
@@ -10,24 +11,37 @@ from javes_contracts import VideoSegmentRequest, VideoSegmentResult
 
 from .registry import NvidiaArchiveRegistry
 from javes_telemetry import current_runtime, instrument_fastapi, operation
+from javes_security import RotationConfigurationError, RotationWindow
 
 
 def create_nvidia_archive_app(
     registry: NvidiaArchiveRegistry,
     *,
-    service_token: str,
+    service_token: str | Iterable[str] | RotationWindow,
 ) -> FastAPI:
-    if not service_token:
+    accepted_tokens = (
+        service_token.accepted()
+        if isinstance(service_token, RotationWindow)
+        else (
+            (service_token,) if isinstance(service_token, str) else tuple(service_token)
+        )
+    )
+    if not accepted_tokens:
         raise ValueError("NVIDIA Archive service token is required")
     app = FastAPI(title="JAVES-AI NVIDIA Archive", version="1.0.0")
 
     def authorise(authorization: str | None) -> None:
+        tokens = (
+            service_token.accepted()
+            if isinstance(service_token, RotationWindow)
+            else accepted_tokens
+        )
         bearer = (
             authorization[7:].strip()
             if authorization and authorization.lower().startswith("bearer ")
             else ""
         )
-        if not secrets.compare_digest(bearer, service_token):
+        if not any(secrets.compare_digest(bearer, token) for token in tokens):
             raise HTTPException(status_code=401, detail="valid service token required")
 
     @app.get("/health/live")
@@ -39,6 +53,13 @@ def create_nvidia_archive_app(
         healthy, telemetry_status = current_runtime().readiness()
         if not healthy:
             raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        if isinstance(service_token, RotationWindow):
+            try:
+                service_token.require_ready()
+            except RotationConfigurationError as exc:
+                raise HTTPException(
+                    status_code=503, detail="token rotation is invalid"
+                ) from exc
         return {
             "status": "ok",
             "telemetry": telemetry_status,
