@@ -68,14 +68,16 @@ not import `javes_main` internals.
    `/internal/v1/workers/clip/tasks/{task_id}/result`; report retryable or
    terminal failure to the sibling `/failure` endpoint.
 
-Until the media implementation is installed, `javes-clip-worker` explicitly
-marks tasks `CLIP_WORKER_UNAVAILABLE`; it never returns successful fake clips.
+`javes-clip-worker` now implements real FFmpeg extraction, durable clip states,
+and ordered export of confirmed clips. FFmpeg and ffprobe must be on PATH.
+See [Clip worker setup and behavior](javes_clip/README.md) for archive window
+semantics, replay handling, output format, and deployment limitations.
 
 Contract verification:
 
 ```bash
 python -m pytest -q tests/test_adapter_acceptance.py \
-  tests/test_api_first_transport.py
+  tests/test_api_first_transport.py tests/test_clip_worker.py
 ```
 
 ## Runtime topology
@@ -258,7 +260,9 @@ javes-retention-worker --main-url http://127.0.0.1:8080 \
   --artifact-root "$JAVES_ARTIFACT_ROOT" --state-db retention-state.sqlite
 
 javes-clip-worker --main-url http://127.0.0.1:8080 \
-  --token "$CLIP_TOKEN" --worker-id clip-unavailable-1
+  --token "$CLIP_TOKEN" --worker-id clip-1 \
+  --artifact-root "$JAVES_ARTIFACT_ROOT" --state-db clip-state.sqlite \
+  --archive-url "$CCTV_ARCHIVE_URL" --archive-token "$CCTV_ARCHIVE_TOKEN"
 ```
 
 Run API and scheduler as separate processes against the same migrated database.
