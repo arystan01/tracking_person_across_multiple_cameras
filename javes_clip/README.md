@@ -1,6 +1,7 @@
 # Clip worker
 
-The worker implements `CLIP_CUT`, `CLIP_STATE`, and `CLIP_EXPORT` over Main's
+The worker implements `CLIP_CUT`, `CLIP_STATE`, `CLIP_EXPORT`, and internal
+`CLIP_PURGE` over Main's
 existing leased HTTP worker API. It imports public `javes_contracts` and
 `javes_workers`, never Main's database or application internals.
 
@@ -13,12 +14,13 @@ Install the project with `python -m pip install -e '.[test,infra]'`.
 ```bash
 javes-clip-worker --main-url http://127.0.0.1:8080 \
   --token "$CLIP_TOKEN" --worker-id clip-1 \
-  --artifact-root "$JAVES_ARTIFACT_ROOT" --state-db clip-state.sqlite \
+  --artifact-root "$JAVES_ARTIFACT_ROOT" --archive-root "$NVIDIA_ROOT" \
+  --state-db clip-state.sqlite \
   --archive-url "$CCTV_ARCHIVE_URL" --archive-token "$CCTV_ARCHIVE_TOKEN"
 ```
 
 `--once` processes at most one task. The archive token can alternatively come
-from `JAVES_CCTV_ARCHIVE_TOKEN`. Use a stable worker ID and persistent SQLite
+from `JAVES_ARCHIVE_SERVICE_TOKEN`. Use a stable worker ID and persistent SQLite
 database outside the served artifact root. Main, Clip, and Retention must share
 the configured private artifact filesystem.
 
@@ -27,8 +29,8 @@ the configured private artifact filesystem.
 The worker posts `VideoSegmentRequest` to the read-only
 `/v1/video-segments` archive endpoint, as Perception does. Camera, request,
 requested timestamps and (when supplied) archive identity must match. The
-resolved media's first frame is at `covered_from`. The media may include an
-earlier start, so extraction seeks by `command.t_from - covered_from`.
+resolved media can begin before `covered_from`, so extraction seeks by
+`source_offset_s + command.t_from - covered_from`.
 Padding is already included in `t_from`/`t_to` by Main and is not added again.
 
 The archive must return a complete finite window. A missing or partial window
@@ -44,17 +46,18 @@ RTSP and stitching several archive segments are not supported by this adapter.
 - Cuts re-encode into H.264/yuv420p MP4 for accurate seeking. Output is silent:
   this adapter intentionally drops source audio.
 - New clips start in `HOLD`. Review moves them to `CONFIRMED` or `RELEASED`.
-  Contradicting an existing decision is rejected. Released files remain on disk
-  for Retention to manage under the shared policy.
+  The lifecycle is reversible through revisioned commands. Restoring `HOLD`
+  verifies that the retained bytes still exist and match their checksum.
 - Exports accept only ready, confirmed clips from the same case. They preserve
   `ordered_clip_ids` exactly. Missing, corrupt, or unconfirmed inputs return a
   failed export with the affected IDs. A new export request ID is needed after
   inputs change. Export normalizes video to the first clip's resolution,
-  letterboxes different aspect ratios, and uses 25 fps before concatenation.
+  letterboxes different aspect ratios, and preserves the first clip's FPS.
 - Complete files publish atomically under `cases/{case_id}/clips/` or
   `cases/{case_id}/exports/`. MIME sidecars use Main/Retention's `.mime` format.
   Manifests contain the actual byte count, SHA-256, stable file creation time,
-  and `review_hold`, `case_14d`, or `ephemeral` class.
+  and `review_hold`, `confirmed_evidence`, `case_14d`, or `ephemeral` class,
+  plus a monotonic policy revision.
 - The worker never deletes CCTV recordings, audit logs, or case artifacts.
   Main authorizes review/export/delete; Retention owns physical cleanup.
 
@@ -71,11 +74,10 @@ are used for callbacks.
 Run one polling process per state database for predictable task ordering.
 SQLite serializes command execution across instances using the same database.
 Deployments with independent databases must not share the same Clip queue:
-state/export tasks need the clip metadata produced by cuts. Retention of the
-worker's metadata/receipts is an operational follow-up: these are not part of
-Main's permanent audit, and production must purge them according to the same
-case deletion policy. Only media artifacts currently participate in Main's
-Retention registration.
+state/export tasks need the clip metadata produced by cuts. After Retention
+confirms physical deletion, Main sends `CLIP_PURGE`; the worker removes
+case-scoped metadata and receipts and keeps only an anonymised purge tombstone.
+Legal hold prevents Main from reaching this step.
 
 ## Verify
 
