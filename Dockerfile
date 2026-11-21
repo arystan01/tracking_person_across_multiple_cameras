@@ -27,11 +27,11 @@ RUN apt-get update \
     && groupadd --system --gid 10001 javes && useradd --system --uid 10001 --gid javes --home /nonexistent javes
 COPY --from=builder /wheels-infra /wheels
 RUN python -m pip install --no-cache-dir /wheels/* \
-    && python -m pip install --no-cache-dir --upgrade \
-        'pip>=26.2.0' \
-        'setuptools>=84.1.0' \
-        'wheel>=0.46.2' \
-        'jaraco.context>=6.1.0' \
+    && python -m pip uninstall --yes \
+        setuptools \
+        wheel \
+        jaraco.context \
+        backports.tarfile \
     && rm -rf /wheels
 USER 10001:10001
 EXPOSE 8080
@@ -42,15 +42,21 @@ CMD ["--host", "0.0.0.0", "--port", "8080"]
 FROM runtime-base AS perception-runtime
 USER root
 COPY --from=perception-builder /wheels-perception /wheels
-RUN python -m pip install --no-cache-dir /wheels/* && rm -rf /wheels
+RUN python -m pip install --no-cache-dir /wheels/* \
+    && python -m pip uninstall --yes pip \
+    && rm -rf /wheels
 USER 10001:10001
 
 FROM runtime-base AS clip-runtime
 USER root
 RUN apt-get update && apt-get install --no-install-recommends -y ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall --yes pip
 USER 10001:10001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD ["sh", "-c", "kill -0 1"]
 ENTRYPOINT ["javes-clip-worker"]
 
 FROM runtime-base AS runtime
+USER root
+RUN python -m pip uninstall --yes pip
+USER 10001:10001
