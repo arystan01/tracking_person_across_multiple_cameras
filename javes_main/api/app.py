@@ -4,7 +4,16 @@ import hashlib
 import json
 import secrets
 from collections.abc import Callable, Iterable
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -18,6 +27,7 @@ from javes_contracts import (
     LegalHoldView,
     LiveFeedUpdate,
     ProblemDetails,
+    ReferenceImageUploadResponse,
     ProbeResult,
     RevokeDecisionBody,
     ReleaseLegalHoldBody,
@@ -43,6 +53,8 @@ from javes_main.application import (
     CaseManager,
     MetricsService,
     ReplayEvidenceIncomplete,
+    ReferenceImageUploadService,
+    ReferenceUploadError,
     LeaseError,
     WorkerTaskService,
 )
@@ -72,6 +84,7 @@ from javes_telemetry import (
     record_counter,
 )
 from javes_security import RotationWindow
+from javes_main.application.reference_uploads import MAX_UPLOAD_BYTES
 
 
 async def _idempotency(
@@ -103,6 +116,34 @@ def create_app(
     rotation_status: dict | Callable[[], dict] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="JAVES-AI Controls", version="1.0.0-alpha")
+
+    @app.middleware("http")
+    async def reference_upload_body_limit(request: Request, call_next):
+        if (
+            request.method == "POST"
+            and request.url.path.endswith("/reference-image")
+        ):
+            raw_length = request.headers.get("content-length")
+            if raw_length is not None:
+                try:
+                    request_bytes = int(raw_length)
+                except ValueError:
+                    request_bytes = -1
+                if request_bytes < 0 or request_bytes > MAX_UPLOAD_BYTES + 64 * 1024:
+                    return JSONResponse(
+                        status_code=413,
+                        media_type="application/problem+json",
+                        content={
+                            "type": "urn:javes:problem:reference-upload-invalid",
+                            "title": "Reference Image Upload Error",
+                            "status": 413,
+                            "detail": "reference upload request is too large",
+                            "code": "REFERENCE_UPLOAD_INVALID",
+                            "retryable": False,
+                        },
+                    )
+        return await call_next(request)
+
     origins = tuple(cors_origins)
     if origins:
         app.add_middleware(
@@ -145,6 +186,12 @@ def create_app(
         clock=manager.clock,
         ids=manager.ids,
         register_artifact=manager.register_audit_artifact,
+    )
+    reference_uploads = ReferenceImageUploadService(
+        repository=manager.repository,
+        artifacts=manager.artifacts,
+        clock=manager.clock,
+        ids=manager.ids,
     )
     if run_fake_jobs_inline and scheduler is None:
         raise ValueError("run_fake_jobs_inline requires a SchedulerRunner")
@@ -241,6 +288,22 @@ def create_app(
             "Replay Evidence Incomplete",
             str(exc),
             "replay-evidence-incomplete",
+        )
+
+    @app.exception_handler(ReferenceUploadError)
+    async def reference_upload_error_handler(_, exc: ReferenceUploadError):
+        slug = exc.code.lower().replace("_", "-")
+        return JSONResponse(
+            status_code=exc.status,
+            media_type="application/problem+json",
+            content=ProblemDetails(
+                type=f"urn:javes:problem:{slug}",
+                title="Reference Image Upload Error",
+                status=exc.status,
+                detail=str(redact(str(exc))),
+                code=exc.code,
+                retryable=False,
+            ).model_dump(mode="json", exclude_none=True),
         )
 
     @app.exception_handler(ValueError)
@@ -525,6 +588,50 @@ def create_app(
             ),
         )
 
+    @app.post(
+        "/v1/cases/{case_id}/reference-image",
+        response_model=ReferenceImageUploadResponse,
+        status_code=201,
+    )
+    async def upload_reference_image(
+        case_id: str,
+        file: UploadFile = File(...),
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> ReferenceImageUploadResponse:
+        require_permission(actor, "case.create")
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
+        await file.close()
+        try:
+            result = reference_uploads.upload(
+                case_id=case_id,
+                operator_id=actor.user_id,
+                idempotency_key=idempotency_key,
+                data=data,
+                content_type=file.content_type,
+            )
+        except ReferenceUploadError as exc:
+            reference_uploads.record_rejection(case_id, actor.user_id, exc.code)
+            record_counter(
+                "javes.reference_uploads",
+                attributes={
+                    "component": "main",
+                    "operation": "upload",
+                    "outcome": "rejected",
+                    "error_code": exc.code,
+                },
+            )
+            raise
+        record_counter(
+            "javes.reference_uploads",
+            attributes={
+                "component": "main",
+                "operation": "upload",
+                "outcome": "accepted",
+            },
+        )
+        return result
+
     @app.post("/v1/cases", response_model=CaseView, status_code=201)
     async def create_case(
         body: CreateCaseBody,
@@ -533,7 +640,11 @@ def create_app(
     ) -> CaseView:
         require_permission(actor, "case.create")
         require_same_actor(actor, body.operator_id)
-        view = manager.create_case(body, idempotency_key=idempotency_key)
+        view = manager.create_case(
+            body,
+            idempotency_key=idempotency_key,
+            reference_owner_id=actor.user_id,
+        )
         if run_fake_jobs_inline:
             assert scheduler is not None
             scheduler.run_case_once(body.case_id)

@@ -15,6 +15,8 @@ from javes_main.domain.models import (
     OutboxRecord,
     OutboxState,
     ProbeResultRecord,
+    ReferenceImageUploadRecord,
+    ReferenceImageUploadStatus,
     RoutingTriggerRecord,
     RoutingTriggerState,
     UserAccount,
@@ -41,6 +43,8 @@ class InMemoryRepository:
         self._case_data: dict[tuple[str, str, str], CaseDataRecord] = {}
         self._routing_triggers: dict[str, RoutingTriggerRecord] = {}
         self._routing_trigger_dedupe: dict[str, str] = {}
+        self._reference_uploads: dict[str, ReferenceImageUploadRecord] = {}
+        self._reference_upload_keys: dict[str, str] = {}
         self._lock = RLock()
 
     @contextmanager
@@ -61,6 +65,8 @@ class InMemoryRepository:
                 "case_data": copy.deepcopy(self._case_data),
                 "routing_triggers": copy.deepcopy(self._routing_triggers),
                 "routing_trigger_dedupe": copy.deepcopy(self._routing_trigger_dedupe),
+                "reference_uploads": copy.deepcopy(self._reference_uploads),
+                "reference_upload_keys": copy.deepcopy(self._reference_upload_keys),
             }
             try:
                 yield self
@@ -79,6 +85,8 @@ class InMemoryRepository:
                 self._case_data = snapshots["case_data"]
                 self._routing_triggers = snapshots["routing_triggers"]
                 self._routing_trigger_dedupe = snapshots["routing_trigger_dedupe"]
+                self._reference_uploads = snapshots["reference_uploads"]
+                self._reference_upload_keys = snapshots["reference_upload_keys"]
                 raise
 
     def add(self, case: CaseRecord) -> None:
@@ -273,6 +281,47 @@ class InMemoryRepository:
         # transaction() already owns the repository-wide re-entrant lock.
         # Keeping this explicit mirrors the PostgreSQL repository contract.
         return None
+
+    def add_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
+        with self._lock:
+            if upload.upload_id in self._reference_uploads:
+                raise ValueError("reference upload id already exists")
+            if upload.object_key in self._reference_upload_keys:
+                raise ValueError("reference upload object key already exists")
+            self._reference_uploads[upload.upload_id] = upload.model_copy(deep=True)
+            self._reference_upload_keys[upload.object_key] = upload.upload_id
+
+    def get_reference_upload_by_key(
+        self, object_key: str, *, for_update: bool = False
+    ) -> ReferenceImageUploadRecord:
+        del for_update
+        with self._lock:
+            upload_id = self._reference_upload_keys.get(object_key)
+            if upload_id is None:
+                raise KeyError("unknown reference upload")
+            return self._reference_uploads[upload_id].model_copy(deep=True)
+
+    def save_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
+        with self._lock:
+            previous = self._reference_uploads.get(upload.upload_id)
+            if previous is None or previous.object_key != upload.object_key:
+                raise KeyError("unknown reference upload")
+            self._reference_uploads[upload.upload_id] = upload.model_copy(deep=True)
+
+    def list_expired_reference_uploads(
+        self, *, now: datetime, limit: int = 100
+    ) -> list[ReferenceImageUploadRecord]:
+        with self._lock:
+            values = sorted(
+                (
+                    item
+                    for item in self._reference_uploads.values()
+                    if item.status == ReferenceImageUploadStatus.READY
+                    and item.expires_at <= now
+                ),
+                key=lambda item: (item.expires_at, item.upload_id),
+            )[:limit]
+            return [item.model_copy(deep=True) for item in values]
 
     def add_user(self, user: UserAccount) -> None:
         username = user.username.casefold()

@@ -16,6 +16,7 @@ class SchedulerReport:
     open_updates: int
     heartbeats: int
     retention_expiries: int
+    reference_upload_expiries: int
     outbox: DispatchReport
     routing: RoutingDispatchReport
 
@@ -42,6 +43,7 @@ class SchedulerRunner:
             open_updates=0,
             heartbeats=0,
             retention_expiries=0,
+            reference_upload_expiries=0,
             outbox=DispatchReport(
                 claimed=first_outbox.claimed + second_outbox.claimed,
                 delivered=first_outbox.delivered + second_outbox.delivered,
@@ -64,6 +66,7 @@ class SchedulerRunner:
             open_updates=report.open_updates,
             heartbeats=1,
             retention_expiries=report.retention_expiries,
+            reference_upload_expiries=report.reference_upload_expiries,
             outbox=report.outbox,
             routing=report.routing,
         )
@@ -77,6 +80,7 @@ class SchedulerRunner:
                 self.manager.heartbeat(case.request.case_id)
                 heartbeats += 1
         retention_expiries = self.manager.enqueue_due_retention()
+        reference_upload_expiries = self.manager.cleanup_expired_reference_uploads()
         jobs = self.manager.run_pending_jobs(limit=job_limit)
         routing = self.routing.drain()
         return SchedulerReport(
@@ -84,6 +88,7 @@ class SchedulerRunner:
             open_updates=open_updates,
             heartbeats=heartbeats,
             retention_expiries=retention_expiries,
+            reference_upload_expiries=reference_upload_expiries,
             outbox=self.outbox.drain(),
             routing=routing,
         )

@@ -46,6 +46,7 @@ from javes_site_config.client import HttpSiteConfigClient
 from javes_routing.core.step import init_state
 from javes_routing.core.facade import step_and_render
 from tests.test_main_infra import BASE, create_body, system
+from tests.test_controls_api import reference_jpeg
 
 
 @pytest.fixture
@@ -384,6 +385,15 @@ max_gap_s: 2400
             "authorization": f"Bearer {access}",
             "idempotency-key": "pipeline-create",
         }
+        uploaded = await client.post(
+            "/v1/cases/pipeline-case/reference-image",
+            headers={
+                "authorization": f"Bearer {access}",
+                "idempotency-key": "pipeline-reference",
+            },
+            files={"file": ("reference.jpg", reference_jpeg(), "image/jpeg")},
+        )
+        assert uploaded.status_code == 201, uploaded.text
         create = await client.post(
             "/v1/cases",
             headers=user_headers,
@@ -391,8 +401,8 @@ max_gap_s: 2400
                 case_id="pipeline-case",
                 operator_id=root_user.user_id,
                 target_id="target",
-                reference_image_ref=ArtifactRef(
-                    object_key="cases/pipeline-case/reference.jpg"
+                reference_image_ref=ArtifactRef.model_validate(
+                    uploaded.json()["reference_image_ref"]
                 ),
                 last_known=LastKnown(camera_id="A", time=BASE),
                 window=CaseWindow(

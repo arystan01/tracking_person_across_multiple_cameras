@@ -21,10 +21,12 @@ def run_scheduler_once(system) -> dict[str, int]:
             manager.heartbeat(case.request.case_id)
             heartbeats += 1
     retention_expiries = manager.enqueue_due_retention()
+    reference_upload_expiries = manager.cleanup_expired_reference_uploads()
     routing = system.routing_dispatcher.run_once(limit=100)
     return {
         "heartbeats": heartbeats,
         "retention_expiries": retention_expiries,
+        "reference_upload_expiries": reference_upload_expiries,
         "routing_completed": routing.completed,
         "routing_failed": routing.failed,
     }

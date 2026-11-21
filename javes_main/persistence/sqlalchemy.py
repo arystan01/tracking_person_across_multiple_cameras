@@ -40,6 +40,8 @@ from javes_main.domain.models import (
     OutboxRecord,
     OutboxState,
     ProbeResultRecord,
+    ReferenceImageUploadRecord,
+    ReferenceImageUploadStatus,
     RoutingTriggerRecord,
     RoutingTriggerState,
     UserAccount,
@@ -219,6 +221,23 @@ class RoutingTriggerRow(Base):
         DateTime(timezone=True), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ReferenceImageUploadRow(Base):
+    __tablename__ = "reference_image_uploads"
+
+    upload_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    object_key: Mapped[str] = mapped_column(String(500), nullable=False, unique=True)
+    case_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    operator_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
 
@@ -582,6 +601,70 @@ class SqlAlchemyRepository:
                 text("select pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": key},
             )
+
+    def add_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
+        with self._write_session() as session:
+            session.add(
+                ReferenceImageUploadRow(
+                    upload_id=upload.upload_id,
+                    object_key=upload.object_key,
+                    case_id=upload.case_id,
+                    operator_id=upload.operator_id,
+                    status=upload.status.value,
+                    expires_at=upload.expires_at,
+                    payload=upload.model_dump(mode="json"),
+                    created_at=upload.created_at,
+                )
+            )
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                raise ValueError("reference upload already exists") from exc
+
+    def get_reference_upload_by_key(
+        self, object_key: str, *, for_update: bool = False
+    ) -> ReferenceImageUploadRecord:
+        statement = select(ReferenceImageUploadRow).where(
+            ReferenceImageUploadRow.object_key == object_key
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        with self._read_session() as session:
+            row = session.scalar(statement)
+            if row is None:
+                raise KeyError("unknown reference upload")
+            return ReferenceImageUploadRecord.model_validate(row.payload)
+
+    def save_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
+        with self._write_session() as session:
+            row = session.get(ReferenceImageUploadRow, upload.upload_id)
+            if row is None or row.object_key != upload.object_key:
+                raise KeyError("unknown reference upload")
+            row.status = upload.status.value
+            row.expires_at = upload.expires_at
+            row.payload = upload.model_dump(mode="json")
+
+    def list_expired_reference_uploads(
+        self, *, now: datetime, limit: int = 100
+    ) -> list[ReferenceImageUploadRecord]:
+        statement = (
+            select(ReferenceImageUploadRow)
+            .where(
+                ReferenceImageUploadRow.status
+                == ReferenceImageUploadStatus.READY.value,
+                ReferenceImageUploadRow.expires_at <= now,
+            )
+            .order_by(
+                ReferenceImageUploadRow.expires_at,
+                ReferenceImageUploadRow.upload_id,
+            )
+            .limit(limit)
+        )
+        with self._read_session() as session:
+            return [
+                ReferenceImageUploadRecord.model_validate(row.payload)
+                for row in session.scalars(statement).all()
+            ]
 
     def add_user(self, user: UserAccount) -> None:
         row = UserRow(

@@ -61,6 +61,7 @@ from javes_main.domain.models import (
     OutboxTopic,
     ProbeResultRecord,
     RoutingTriggerRecord,
+    ReferenceImageUploadStatus,
     StoredRoute,
 )
 from javes_main.ports import (
@@ -76,7 +77,7 @@ from javes_main.ports import (
     SiteConfigPort,
 )
 from javes_main.projections import build_case_view
-from javes_main.application.errors import ReplayEvidenceIncomplete
+from javes_main.application.errors import ReferenceUploadError, ReplayEvidenceIncomplete
 
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,16 @@ class CaseManager:
         if previous[0] != fingerprint:
             raise ValueError("idempotency key reused with different payload")
         return previous[1]
+
+    def cleanup_expired_reference_uploads(self, *, limit: int = 100) -> int:
+        from .reference_uploads import ReferenceImageUploadService
+
+        return ReferenceImageUploadService(
+            repository=self.repository,
+            artifacts=self.artifacts,
+            clock=self.clock,
+            ids=self.ids,
+        ).cleanup_expired(limit=limit)
 
     def _decision_history(self, case_id: str) -> list[DecisionRecordView]:
         decisions = {
@@ -919,12 +930,94 @@ class CaseManager:
             )
         return saved
 
-    def create_case(self, body: CreateCaseBody, *, idempotency_key: str) -> CaseView:
+    def _validated_reference_upload(
+        self,
+        body: CreateCaseBody,
+        owner_id: str,
+        *,
+        for_update: bool,
+    ):
+        reference = body.reference_image_ref
+        if reference.object_key is None or reference.sha256 is None:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_NOT_FOUND",
+                "a registered reference image upload is required",
+                status=404,
+            )
+        try:
+            upload = self.repository.get_reference_upload_by_key(
+                reference.object_key, for_update=for_update
+            )
+        except KeyError as exc:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_NOT_FOUND",
+                "reference image upload was not found",
+                status=404,
+            ) from exc
+        if upload.operator_id != owner_id:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_NOT_FOUND",
+                "reference image upload was not found",
+                status=404,
+            )
+        if upload.case_id != body.case_id:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_INVALID",
+                "reference image upload belongs to a different case",
+            )
+        if upload.status == ReferenceImageUploadStatus.CONSUMED:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_ALREADY_USED",
+                "reference image upload was already consumed",
+            )
+        if upload.status == ReferenceImageUploadStatus.EXPIRED or (
+            upload.expires_at <= self.clock.now()
+        ):
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_EXPIRED",
+                "reference image upload has expired",
+                status=410,
+            )
+        if upload.sha256 != reference.sha256:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_CONTENT_MISMATCH",
+                "reference image checksum does not match its upload record",
+            )
+        try:
+            data, mime_type = self.artifacts.get(upload.object_key)
+        except KeyError as exc:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_CONTENT_MISMATCH",
+                "reference image bytes are missing",
+            ) from exc
+        if (
+            mime_type != "image/jpeg"
+            or len(data) != upload.size_bytes
+            or hashlib.sha256(data).hexdigest() != upload.sha256
+        ):
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_CONTENT_MISMATCH",
+                "reference image bytes do not match the upload record",
+            )
+        return upload
+
+    def create_case(
+        self,
+        body: CreateCaseBody,
+        *,
+        idempotency_key: str,
+        reference_owner_id: str | None = None,
+    ) -> CaseView:
         storage_key = f"case:create:{idempotency_key}"
         fingerprint = _fingerprint(body)
         replay = self._idempotent_response(storage_key, fingerprint)
         if replay is not None:
             return self.get_view(str(replay["case_id"]))
+
+        if reference_owner_id is not None:
+            self._validated_reference_upload(
+                body, reference_owner_id, for_update=False
+            )
 
         graph = self.sites.get_graph(body.site_id, body.site_version)
         params = self.sites.get_params()
@@ -979,6 +1072,11 @@ class CaseManager:
             if replay is not None:
                 replay_case_id = str(replay["case_id"])
             else:
+                upload = None
+                if reference_owner_id is not None:
+                    upload = self._validated_reference_upload(
+                        body, reference_owner_id, for_update=True
+                    )
                 self.repository.add(case)
                 self._event(
                     body.case_id,
@@ -1011,6 +1109,16 @@ class CaseManager:
                 self.repository.remember_idempotency(
                     storage_key, fingerprint, {"case_id": body.case_id}
                 )
+                if upload is not None:
+                    upload.status = ReferenceImageUploadStatus.CONSUMED
+                    upload.consumed_at = now
+                    self.repository.save_reference_upload(upload)
+                    self._event(
+                        body.case_id,
+                        "REFERENCE_IMAGE_UPLOAD_CONSUMED",
+                        actor_id=reference_owner_id,
+                        payload={"upload_id": upload.upload_id},
+                    )
         if replay_case_id is not None:
             return self.get_view(replay_case_id)
         return self.get_view(body.case_id)

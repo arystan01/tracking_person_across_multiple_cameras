@@ -62,6 +62,32 @@ class RoutingTriggerState(str, Enum):
     FAILED = "FAILED"
 
 
+class ReferenceImageUploadStatus(str, Enum):
+    READY = "READY"
+    CONSUMED = "CONSUMED"
+    EXPIRED = "EXPIRED"
+
+
+class ReferenceImageUploadRecord(DomainModel):
+    upload_id: str
+    case_id: str
+    operator_id: str
+    object_key: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0)
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+    status: ReferenceImageUploadStatus = ReferenceImageUploadStatus.READY
+    created_at: datetime
+    expires_at: datetime
+    consumed_at: datetime | None = None
+
+    @field_validator("created_at", "expires_at", "consumed_at", mode="after")
+    @classmethod
+    def _aware_upload_times(cls, value: datetime | None) -> datetime | None:
+        return _utc(value)
+
+
 class OutboxTopic(str, Enum):
     TARGET_GALLERY = "TARGET_GALLERY"
     PERCEPTION_CANCEL = "PERCEPTION_CANCEL"

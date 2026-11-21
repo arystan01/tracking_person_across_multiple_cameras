@@ -43,6 +43,14 @@ ENDPOINTS = [
     ),
     ("Controls", "Dashboard", "GET", "/v1/auth/me", None, "ActorView"),
     ("Controls", "Dashboard", "POST", "/v1/cases", "CreateCaseBody", "CaseView"),
+    (
+        "Controls",
+        "Dashboard",
+        "POST",
+        "/v1/cases/{case_id}/reference-image",
+        "multipart:file",
+        "ReferenceImageUploadResponse",
+    ),
     ("Controls", "Dashboard", "GET", "/v1/cases", None, "CaseSummary[]"),
     ("Controls", "Dashboard", "GET", "/v1/cases/{case_id}/view", None, "CaseView"),
     (
@@ -268,6 +276,7 @@ MODEL_OWNERS = {
         "LoginRequest",
         "LoginResponse",
         "ProblemDetails",
+        "ReferenceImageUploadResponse",
         "ReleaseLegalHoldBody",
         "RevokeDecisionBody",
         "ReviewDecisionBody",

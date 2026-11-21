@@ -633,6 +633,22 @@ class CreateCaseBody(ContractModel):
     site_version: str
 
 
+class ReferenceImageUploadResponse(ContractModel):
+    upload_id: str
+    case_id: str
+    reference_image_ref: ArtifactRef
+    mime_type: Literal["image/jpeg"] = "image/jpeg"
+    size_bytes: int = Field(gt=0)
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+    expires_at: datetime
+
+    @field_validator("expires_at", mode="after")
+    @classmethod
+    def _aware_expiry(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
 class ReviewDecisionBody(ContractModel):
     decision_id: str
     candidate_id: str
