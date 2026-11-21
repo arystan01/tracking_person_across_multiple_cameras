@@ -11,6 +11,7 @@ from javes_contracts import (
     RoutingInitResponse,
     RoutingStepRequest,
     RoutingStepResponse,
+    ServiceHealthResponse,
 )
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.step import init_state
@@ -109,11 +110,19 @@ def create_routing_app(
             deep=True,
         )
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def live() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/health/ready")
+    @app.get(
+        "/health/ready",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def ready() -> dict[str, str]:
         healthy, status = current_runtime().readiness()
         if not healthy:
