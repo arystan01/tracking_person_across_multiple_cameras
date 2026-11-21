@@ -56,6 +56,9 @@ javes-routing-shadow = "javes_routing.service.shadow_benchmark:main"
 javes-main-migrate = "javes_main.persistence.migrate:main"
 javes-main-backup = "javes_main.persistence.backup:main"
 javes-main-replay-audit = "javes_main.replay_audit:main"
+javes-main-audit-export = "javes_main.application.audit_export_cli:main"
+javes-main-incident-snapshot = "javes_main.application.incident_snapshot_cli:main"
+javes-token-rotation = "javes_security.cli:main"
 javes-main-bootstrap-root = "javes_main.application.auth_cli:main"
 javes-contract-schemas = "javes_contracts.schema:main"
 javes-contract-bundle = "javes_contracts.bundle:main"
@@ -76,7 +79,7 @@ javes-nvidia-archive-inspect = "javes_archive.cli:inspect_main"
 javes-nvidia-acceptance = "javes_release.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*", "javes_telemetry*"]
+include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*", "javes_telemetry*", "javes_security*"]
 
 [tool.setuptools.package-data]
 "javes_main.persistence.migrations" = ["script.py.mako"]

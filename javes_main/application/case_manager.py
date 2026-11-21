@@ -91,7 +91,9 @@ DEFAULT_RETENTION_TTL_S = DEFAULT_RETENTION_DAYS * 24 * 60 * 60
 def _fingerprint(value: Any) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -150,9 +152,7 @@ class CaseManager:
         )
         self.repository.append_event(event)
 
-    def _idempotent_response(
-        self, key: str, fingerprint: str
-    ) -> dict[str, Any] | None:
+    def _idempotent_response(self, key: str, fingerprint: str) -> dict[str, Any] | None:
         previous = self.repository.get_idempotency(key)
         if previous is None:
             return None
@@ -216,7 +216,8 @@ class CaseManager:
         return [
             self._legal_hold_view(item)
             for item in sorted(
-                case.legal_holds.values(), key=lambda value: (value.set_at, value.hold_id)
+                case.legal_holds.values(),
+                key=lambda value: (value.set_at, value.hold_id),
             )
         ]
 
@@ -232,7 +233,8 @@ class CaseManager:
         replay = self._idempotent_response(storage_key, fingerprint)
         if replay is not None:
             return next(
-                item for item in self.list_legal_holds(case_id)
+                item
+                for item in self.list_legal_holds(case_id)
                 if item.hold_id == body.hold_id
             )
         case = self.repository.get(case_id)
@@ -263,7 +265,8 @@ class CaseManager:
             replay = self._idempotent_response(storage_key, fingerprint)
             if replay is not None:
                 return next(
-                    item for item in self.list_legal_holds(case_id)
+                    item
+                    for item in self.list_legal_holds(case_id)
                     if item.hold_id == body.hold_id
                 )
             case = self.repository.get(case_id)
@@ -335,7 +338,8 @@ class CaseManager:
         replay = self._idempotent_response(storage_key, fingerprint)
         if replay is not None:
             return next(
-                item for item in self.list_legal_holds(case_id)
+                item
+                for item in self.list_legal_holds(case_id)
                 if item.hold_id == body.hold_id
             )
         case = self.repository.get(case_id)
@@ -352,7 +356,8 @@ class CaseManager:
             replay = self._idempotent_response(storage_key, fingerprint)
             if replay is not None:
                 return next(
-                    item for item in self.list_legal_holds(case_id)
+                    item
+                    for item in self.list_legal_holds(case_id)
                     if item.hold_id == body.hold_id
                 )
             case = self.repository.get(case_id)
@@ -490,7 +495,9 @@ class CaseManager:
                 if hashlib.sha256(data).hexdigest() != manifest.sha256:
                     raise ValueError("worker artifact checksum does not match manifest")
                 if manifest.mime_type is not None and mime_type != manifest.mime_type:
-                    raise ValueError("worker artifact MIME type does not match manifest")
+                    raise ValueError(
+                        "worker artifact MIME type does not match manifest"
+                    )
                 record_id = self.ids.new(
                     "artifact", case_id, task_id, manifest.object_key, manifest.sha256
                 )
@@ -520,6 +527,25 @@ class CaseManager:
             f"{resource.retention_class.value}:{_fingerprint(resource)}",
             {"resource": resource.model_dump(mode="json")},
         )
+
+    def register_audit_artifact(
+        self,
+        export_id: str,
+        object_key: str,
+        kind: str,
+        size_bytes: int,
+        sha256: str,
+    ) -> None:
+        """Register a permanent audit artifact without exposing its filesystem path."""
+
+        resource = RetentionResource(
+            resource_id=self.ids.new("audit-resource", export_id, kind, sha256),
+            case_id="__audit__",
+            kind=kind,
+            retention_class=RetentionClass.AUDIT,
+            artifact_ref=ArtifactRef(object_key=object_key, sha256=sha256),
+        )
+        self._enqueue_retention_resource(resource)
 
     def _enqueue_routing(
         self,
@@ -659,7 +685,9 @@ class CaseManager:
             self._initial_anchors(case),
             case.created_at,
         )
-        active_ids = {item.decision_id for item in self._active_decisions(case.request.case_id)}
+        active_ids = {
+            item.decision_id for item in self._active_decisions(case.request.case_id)
+        }
         last_result: RoutingWorkerResult | None = None
         replayed_inputs: list[str] = []
         for record in ordered:
@@ -1109,10 +1137,7 @@ class CaseManager:
         for rendered in worker_result.rendered_route.maps:
             if not route_changed:
                 continue
-            key = (
-                f"cases/{case_id}/routes/{route_revision}/"
-                f"{rendered.floor_id}.svg"
-            )
+            key = f"cases/{case_id}/routes/{route_revision}/" f"{rendered.floor_id}.svg"
             svg_bytes = rendered.svg.encode("utf-8")
             self.artifacts.put(key, svg_bytes, rendered.mime_type)
             manifest = ArtifactManifest(
@@ -1223,11 +1248,7 @@ class CaseManager:
                     case_id,
                     OutboxTopic.RETENTION_COMMAND,
                     f"retention-command:{automatic_retention_command.command_id}",
-                    {
-                        "command": automatic_retention_command.model_dump(
-                            mode="json"
-                        )
-                    },
+                    {"command": automatic_retention_command.model_dump(mode="json")},
                 )
                 self._event(
                     case_id,
@@ -1486,7 +1507,9 @@ class CaseManager:
             else:
                 job.state = JobState.DONE
             job.lease_owner = None if job.state != JobState.LEASED else job.lease_owner
-            job.lease_expires_at = None if job.state != JobState.LEASED else job.lease_expires_at
+            job.lease_expires_at = (
+                None if job.state != JobState.LEASED else job.lease_expires_at
+            )
             self.repository.save_job(job)
             self._event(
                 job.case_id,
@@ -1578,7 +1601,10 @@ class CaseManager:
         processed: list[str] = []
         for job in jobs:
             current_time = self.clock.now()
-            if job.payload.deadline is not None and job.payload.deadline <= current_time:
+            if (
+                job.payload.deadline is not None
+                and job.payload.deadline <= current_time
+            ):
                 result = ProbeResult(
                     probe_id=job.payload.probe.probe_id,
                     status=ProbeStatus.TIMEOUT,
@@ -1729,9 +1755,7 @@ class CaseManager:
                 for item in self._active_decisions(case_id)
                 if item.tracklet_id == body.tracklet_id
             ]
-            if any(
-                item.decision != body.decision for item in prior_decisions
-            ):
+            if any(item.decision != body.decision for item in prior_decisions):
                 raise ValueError(
                     "contradictory review requires the future revoke workflow"
                 )
@@ -1741,12 +1765,12 @@ class CaseManager:
                 )
                 return self.get_view(case_id)
             anchors = Anchors(
-                confirm_tracklet_ids=[body.tracklet_id]
-                if body.decision == "CONFIRM"
-                else [],
-                reject_tracklet_ids=[body.tracklet_id]
-                if body.decision == "REJECT"
-                else [],
+                confirm_tracklet_ids=(
+                    [body.tracklet_id] if body.decision == "CONFIRM" else []
+                ),
+                reject_tracklet_ids=(
+                    [body.tracklet_id] if body.decision == "REJECT" else []
+                ),
             )
             searching = case.lifecycle == CaseLifecycle.SEARCHING
             expected = case.revision
@@ -1776,8 +1800,7 @@ class CaseManager:
                     tracklet_id=body.tracklet_id,
                     base_gallery_ref=case.gallery_ref,
                     model_version=(
-                        case.gallery_model_version
-                        or "osnet_ain_x1_0_msmt17"
+                        case.gallery_model_version or "osnet_ain_x1_0_msmt17"
                     ),
                 )
                 self._enqueue(
@@ -1848,13 +1871,18 @@ class CaseManager:
                 raise ValueError(
                     "expected_case_revision does not match current case revision"
                 )
-            if case.replay_capability != "COMPLETE" or not self.repository.list_case_data(
-                case_id, kinds={CaseDataKind.ROUTING_INPUT.value}
+            if (
+                case.replay_capability != "COMPLETE"
+                or not self.repository.list_case_data(
+                    case_id, kinds={CaseDataKind.ROUTING_INPUT.value}
+                )
             ):
                 raise ReplayEvidenceIncomplete(
                     "replay_evidence_incomplete: decision cannot be revoked safely"
                 )
-            history = {item.decision_id: item for item in self._decision_history(case_id)}
+            history = {
+                item.decision_id: item for item in self._decision_history(case_id)
+            }
             decision = history.get(body.decision_id)
             if decision is None:
                 raise KeyError(f"unknown decision {body.decision_id!r}")
@@ -1891,8 +1919,7 @@ class CaseManager:
             remaining = self._active_decisions(case_id)
             clip_id = case.candidate_to_clip.get(decision.candidate_id)
             another_confirm = any(
-                item.decision == "CONFIRM"
-                and item.tracklet_id == decision.tracklet_id
+                item.decision == "CONFIRM" and item.tracklet_id == decision.tracklet_id
                 for item in remaining
             )
             if clip_id is not None and not another_confirm:
@@ -2076,10 +2103,7 @@ class CaseManager:
         for visit in best.visits:
             for tracklet_id in visit.tracklet_ids:
                 clip = clip_by_tracklet.get(tracklet_id)
-                if (
-                    clip is not None
-                    and clip.clip_id not in ordered
-                ):
+                if clip is not None and clip.clip_id not in ordered:
                     ordered.append(clip.clip_id)
         return ordered
 
@@ -2186,10 +2210,7 @@ class CaseManager:
                     CaseLifecycle.SAVED,
                 }:
                     continue
-                if (
-                    current.retention_due_at is None
-                    or current.retention_due_at > now
-                ):
+                if current.retention_due_at is None or current.retention_due_at > now:
                     continue
                 expected = current.revision
                 current.lifecycle = CaseLifecycle.DELETE_REQUESTED
@@ -2391,7 +2412,10 @@ class CaseManager:
             self._event(
                 message.case_id,
                 "CLIP_READY",
-                payload={"clip_id": record.clip_id, "candidate_id": record.candidate_id},
+                payload={
+                    "clip_id": record.clip_id,
+                    "candidate_id": record.candidate_id,
+                },
             )
             return
 
@@ -2546,7 +2570,11 @@ class CaseManager:
                 )
             self._event(
                 message.case_id,
-                "CASE_EXPORTED" if export.status == ClipProcessingStatus.READY else "CASE_EXPORT_FAILED",
+                (
+                    "CASE_EXPORTED"
+                    if export.status == ClipProcessingStatus.READY
+                    else "CASE_EXPORT_FAILED"
+                ),
                 payload=export.model_dump(mode="json"),
             )
             return
@@ -2612,14 +2640,17 @@ class CaseManager:
                 or hold_result.hold_id != hold_command.hold_id
                 or hold_result.action != hold_command.action
             ):
-                raise ValueError("Retention legal-hold result does not match its command")
+                raise ValueError(
+                    "Retention legal-hold result does not match its command"
+                )
             hold = case.legal_holds.get(hold_result.hold_id)
             if hold is None:
                 raise ValueError("Retention returned an unknown legal hold")
             expected_active = {
                 hold_id
                 for hold_id, item in case.legal_holds.items()
-                if item.active and not (
+                if item.active
+                and not (
                     hold_result.action == "RELEASE" and hold_id == hold_result.hold_id
                 )
             }
@@ -2683,7 +2714,9 @@ class CaseManager:
             "updated_at": case.updated_at.isoformat(),
         }
 
-    def list_cases(self, *, lifecycle: CaseLifecycle | None = None) -> list[CaseSummary]:
+    def list_cases(
+        self, *, lifecycle: CaseLifecycle | None = None
+    ) -> list[CaseSummary]:
         states = {lifecycle.value} if lifecycle is not None else None
         summaries: list[CaseSummary] = []
         for case in self.repository.list_cases(lifecycles=states):
@@ -2693,7 +2726,9 @@ class CaseManager:
                     target_id=case.request.target_id,
                     lifecycle=case.lifecycle,
                     revision=case.revision,
-                    route_revision=(case.latest_route.revision if case.latest_route else 0),
+                    route_revision=(
+                        case.latest_route.revision if case.latest_route else 0
+                    ),
                     mode=(
                         case.latest_route.step_result.mode.value
                         if case.latest_route is not None
@@ -2733,9 +2768,7 @@ class CaseManager:
             for item in sorted(case.clips.values(), key=lambda value: value.clip_id)
         ]
 
-    def get_route_svg(
-        self, case_id: str, route_revision: int, floor_id: str
-    ) -> bytes:
+    def get_route_svg(self, case_id: str, route_revision: int, floor_id: str) -> bytes:
         case = self.repository.get(case_id)
         if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
             raise KeyError("route is no longer available")

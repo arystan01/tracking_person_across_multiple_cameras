@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import hashlib
 from pathlib import Path
 
 
@@ -24,6 +25,18 @@ class InMemoryArtifactStore:
             raise KeyError(f"unknown artifact {key!r}") from exc
         return bytes(data), mime_type
 
+    def iter_chunks(self, key: str, chunk_size: int = 1024 * 1024):
+        data, mime_type = self.get(key)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        return (
+            (
+                data[offset : offset + chunk_size]
+                for offset in range(0, len(data), chunk_size)
+            ),
+            mime_type,
+        )
+
     def keys(self) -> list[str]:
         return sorted(self._items)
 
@@ -31,6 +44,11 @@ class InMemoryArtifactStore:
         """Delete one exact key; absence is an idempotent success."""
 
         return self._items.pop(key, None) is not None
+
+    def put_stream(self, key: str, chunks, mime_type: str) -> tuple[str, int, str]:
+        payload = b"".join(bytes(chunk) for chunk in chunks)
+        self.put(key, payload, mime_type)
+        return key, len(payload), hashlib.sha256(payload).hexdigest()
 
 
 class InMemoryLiveFeedStore:
@@ -94,7 +112,9 @@ class FileArtifactStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary_name = tempfile.mkstemp(prefix=".javes-", dir=path.parent)
         mime_path = self._mime_file(key)
-        mime_fd, temporary_mime = tempfile.mkstemp(prefix=".javes-mime-", dir=self._mime_path)
+        mime_fd, temporary_mime = tempfile.mkstemp(
+            prefix=".javes-mime-", dir=self._mime_path
+        )
         try:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(payload)
@@ -115,6 +135,45 @@ class FileArtifactStore:
                 os.unlink(temporary_mime)
         return key
 
+    def put_stream(self, key: str, chunks, mime_type: str) -> tuple[str, int, str]:
+        path = self._path(key)
+        if path.exists():
+            data, previous_mime = self.get(key)
+            if previous_mime != mime_type:
+                raise ValueError(
+                    f"artifact key {key!r} already has different MIME type"
+                )
+            return key, len(data), hashlib.sha256(data).hexdigest()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(prefix=".javes-", dir=path.parent)
+        mime_path = self._mime_file(key)
+        mime_fd, temporary_mime = tempfile.mkstemp(
+            prefix=".javes-mime-", dir=self._mime_path
+        )
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                for chunk in chunks:
+                    value = bytes(chunk)
+                    stream.write(value)
+                    digest.update(value)
+                    size += len(value)
+                stream.flush()
+                os.fsync(stream.fileno())
+            with os.fdopen(mime_fd, "w", encoding="utf-8") as stream:
+                stream.write(mime_type)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_mime, mime_path)
+            os.replace(temporary_name, path)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+            if os.path.exists(temporary_mime):
+                os.unlink(temporary_mime)
+        return key, size, digest.hexdigest()
+
     def get(self, key: str) -> tuple[bytes, str]:
         path = self._path(key)
         if not path.is_file():
@@ -123,6 +182,23 @@ class FileArtifactStore:
         if not mime_path.is_file():
             raise RuntimeError(f"artifact {key!r} has no MIME metadata")
         return path.read_bytes(), mime_path.read_text(encoding="utf-8")
+
+    def iter_chunks(self, key: str, chunk_size: int = 1024 * 1024):
+        path = self._path(key)
+        if not path.is_file():
+            raise KeyError(f"unknown artifact {key!r}")
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        mime_path = self._mime_file(key)
+        if not mime_path.is_file():
+            raise RuntimeError(f"artifact {key!r} has no MIME metadata")
+
+        def chunks():
+            with path.open("rb") as stream:
+                while chunk := stream.read(chunk_size):
+                    yield chunk
+
+        return chunks(), mime_path.read_text(encoding="utf-8")
 
     def delete(self, key: str) -> bool:
         """Idempotently delete data and its MIME sidecar under the store root."""

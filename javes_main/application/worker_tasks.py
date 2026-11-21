@@ -73,6 +73,8 @@ class WorkerTaskService:
         manager: CaseManager,
         clock: Clock,
         lease_secret: str,
+        lease_secret_previous: str | None = None,
+        lease_secret_previous_valid_until: datetime | None = None,
     ) -> None:
         if not lease_secret:
             raise ValueError("worker lease secret must not be empty")
@@ -80,7 +82,18 @@ class WorkerTaskService:
         self.manager = manager
         self.clock = clock
         # Hashing produces a fixed-strength HMAC key from the configured secret.
-        self._secret = hashlib.sha256(lease_secret.encode("utf-8")).digest()
+        from javes_security import RotationWindow
+
+        rotation = RotationWindow(
+            current=lease_secret,
+            previous=lease_secret_previous,
+            previous_valid_until=lease_secret_previous_valid_until,
+        )
+        accepted = rotation.accepted(now=clock.now())
+        self._secret = hashlib.sha256(accepted[0].encode("utf-8")).digest()
+        self._verification_secrets = tuple(
+            hashlib.sha256(item.encode("utf-8")).digest() for item in accepted
+        )
 
     @staticmethod
     def _utc(value: datetime) -> datetime:
@@ -101,17 +114,18 @@ class WorkerTaskService:
     def _decode_lease(self, token: str) -> dict[str, Any]:
         try:
             encoded, supplied = token.split(".", 1)
-            expected = hmac.new(
-                self._secret, encoded.encode(), hashlib.sha256
-            ).digest()
             supplied_bytes = base64.urlsafe_b64decode(
                 supplied + "=" * (-len(supplied) % 4)
             )
-            if not hmac.compare_digest(expected, supplied_bytes):
+            if not any(
+                hmac.compare_digest(
+                    hmac.new(secret, encoded.encode(), hashlib.sha256).digest(),
+                    supplied_bytes,
+                )
+                for secret in self._verification_secrets
+            ):
                 raise LeaseError("invalid lease token signature")
-            payload = base64.urlsafe_b64decode(
-                encoded + "=" * (-len(encoded) % 4)
-            )
+            payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
             claims = json.loads(payload)
         except LeaseError:
             raise
@@ -316,9 +330,7 @@ class WorkerTaskService:
                 component, task_id, request.lease_token
             )
             if source == "job" and record.state == JobState.CANCELLED:
-                return WorkerHeartbeatResponse(
-                    task_id=task_id, cancel_requested=True
-                )
+                return WorkerHeartbeatResponse(task_id=task_id, cancel_requested=True)
             expected_state = JobState.LEASED if source == "job" else OutboxState.LEASED
             if record.state != expected_state:
                 raise LeaseError("task is no longer leased")
@@ -365,8 +377,7 @@ class WorkerTaskService:
             except KeyError:
                 candidate_job = None
             is_open_job = bool(
-                candidate_job is not None
-                and candidate_job.payload.probe.t_to is None
+                candidate_job is not None and candidate_job.payload.probe.t_to is None
             )
         idempotency_key = f"worker-result:{component}:{task_id}"
         if is_open_job:
@@ -386,18 +397,12 @@ class WorkerTaskService:
                 if previous[0] != fingerprint:
                     raise ValueError("worker result replay has different content")
                 return WorkerTaskAck(task_id=task_id, duplicate=True)
-            source, record, _ = self._current(
-                component, task_id, request.lease_token
-            )
-            expected_state = (
-                JobState.LEASED if source == "job" else OutboxState.LEASED
-            )
+            source, record, _ = self._current(component, task_id, request.lease_token)
+            expected_state = JobState.LEASED if source == "job" else OutboxState.LEASED
             if record.state != expected_state:
                 raise LeaseError("task is no longer leased")
             self._require_active(record)
-            self._validate_result_manifests(
-                component, source, record, request
-            )
+            self._validate_result_manifests(component, source, record, request)
 
             if source == "job":
                 if request.result is None:

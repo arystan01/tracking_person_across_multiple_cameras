@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Iterable
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -15,12 +16,22 @@ from javes_routing.core.params import RoutingParams
 from javes_routing.core.step import init_state
 from javes_routing.core.facade import step_and_render
 from javes_telemetry import current_runtime, instrument_fastapi, operation
+from javes_security import RotationConfigurationError, RotationWindow
 
 
-def create_routing_app(site_config, *, service_token: str) -> FastAPI:
+def create_routing_app(
+    site_config, *, service_token: str | Iterable[str] | RotationWindow
+) -> FastAPI:
     """Create the network shell; all algorithmic work remains pure."""
 
-    if not service_token:
+    accepted_tokens = (
+        service_token.accepted()
+        if isinstance(service_token, RotationWindow)
+        else (
+            (service_token,) if isinstance(service_token, str) else tuple(service_token)
+        )
+    )
+    if not accepted_tokens:
         raise ValueError("Routing service token is required")
     app = FastAPI(title="JAVES-AI Routing", version="1.0.0")
 
@@ -33,13 +44,19 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     def authorise(authorization: str | None, x_service_token: str | None) -> None:
+        tokens = (
+            service_token.accepted()
+            if isinstance(service_token, RotationWindow)
+            else accepted_tokens
+        )
         bearer = (
             authorization[7:].strip()
             if authorization and authorization.lower().startswith("bearer ")
             else None
         )
         if not any(
-            candidate is not None and secrets.compare_digest(candidate, service_token)
+            candidate is not None
+            and any(secrets.compare_digest(candidate, token) for token in tokens)
             for candidate in (bearer, x_service_token)
         ):
             raise HTTPException(status_code=401, detail="valid service token required")
@@ -101,6 +118,13 @@ def create_routing_app(site_config, *, service_token: str) -> FastAPI:
         healthy, status = current_runtime().readiness()
         if not healthy:
             raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        if isinstance(service_token, RotationWindow):
+            try:
+                service_token.require_ready()
+            except RotationConfigurationError as exc:
+                raise HTTPException(
+                    status_code=503, detail="token rotation is invalid"
+                ) from exc
         return {"status": "ready", "telemetry": status}
 
     @app.post("/internal/v1/routing/init", response_model=RoutingInitResponse)

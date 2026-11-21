@@ -7,6 +7,8 @@ than another component's implementation package.
 
 from .boundary import (
     ActorView,
+    AuditExportManifest,
+    AuditExportRequest,
     ArtifactRef,
     CaseCommandBody,
     CaseLifecycle,
@@ -125,6 +127,8 @@ __all__ = [
     "Ambiguity",
     "Anchors",
     "ActorView",
+    "AuditExportManifest",
+    "AuditExportRequest",
     "BlindNodeDef",
     "CameraCalibration",
     "ArtifactRef",

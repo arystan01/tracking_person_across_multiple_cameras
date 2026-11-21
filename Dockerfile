@@ -12,6 +12,7 @@ COPY javes_clip javes_clip
 COPY javes_archive javes_archive
 COPY javes_release javes_release
 COPY javes_telemetry javes_telemetry
+COPY javes_security javes_security
 RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels-infra '.[infra]'
 
 FROM builder AS perception-builder

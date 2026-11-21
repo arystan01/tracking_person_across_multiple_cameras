@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -16,11 +17,16 @@ class MainSettings(BaseModel):
     environment: str = "development"
     perception_worker_token: SecretStr | None = None
     perception_worker_token_previous: SecretStr | None = None
+    perception_worker_token_previous_valid_until: datetime | None = None
     clip_worker_token: SecretStr | None = None
     clip_worker_token_previous: SecretStr | None = None
+    clip_worker_token_previous_valid_until: datetime | None = None
     retention_worker_token: SecretStr | None = None
     retention_worker_token_previous: SecretStr | None = None
+    retention_worker_token_previous_valid_until: datetime | None = None
     worker_lease_secret: SecretStr | None = None
+    worker_lease_secret_previous: SecretStr | None = None
+    worker_lease_secret_previous_valid_until: datetime | None = None
     routing_url: str | None = None
     routing_token: SecretStr | None = None
     site_config_url: str | None = None
@@ -57,15 +63,30 @@ class MainSettings(BaseModel):
             "perception_worker_token_previous": os.environ.get(
                 f"{prefix}PERCEPTION_WORKER_TOKEN_PREVIOUS"
             ),
+            "perception_worker_token_previous_valid_until": os.environ.get(
+                f"{prefix}PERCEPTION_WORKER_TOKEN_PREVIOUS_VALID_UNTIL"
+            ),
             "clip_worker_token": os.environ.get(f"{prefix}CLIP_WORKER_TOKEN"),
             "clip_worker_token_previous": os.environ.get(
                 f"{prefix}CLIP_WORKER_TOKEN_PREVIOUS"
+            ),
+            "clip_worker_token_previous_valid_until": os.environ.get(
+                f"{prefix}CLIP_WORKER_TOKEN_PREVIOUS_VALID_UNTIL"
             ),
             "retention_worker_token": os.environ.get(f"{prefix}RETENTION_WORKER_TOKEN"),
             "retention_worker_token_previous": os.environ.get(
                 f"{prefix}RETENTION_WORKER_TOKEN_PREVIOUS"
             ),
+            "retention_worker_token_previous_valid_until": os.environ.get(
+                f"{prefix}RETENTION_WORKER_TOKEN_PREVIOUS_VALID_UNTIL"
+            ),
             "worker_lease_secret": os.environ.get(f"{prefix}WORKER_LEASE_SECRET"),
+            "worker_lease_secret_previous": os.environ.get(
+                f"{prefix}WORKER_LEASE_SECRET_PREVIOUS"
+            ),
+            "worker_lease_secret_previous_valid_until": os.environ.get(
+                f"{prefix}WORKER_LEASE_SECRET_PREVIOUS_VALID_UNTIL"
+            ),
             "routing_url": os.environ.get(f"{prefix}ROUTING_URL"),
             "routing_token": os.environ.get(f"{prefix}ROUTING_TOKEN"),
             "site_config_url": os.environ.get(f"{prefix}SITE_CONFIG_URL"),
@@ -104,6 +125,33 @@ class MainSettings(BaseModel):
             if value is not None:
                 values[field] = converter(value)
         settings = cls.model_validate(values)
+        from javes_security import RotationWindow
+
+        for component in ("perception", "clip", "retention"):
+            current = getattr(settings, f"{component}_worker_token")
+            previous = getattr(settings, f"{component}_worker_token_previous")
+            deadline = getattr(
+                settings, f"{component}_worker_token_previous_valid_until"
+            )
+            if previous is not None:
+                if current is None:
+                    raise ValueError(
+                        f"{component} previous token needs a current token"
+                    )
+                rotation = RotationWindow(
+                    current=current.get_secret_value(),
+                    previous=previous.get_secret_value(),
+                    previous_valid_until=deadline,
+                )
+                rotation.require_ready()
+        if settings.worker_lease_secret_previous is not None:
+            if settings.worker_lease_secret is None:
+                raise ValueError("previous worker lease secret needs a current secret")
+            RotationWindow(
+                current=settings.worker_lease_secret.get_secret_value(),
+                previous=settings.worker_lease_secret_previous.get_secret_value(),
+                previous_valid_until=settings.worker_lease_secret_previous_valid_until,
+            ).require_ready()
         if settings.environment.lower() in {"staging", "production"}:
             forbidden = ("development", "change-me", "changeme", "example", "secret")
             required_secrets = {

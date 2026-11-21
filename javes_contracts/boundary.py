@@ -51,6 +51,50 @@ class ProblemDetails(ContractModel):
     errors: list[dict[str, Any]] | None = None
 
 
+class AuditExportRequest(ContractModel):
+    export_id: str = Field(
+        min_length=1, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    )
+    from_time: datetime | None = None
+    to_time: datetime | None = None
+    case_ids: list[str] = Field(default_factory=list, max_length=100)
+    actor_ids: list[str] = Field(default_factory=list, max_length=100)
+    event_types: list[str] = Field(default_factory=list, max_length=100)
+    page_size: int = Field(default=500, ge=1, le=2000)
+
+    @field_validator("from_time", "to_time", mode="after")
+    @classmethod
+    def _aware_filter_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+    @model_validator(mode="after")
+    def _ordered_filter(self) -> AuditExportRequest:
+        if self.from_time and self.to_time and self.to_time < self.from_time:
+            raise ValueError("audit export to_time must not precede from_time")
+        return self
+
+
+class AuditExportManifest(ContractModel):
+    format: Literal["javes-audit-export.v1"] = "javes-audit-export.v1"
+    export_id: str
+    created_at: datetime
+    created_by: str
+    filters: dict[str, Any]
+    row_count: int = Field(ge=0)
+    first_event_id: str | None = None
+    last_event_id: str | None = None
+    schema_version: Literal["javes-audit-event.v1"] = "javes-audit-event.v1"
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    events_url: str
+    manifest_url: str
+
+    @field_validator("created_at", mode="after")
+    @classmethod
+    def _aware_created(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
 class ActorView(ContractModel):
     user_id: str
     username: str
@@ -268,6 +312,8 @@ class ClipRecord(ContractModel):
     @classmethod
     def _aware_times(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
 class ClipStateCommand(ContractModel):
     contract_version: Literal["clip-state-command.v1"] = "clip-state-command.v1"
     command_id: str
@@ -281,6 +327,7 @@ class ClipStateCommand(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
 
 class ExportClipsCommand(ContractModel):
     contract_version: Literal["clip-export.v1"] = "clip-export.v1"
@@ -401,9 +448,7 @@ class RetentionResult(ContractModel):
 
 
 class RetentionHoldCommand(ContractModel):
-    contract_version: Literal["retention-hold-command.v1"] = (
-        "retention-hold-command.v1"
-    )
+    contract_version: Literal["retention-hold-command.v1"] = "retention-hold-command.v1"
     command_id: str
     case_id: str
     hold_id: str
@@ -428,9 +473,7 @@ class RetentionHoldCommand(ContractModel):
 
 
 class RetentionHoldResult(ContractModel):
-    contract_version: Literal["retention-hold-result.v1"] = (
-        "retention-hold-result.v1"
-    )
+    contract_version: Literal["retention-hold-result.v1"] = "retention-hold-result.v1"
     command_id: str
     case_id: str
     hold_id: str

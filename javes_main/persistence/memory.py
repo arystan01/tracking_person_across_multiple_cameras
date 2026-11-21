@@ -114,7 +114,9 @@ class InMemoryRepository:
                 raise RevisionConflict(
                     f"case {case_id!r} revision is {current.revision}, expected {expected_revision}"
                 )
-            saved = case.model_copy(update={"revision": expected_revision + 1}, deep=True)
+            saved = case.model_copy(
+                update={"revision": expected_revision + 1}, deep=True
+            )
             self._cases[case_id] = saved
             return saved.model_copy(deep=True)
 
@@ -222,11 +224,38 @@ class InMemoryRepository:
 
     def list_events(self, case_id: str) -> list[AuditEvent]:
         with self._lock:
-            return [item.model_copy(deep=True) for item in self._events.get(case_id, [])]
+            return [
+                item.model_copy(deep=True) for item in self._events.get(case_id, [])
+            ]
 
-    def remember_idempotency(
-        self, key: str, fingerprint: str, response: dict
-    ) -> None:
+    def list_audit_events(
+        self,
+        *,
+        after: tuple[datetime, str] | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+        case_ids: set[str] | None = None,
+        actor_ids: set[str] | None = None,
+        event_types: set[str] | None = None,
+        limit: int = 500,
+    ) -> list[AuditEvent]:
+        with self._lock:
+            events = sorted(
+                (item for values in self._events.values() for item in values),
+                key=lambda item: (item.occurred_at, item.event_id),
+            )
+            return [
+                item.model_copy(deep=True)
+                for item in events
+                if (after is None or (item.occurred_at, item.event_id) > after)
+                and (from_time is None or item.occurred_at >= from_time)
+                and (to_time is None or item.occurred_at <= to_time)
+                and (not case_ids or item.case_id in case_ids)
+                and (not actor_ids or item.actor_id in actor_ids)
+                and (not event_types or item.event_type in event_types)
+            ][:limit]
+
+    def remember_idempotency(self, key: str, fingerprint: str, response: dict) -> None:
         with self._lock:
             previous = self._idempotency.get(key)
             if previous is not None and previous[0] != fingerprint:
@@ -287,7 +316,10 @@ class InMemoryRepository:
         with self._lock:
             if session.session_id in self._sessions:
                 raise ValueError("session already exists")
-            if any(item.token_hash == session.token_hash for item in self._sessions.values()):
+            if any(
+                item.token_hash == session.token_hash
+                for item in self._sessions.values()
+            ):
                 raise ValueError("session token already exists")
             self._sessions[session.session_id] = session.model_copy(deep=True)
 
@@ -320,7 +352,10 @@ class InMemoryRepository:
             previous_id = self._outbox_dedupe.get(message.dedupe_key)
             if previous_id is not None:
                 previous = self._outbox[previous_id]
-                if previous.topic != message.topic or previous.payload != message.payload:
+                if (
+                    previous.topic != message.topic
+                    or previous.payload != message.payload
+                ):
                     raise ValueError("outbox dedupe key reused with different payload")
                 return
             if message.message_id in self._outbox:
@@ -369,7 +404,8 @@ class InMemoryRepository:
                 (
                     item
                     for item in self._outbox.values()
-                    if item.state == OutboxState.PENDING and item.available_at <= now
+                    if item.state == OutboxState.PENDING
+                    and item.available_at <= now
                     and (topics is None or item.topic in topics)
                 ),
                 key=lambda item: (item.available_at, item.created_at, item.message_id),
@@ -388,7 +424,8 @@ class InMemoryRepository:
         with self._lock:
             reclaimed: list[OutboxRecord] = []
             for item in sorted(
-                self._outbox.values(), key=lambda value: (value.created_at, value.message_id)
+                self._outbox.values(),
+                key=lambda value: (value.created_at, value.message_id),
             ):
                 if (
                     item.state != OutboxState.LEASED
@@ -434,8 +471,7 @@ class InMemoryRepository:
                     or previous.payload != record.payload
                 ):
                     raise ValueError(
-                        "case data record id reused with different payload: "
-                        f"{key!r}"
+                        "case data record id reused with different payload: " f"{key!r}"
                     )
                 return
             self._case_data[key] = record.model_copy(deep=True)
@@ -559,7 +595,9 @@ class InMemoryRepository:
             # Audit events are append-only security records. Case retention
             # removes operational and media content, never the event identity,
             # actor, timestamp, action, or details.
-            job_ids = [key for key, value in self._jobs.items() if value.case_id == case_id]
+            job_ids = [
+                key for key, value in self._jobs.items() if value.case_id == case_id
+            ]
             for job_id in job_ids:
                 job = self._jobs.pop(job_id)
                 self._job_dedupe.pop(job.dedupe_key, None)
@@ -582,7 +620,10 @@ class InMemoryRepository:
                 trigger = self._routing_triggers.pop(trigger_id)
                 self._routing_trigger_dedupe.pop(trigger.dedupe_key, None)
             for message_id, message in list(self._outbox.items()):
-                if message.case_id == case_id and message_id != preserve_outbox_message_id:
+                if (
+                    message.case_id == case_id
+                    and message_id != preserve_outbox_message_id
+                ):
                     next_state = (
                         OutboxState.CANCELLED
                         if message.state in {OutboxState.PENDING, OutboxState.LEASED}
@@ -666,12 +707,9 @@ class InMemoryRepository:
                         deep=True,
                     )
             for key, record in list(self._case_data.items()):
-                temporary_artifact = (
-                    record.kind.value == "ARTIFACT"
-                    and (
-                        record.payload.get("kind") == "HOLD_CLIP"
-                        or record.payload.get("state") == "RELEASED"
-                    )
+                temporary_artifact = record.kind.value == "ARTIFACT" and (
+                    record.payload.get("kind") == "HOLD_CLIP"
+                    or record.payload.get("state") == "RELEASED"
                 )
                 if record.case_id == case_id and (
                     record.kind.value in temporary_kinds or temporary_artifact
@@ -680,7 +718,10 @@ class InMemoryRepository:
                         update={"payload": {"redacted": True}}, deep=True
                     )
             for message_id, message in list(self._outbox.items()):
-                if message.case_id == case_id and message_id != preserve_outbox_message_id:
+                if (
+                    message.case_id == case_id
+                    and message_id != preserve_outbox_message_id
+                ):
                     self._outbox[message_id] = message.model_copy(
                         update={"payload": {"redacted": True}}, deep=True
                     )

@@ -12,6 +12,7 @@ from .application import AuthService, CaseManager
 from .persistence.sqlalchemy import SqlAlchemyRepository
 from .scheduler import RoutingTriggerDispatcher
 from .settings import MainSettings
+from javes_security import RotationWindow
 
 
 @dataclass
@@ -88,12 +89,45 @@ def build_api_first_system(settings: MainSettings) -> ApiFirstSystem:
     )
 
 
-def worker_tokens(settings: MainSettings) -> dict[str, tuple[str, ...]]:
-    result: dict[str, tuple[str, ...]] = {}
+def worker_tokens(
+    settings: MainSettings,
+) -> dict[str, RotationWindow | tuple[str, ...]]:
+    result: dict[str, RotationWindow | tuple[str, ...]] = {}
     for component in ("perception", "clip", "retention"):
         current = getattr(settings, f"{component}_worker_token")
         previous = getattr(settings, f"{component}_worker_token_previous")
-        result[component] = tuple(
-            item.get_secret_value() for item in (current, previous) if item is not None
+        if current is None:
+            result[component] = ()
+            continue
+        deadline = getattr(settings, f"{component}_worker_token_previous_valid_until")
+        result[component] = RotationWindow(
+            current=current.get_secret_value(),
+            previous=previous.get_secret_value() if previous is not None else None,
+            previous_valid_until=deadline,
         )
+    return result
+
+
+def rotation_status(settings: MainSettings) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for component in ("perception", "clip", "retention"):
+        current = getattr(settings, f"{component}_worker_token")
+        previous = getattr(settings, f"{component}_worker_token_previous")
+        deadline = getattr(settings, f"{component}_worker_token_previous_valid_until")
+        if current is not None:
+            result[f"{component}_worker"] = RotationWindow(
+                current=current.get_secret_value(),
+                previous=previous.get_secret_value() if previous is not None else None,
+                previous_valid_until=deadline,
+            ).status()
+    if settings.worker_lease_secret is not None:
+        result["worker_lease"] = RotationWindow(
+            current=settings.worker_lease_secret.get_secret_value(),
+            previous=(
+                settings.worker_lease_secret_previous.get_secret_value()
+                if settings.worker_lease_secret_previous is not None
+                else None
+            ),
+            previous_valid_until=settings.worker_lease_secret_previous_valid_until,
+        ).status()
     return result

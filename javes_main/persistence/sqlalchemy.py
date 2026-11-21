@@ -12,7 +12,20 @@ from contextvars import ContextVar
 from datetime import datetime
 from typing import Iterator
 
-from sqlalchemy import JSON, DateTime, Index, Integer, String, create_engine, delete, select, text, update
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    and_,
+    create_engine,
+    delete,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -46,8 +59,12 @@ class CaseRow(Base):
     lifecycle: Mapped[str] = mapped_column(String(40), index=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class JobRow(Base):
@@ -65,8 +82,12 @@ class JobRow(Base):
     )
     dedupe_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 Index("ix_jobs_case_state", JobRow.case_id, JobRow.state)
@@ -78,7 +99,9 @@ class EventRow(Base):
     event_id: Mapped[str] = mapped_column(String(160), primary_key=True)
     case_id: Mapped[str] = mapped_column(String(160), index=True)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
@@ -98,8 +121,12 @@ class UserRow(Base):
     role: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     active: Mapped[bool] = mapped_column(nullable=False, default=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class AuthSessionRow(Base):
@@ -108,8 +135,12 @@ class AuthSessionRow(Base):
     session_id: Mapped[str] = mapped_column(String(160), primary_key=True)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     user_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
@@ -123,14 +154,20 @@ class OutboxRow(Base):
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     dedupe_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     lease_owner: Mapped[str | None] = mapped_column(String(160), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 Index("ix_outbox_state_available", OutboxRow.state, OutboxRow.available_at)
@@ -142,7 +179,9 @@ class ProbeResultRow(Base):
     fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     case_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
-    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
@@ -152,7 +191,9 @@ class CaseDataRow(Base):
     case_id: Mapped[str] = mapped_column(String(160), primary_key=True, index=True)
     kind: Mapped[str] = mapped_column(String(60), primary_key=True)
     record_id: Mapped[str] = mapped_column(String(240), primary_key=True)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
@@ -174,8 +215,12 @@ class RoutingTriggerRow(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class SqlAlchemyRepository:
@@ -238,7 +283,9 @@ class SqlAlchemyRepository:
             try:
                 session.flush()
             except IntegrityError as exc:
-                raise ValueError(f"case {case.request.case_id!r} already exists") from exc
+                raise ValueError(
+                    f"case {case.request.case_id!r} already exists"
+                ) from exc
 
     def get(self, case_id: str) -> CaseRecord:
         with self._read_session() as session:
@@ -463,9 +510,50 @@ class SqlAlchemyRepository:
                 for row in session.scalars(statement).all()
             ]
 
-    def remember_idempotency(
-        self, key: str, fingerprint: str, response: dict
-    ) -> None:
+    def list_audit_events(
+        self,
+        *,
+        after: tuple[datetime, str] | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+        case_ids: set[str] | None = None,
+        actor_ids: set[str] | None = None,
+        event_types: set[str] | None = None,
+        limit: int = 500,
+    ) -> list[AuditEvent]:
+        statement = select(EventRow)
+        if after is not None:
+            statement = statement.where(
+                or_(
+                    EventRow.occurred_at > after[0],
+                    and_(
+                        EventRow.occurred_at == after[0],
+                        EventRow.event_id > after[1],
+                    ),
+                )
+            )
+        if from_time is not None:
+            statement = statement.where(EventRow.occurred_at >= from_time)
+        if to_time is not None:
+            statement = statement.where(EventRow.occurred_at <= to_time)
+        if case_ids:
+            statement = statement.where(EventRow.case_id.in_(case_ids))
+        if actor_ids:
+            statement = statement.where(
+                EventRow.payload["actor_id"].as_string().in_(actor_ids)
+            )
+        if event_types:
+            statement = statement.where(EventRow.event_type.in_(event_types))
+        statement = statement.order_by(EventRow.occurred_at, EventRow.event_id).limit(
+            limit
+        )
+        with self._read_session() as session:
+            return [
+                AuditEvent.model_validate(row.payload)
+                for row in session.scalars(statement).all()
+            ]
+
+    def remember_idempotency(self, key: str, fingerprint: str, response: dict) -> None:
         with self._write_session() as session:
             previous = session.get(IdempotencyRow, key)
             if previous is not None:
@@ -564,7 +652,9 @@ class SqlAlchemyRepository:
                 raise ValueError("session already exists") from exc
 
     def get_session_by_token_hash(self, token_hash: str) -> AuthSession | None:
-        statement = select(AuthSessionRow).where(AuthSessionRow.token_hash == token_hash)
+        statement = select(AuthSessionRow).where(
+            AuthSessionRow.token_hash == token_hash
+        )
         with self._read_session() as session:
             row = session.scalar(statement)
             return None if row is None else AuthSession.model_validate(row.payload)
@@ -627,7 +717,9 @@ class SqlAlchemyRepository:
             try:
                 session.flush()
             except IntegrityError as exc:
-                raise ValueError("outbox message id or dedupe key already exists") from exc
+                raise ValueError(
+                    "outbox message id or dedupe key already exists"
+                ) from exc
 
     def get_outbox(self, message_id: str) -> OutboxRecord:
         with self._read_session() as session:
@@ -682,7 +774,9 @@ class SqlAlchemyRepository:
                 OutboxRow.state == OutboxState.PENDING.value,
                 OutboxRow.available_at <= now,
             )
-            .order_by(OutboxRow.available_at, OutboxRow.created_at, OutboxRow.message_id)
+            .order_by(
+                OutboxRow.available_at, OutboxRow.created_at, OutboxRow.message_id
+            )
             .limit(limit)
         )
         if topics is not None:
@@ -806,7 +900,9 @@ class SqlAlchemyRepository:
                     existing.schema_version != record.schema_version
                     or existing.payload != record.payload
                 ):
-                    raise ValueError("case data record id reused with different payload")
+                    raise ValueError(
+                        "case data record id reused with different payload"
+                    )
                 return
             session.add(
                 CaseDataRow(
@@ -894,7 +990,9 @@ class SqlAlchemyRepository:
             statement = statement.where(RoutingTriggerRow.case_id == case_id)
         if states is not None:
             statement = statement.where(RoutingTriggerRow.state.in_(sorted(states)))
-        statement = statement.order_by(RoutingTriggerRow.created_at, RoutingTriggerRow.trigger_id)
+        statement = statement.order_by(
+            RoutingTriggerRow.created_at, RoutingTriggerRow.trigger_id
+        )
         with self._read_session() as session:
             return [
                 RoutingTriggerRecord.model_validate(row.payload)
@@ -997,7 +1095,9 @@ class SqlAlchemyRepository:
             # EventRow is an append-only security log and is deliberately not
             # touched by case/content retention.
             session.execute(delete(JobRow).where(JobRow.case_id == case_id))
-            session.execute(delete(ProbeResultRow).where(ProbeResultRow.case_id == case_id))
+            session.execute(
+                delete(ProbeResultRow).where(ProbeResultRow.case_id == case_id)
+            )
             session.execute(delete(CaseDataRow).where(CaseDataRow.case_id == case_id))
             session.execute(
                 delete(RoutingTriggerRow).where(RoutingTriggerRow.case_id == case_id)
@@ -1111,12 +1211,9 @@ class SqlAlchemyRepository:
                 select(CaseDataRow).where(CaseDataRow.case_id == case_id)
             ).all():
                 record = CaseDataRecord.model_validate(row.payload)
-                temporary_artifact = (
-                    record.kind.value == "ARTIFACT"
-                    and (
-                        record.payload.get("kind") == "HOLD_CLIP"
-                        or record.payload.get("state") == "RELEASED"
-                    )
+                temporary_artifact = record.kind.value == "ARTIFACT" and (
+                    record.payload.get("kind") == "HOLD_CLIP"
+                    or record.payload.get("state") == "RELEASED"
                 )
                 if record.kind.value in temporary_kinds or temporary_artifact:
                     row.payload = record.model_copy(

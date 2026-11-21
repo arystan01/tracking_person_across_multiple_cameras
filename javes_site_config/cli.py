@@ -6,6 +6,7 @@ import os
 from .api import create_site_config_app
 from .registry import FilesystemSiteConfigRegistry
 from javes_telemetry import configure_telemetry, shutdown_telemetry
+from javes_security import RotationWindow
 
 
 def main() -> None:
@@ -19,13 +20,20 @@ def main() -> None:
     args = parser.parse_args()
     if not args.token:
         parser.error("--token or JAVES_SITE_CONFIG_SERVICE_TOKEN is required")
+    rotation = RotationWindow.from_strings(
+        args.token,
+        os.environ.get("JAVES_SITE_CONFIG_SERVICE_TOKEN_PREVIOUS"),
+        os.environ.get("JAVES_SITE_CONFIG_SERVICE_TOKEN_PREVIOUS_VALID_UNTIL"),
+    )
+    rotation.require_ready()
     configure_telemetry("javes-site-config-api")
     import uvicorn
 
     try:
         uvicorn.run(
             create_site_config_app(
-                FilesystemSiteConfigRegistry(args.root), service_token=args.token
+                FilesystemSiteConfigRegistry(args.root),
+                service_token=rotation,
             ),
             host=args.host,
             port=args.port,
