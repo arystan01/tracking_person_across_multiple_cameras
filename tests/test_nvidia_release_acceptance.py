@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from javes_contracts import NvidiaReleaseEvidence as SharedNvidiaReleaseEvidence
 
 from javes_release.acceptance import (
     AcceptancePolicy,
@@ -22,6 +23,10 @@ from javes_release.cli import run
 
 SHA = "a" * 64
 COMMIT = "b" * 40
+
+
+def test_release_gate_uses_the_canonical_shared_evidence_contract() -> None:
+    assert NvidiaReleaseEvidence is SharedNvidiaReleaseEvidence
 
 
 def _ref(name: str, media_type: str = "application/json") -> dict:
