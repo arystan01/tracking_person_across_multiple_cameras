@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from enum import Enum
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -37,9 +40,30 @@ class EvidenceStatus(str, Enum):
 
 
 class EvidenceRef(StrictModel):
-    name: str = Field(min_length=1)
+    name: str = Field(
+        min_length=1, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    )
+    path: str = Field(min_length=1)
+    size_bytes: int = Field(ge=0)
     sha256: str = Field(pattern=SHA256_PATTERN)
     media_type: str = Field(min_length=1)
+    schema_id: str | None = None
+
+    @model_validator(mode="after")
+    def _safe_bundle_path(self) -> EvidenceRef:
+        candidate = PurePosixPath(self.path)
+        if (
+            candidate.is_absolute()
+            or "\\" in self.path
+            or not candidate.parts
+            or any(part in {"", ".", ".."} for part in candidate.parts)
+        ):
+            raise ValueError("evidence path must be a safe bundle-relative POSIX path")
+        if self.media_type == "application/json" and not self.schema_id:
+            raise ValueError("JSON evidence requires schema_id")
+        if self.media_type != "application/json" and self.schema_id is not None:
+            raise ValueError("schema_id is only valid for JSON evidence")
+        return self
 
 
 class DeliveryScope(StrictModel):
@@ -111,16 +135,16 @@ class WorkflowCheck(StrictModel):
 
 
 class NvidiaReleaseEvidence(StrictModel):
-    schema_version: Literal["javes-nvidia-release-evidence.v1"] = (
-        "javes-nvidia-release-evidence.v1"
+    schema_version: Literal["javes-nvidia-release-evidence.v2"] = (
+        "javes-nvidia-release-evidence.v2"
     )
     release_id: str = Field(min_length=1)
     git_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     release_version: str = Field(min_length=1)
-    dataset_manifest_sha256: str = Field(pattern=SHA256_PATTERN)
-    site_bundle_sha256: str = Field(pattern=SHA256_PATTERN)
-    routing_params_sha256: str = Field(pattern=SHA256_PATTERN)
-    model_sha256: dict[str, str]
+    dataset_manifest: EvidenceRef
+    site_bundle: EvidenceRef
+    routing_params: EvidenceRef
+    models: dict[str, EvidenceRef]
     profile_fingerprint: str = Field(pattern=SHA256_PATTERN)
     scope: DeliveryScope
     blocks: dict[str, BlockEvidence]
@@ -138,12 +162,54 @@ class NvidiaReleaseEvidence(StrictModel):
         artifact_names = [item.name for item in self.inspectable_artifacts]
         if len(artifact_names) != len(set(artifact_names)):
             raise ValueError("inspectable artifact names must be unique")
-        for name, checksum in self.model_sha256.items():
-            if not name or len(checksum) != 64 or any(
-                character not in "0123456789abcdef" for character in checksum
-            ):
-                raise ValueError("model_sha256 must map names to lowercase SHA256")
+        if not self.models or any(not name for name in self.models):
+            raise ValueError("models must map non-empty names to evidence files")
+        references = [item for _, item in evidence_references(self)]
+        paths = [item.path for item in references]
+        names = [item.name for item in references]
+        if len(paths) != len(set(paths)):
+            raise ValueError("evidence paths must be globally unique")
+        if len(names) != len(set(names)):
+            raise ValueError("evidence names must be globally unique")
         return self
+
+
+class LegacyNvidiaReleaseEvidence(StrictModel):
+    model_config = ConfigDict(extra="allow")
+    schema_version: Literal["javes-nvidia-release-evidence.v1"]
+    release_id: str
+    git_commit: str
+    release_version: str
+
+
+class VerifiedEvidenceFile(StrictModel):
+    name: str
+    path: str
+    media_type: str
+    declared_sha256: str
+    computed_sha256: str | None = None
+    declared_size_bytes: int
+    computed_size_bytes: int | None = None
+    schema_valid: bool | None = None
+    passed: bool
+    failure_code: str | None = None
+
+
+class EvidenceBundleVerification(StrictModel):
+    schema_version: Literal["javes-evidence-verification.v1"] = (
+        "javes-evidence-verification.v1"
+    )
+    manifest_sha256: str = Field(pattern=SHA256_PATTERN)
+    files: list[VerifiedEvidenceFile]
+    git_commit_verified: bool | None = None
+    git_commit_failure_code: str | None = None
+
+    @property
+    def passed(self) -> bool:
+        return (
+            all(item.passed for item in self.files)
+            and self.git_commit_verified is not False
+        )
 
 
 class AcceptancePolicy(StrictModel):
@@ -170,8 +236,8 @@ class GateCheck(StrictModel):
 
 
 class NvidiaReleaseReport(StrictModel):
-    schema_version: Literal["javes-nvidia-release-report.v1"] = (
-        "javes-nvidia-release-report.v1"
+    schema_version: Literal["javes-nvidia-release-report.v2"] = (
+        "javes-nvidia-release-report.v2"
     )
     release_id: str
     release_version: str
@@ -179,6 +245,7 @@ class NvidiaReleaseReport(StrictModel):
     status: Literal["PASS", "BLOCKED"]
     evidence_sha256: str = Field(pattern=SHA256_PATTERN)
     policy_sha256: str = Field(pattern=SHA256_PATTERN)
+    verification: EvidenceBundleVerification | None = None
     checks: list[GateCheck]
 
     @property
@@ -225,6 +292,161 @@ REQUIRED_ARTIFACT_MEDIA = (
     "application/json",
 )
 
+_ALLOWED_MEDIA = {
+    "dataset": {"application/json"},
+    "site": {"application/json", "application/zip", "application/gzip"},
+    "params": {"application/json", "application/yaml", "text/yaml"},
+    "model": {"application/octet-stream", "application/x-pytorch"},
+    "report": {"application/json"},
+    "inspectable": set(REQUIRED_ARTIFACT_MEDIA),
+}
+_JSON_SCHEMA_FIELDS = {
+    "javes-release-evidence-document.v1": {"schema_version", "status"},
+    "javes-real-cv-evaluation.v1": {"schema_version", "scenarios"},
+    "javes-restore-rehearsal.v1": {"format", "status", "invariants"},
+    "javes-audit-export.v1": {"format", "row_count", "sha256"},
+    "javes-contract-bundle.v1": {"format", "files"},
+    "javes-site-bundle.v1": {"format", "site_id", "version"},
+    "javes-routing-params-bundle.v1": {"format", "version"},
+    "javes-nvidia-site-bootstrap.v1": {"format"},
+}
+
+
+def evidence_references(
+    evidence: NvidiaReleaseEvidence,
+) -> list[tuple[str, EvidenceRef]]:
+    references: list[tuple[str, EvidenceRef]] = [
+        ("dataset", evidence.dataset_manifest),
+        ("site", evidence.site_bundle),
+        ("params", evidence.routing_params),
+    ]
+    references.extend(("model", item) for _, item in sorted(evidence.models.items()))
+    references.extend(
+        ("report", item)
+        for _, block in sorted(evidence.blocks.items())
+        for item in block.evidence
+    )
+    references.extend(
+        ("report", suite.evidence) for _, suite in sorted(evidence.suites.items())
+    )
+    references.extend(("report", item.evidence) for item in evidence.workflow)
+    references.extend(("inspectable", item) for item in evidence.inspectable_artifacts)
+    return references
+
+
+def _manifest_sha256(evidence: NvidiaReleaseEvidence) -> str:
+    return _canonical_sha256(evidence)
+
+
+def _json_schema_valid(path: Path, reference: EvidenceRef) -> tuple[bool, str | None]:
+    required = _JSON_SCHEMA_FIELDS.get(reference.schema_id or "")
+    if required is None:
+        return False, "UNKNOWN_JSON_SCHEMA"
+    if reference.size_bytes > 16 * 1024 * 1024:
+        return False, "JSON_SCHEMA_INPUT_TOO_LARGE"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False, "INVALID_JSON"
+    if not isinstance(document, dict) or not required.issubset(document):
+        return False, "SCHEMA_VALIDATION_FAILED"
+    marker = document.get("schema_version", document.get("format"))
+    if marker != reference.schema_id:
+        return False, "SCHEMA_VALIDATION_FAILED"
+    return True, None
+
+
+def verify_evidence_bundle(
+    evidence: NvidiaReleaseEvidence,
+    bundle_root: str | Path,
+    *,
+    evidence_manifest_path: str | Path | None = None,
+    checkout_commit: str | None = None,
+) -> EvidenceBundleVerification:
+    root = Path(bundle_root).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("evidence bundle root must be a directory")
+    manifest_path = (
+        Path(evidence_manifest_path).resolve(strict=True)
+        if evidence_manifest_path is not None
+        else None
+    )
+    verified: list[VerifiedEvidenceFile] = []
+    for evidence_class, reference in evidence_references(evidence):
+        failure: str | None = None
+        computed_hash: str | None = None
+        computed_size: int | None = None
+        schema_valid: bool | None = None
+        candidate = root.joinpath(*PurePosixPath(reference.path).parts)
+        current = root
+        for part in PurePosixPath(reference.path).parts:
+            current = current / part
+            if current.is_symlink():
+                failure = "SYMLINK_NOT_ALLOWED"
+                break
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+        except (FileNotFoundError, RuntimeError, ValueError):
+            failure = failure or "MISSING_OR_ESCAPING_PATH"
+            resolved = None
+        if (
+            resolved is not None
+            and manifest_path is not None
+            and resolved == manifest_path
+        ):
+            failure = "SELF_REFERENTIAL_EVIDENCE"
+        if resolved is not None and failure is None:
+            mode = os.stat(resolved, follow_symlinks=False).st_mode
+            if not stat.S_ISREG(mode):
+                failure = "NOT_REGULAR_FILE"
+        if (
+            failure is None
+            and reference.media_type not in _ALLOWED_MEDIA[evidence_class]
+        ):
+            failure = "MEDIA_TYPE_NOT_ALLOWED"
+        if resolved is not None and failure is None:
+            digest = hashlib.sha256()
+            size = 0
+            with resolved.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+                    size += len(chunk)
+            computed_hash = digest.hexdigest()
+            computed_size = size
+            if size != reference.size_bytes:
+                failure = "SIZE_MISMATCH"
+            elif computed_hash != reference.sha256:
+                failure = "SHA256_MISMATCH"
+            elif reference.media_type == "application/json":
+                schema_valid, schema_failure = _json_schema_valid(resolved, reference)
+                failure = schema_failure
+        verified.append(
+            VerifiedEvidenceFile(
+                name=reference.name,
+                path=reference.path,
+                media_type=reference.media_type,
+                declared_sha256=reference.sha256,
+                computed_sha256=computed_hash,
+                declared_size_bytes=reference.size_bytes,
+                computed_size_bytes=computed_size,
+                schema_valid=schema_valid,
+                passed=failure is None,
+                failure_code=failure,
+            )
+        )
+    git_verified = (
+        None if checkout_commit is None else checkout_commit == evidence.git_commit
+    )
+    return EvidenceBundleVerification(
+        manifest_sha256=_manifest_sha256(evidence),
+        files=verified,
+        git_commit_verified=git_verified,
+        git_commit_failure_code=(
+            "GIT_COMMIT_MISMATCH" if git_verified is False else None
+        ),
+    )
+
 
 def _canonical_sha256(model: BaseModel) -> str:
     payload = json.dumps(
@@ -238,8 +460,9 @@ def _canonical_sha256(model: BaseModel) -> str:
 def evaluate_nvidia_release(
     evidence: NvidiaReleaseEvidence,
     policy: AcceptancePolicy,
+    verification: EvidenceBundleVerification | None = None,
 ) -> NvidiaReleaseReport:
-    """Evaluate one immutable evidence bundle without reading external state."""
+    """Evaluate policy only after the evidence bytes were independently verified."""
 
     checks: list[GateCheck] = []
 
@@ -252,6 +475,40 @@ def evaluate_nvidia_release(
                 detail=detail,
             )
         )
+
+    add(
+        "evidence.byte-verification",
+        "evidence",
+        bool(verification and verification.passed),
+        (
+            "all referenced bytes verified"
+            if verification and verification.passed
+            else "missing or failed byte verification"
+        ),
+    )
+    if verification is not None:
+        if verification.git_commit_verified is not None:
+            add(
+                "evidence.git-commit",
+                "evidence",
+                verification.git_commit_verified,
+                (
+                    "verified"
+                    if verification.git_commit_verified
+                    else (verification.git_commit_failure_code or "verification failed")
+                ),
+            )
+        for item in verification.files:
+            add(
+                f"evidence.file.{item.name}",
+                "evidence",
+                item.passed,
+                (
+                    "verified"
+                    if item.passed
+                    else (item.failure_code or "verification failed")
+                ),
+            )
 
     unavailable = [
         name
@@ -272,10 +529,12 @@ def evaluate_nvidia_release(
         (
             "all external components accepted"
             if not unavailable
-            else "unavailable components explicitly approved: " + ", ".join(unavailable)
-            if scope_approved
-            else "unavailable components require approval reference: "
-            + ", ".join(unavailable)
+            else (
+                "unavailable components explicitly approved: " + ", ".join(unavailable)
+                if scope_approved
+                else "unavailable components require approval reference: "
+                + ", ".join(unavailable)
+            )
         ),
     )
 
@@ -350,7 +609,10 @@ def evaluate_nvidia_release(
             operations.controls_api_latency_p95_s,
             policy.max_controls_api_latency_p95_s,
         ),
-        "routing-latency": (operations.routing_latency_p95_s, policy.max_routing_latency_p95_s),
+        "routing-latency": (
+            operations.routing_latency_p95_s,
+            policy.max_routing_latency_p95_s,
+        ),
         "deletion-sla": (operations.deletion_sla_p95_s, policy.max_deletion_sla_p95_s),
     }
     for name, (actual, maximum) in operation_checks.items():
@@ -407,8 +669,8 @@ def evaluate_nvidia_release(
     add(
         "artifacts.models",
         "artifacts",
-        bool(evidence.model_sha256),
-        f"model checksums={len(evidence.model_sha256)}",
+        bool(evidence.models),
+        f"model files={len(evidence.models)}",
     )
 
     status: Literal["PASS", "BLOCKED"] = (
@@ -419,7 +681,40 @@ def evaluate_nvidia_release(
         release_version=evidence.release_version,
         git_commit=evidence.git_commit,
         status=status,
-        evidence_sha256=_canonical_sha256(evidence),
+        evidence_sha256=(
+            verification.manifest_sha256
+            if verification is not None
+            else _canonical_sha256(evidence)
+        ),
         policy_sha256=_canonical_sha256(policy),
+        verification=verification,
         checks=checks,
+    )
+
+
+def legacy_failure_report(
+    evidence: LegacyNvidiaReleaseEvidence,
+    policy: AcceptancePolicy,
+) -> NvidiaReleaseReport:
+    return NvidiaReleaseReport(
+        release_id=evidence.release_id,
+        release_version=evidence.release_version,
+        git_commit=evidence.git_commit,
+        status="BLOCKED",
+        evidence_sha256=hashlib.sha256(
+            json.dumps(
+                evidence.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        policy_sha256=_canonical_sha256(policy),
+        checks=[
+            GateCheck(
+                check_id="evidence.legacy",
+                category="evidence",
+                passed=False,
+                detail="UNVERIFIED_LEGACY",
+            )
+        ],
     )

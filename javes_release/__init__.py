@@ -5,6 +5,7 @@ from .acceptance import (
     NvidiaReleaseEvidence,
     NvidiaReleaseReport,
     evaluate_nvidia_release,
+    verify_evidence_bundle,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "NvidiaReleaseEvidence",
     "NvidiaReleaseReport",
     "evaluate_nvidia_release",
+    "verify_evidence_bundle",
 ]
