@@ -6,8 +6,6 @@ import sys
 import tomllib
 from pathlib import Path
 
-import setuptools
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -104,8 +102,11 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         assert callable(getattr(module, attribute))
 
 
-def test_setuptools_discovers_new_packages_only() -> None:
-    packages = set(setuptools.find_packages(where=ROOT))
+def test_package_tree_contains_new_packages_only() -> None:
+    packages = {
+        ".".join(path.parent.relative_to(ROOT).parts)
+        for path in ROOT.rglob("__init__.py")
+    }
     assert {
         "javes_routing.core",
         "javes_routing.service",

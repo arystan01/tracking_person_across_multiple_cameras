@@ -44,6 +44,22 @@ def _postgres_args(database_url: str) -> tuple[list[str], dict[str, str]]:
     return args, environment
 
 
+def _transaction_timeout_compatibility_only(stderr: str) -> bool:
+    """Accept only the pg_dump 18 -> PostgreSQL 16 SET compatibility warning."""
+
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    error_lines = [line for line in lines if "error:" in line.lower()]
+    return (
+        len(error_lines) == 1
+        and 'unrecognized configuration parameter "transaction_timeout"'
+        in error_lines[0]
+        and any(line == "Command was: SET transaction_timeout = 0;" for line in lines)
+        and any(
+            line.endswith("warning: errors ignored on restore: 1") for line in lines
+        )
+    )
+
+
 def backup_database(database_url: str, destination: str | Path) -> Path:
     target = Path(destination).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -99,11 +115,22 @@ def restore_database(database_url: str, source: str | Path) -> None:
         os.replace(temporary, target)
     elif url.get_backend_name() == "postgresql":
         args, environment = _postgres_args(database_url)
-        subprocess.run(
+        completed = subprocess.run(
             ["pg_restore", "--clean", "--if-exists", "--no-owner", *args, str(backup)],
-            check=True,
+            check=False,
             env=environment,
+            capture_output=True,
+            text=True,
         )
+        if completed.returncode and not _transaction_timeout_compatibility_only(
+            completed.stderr
+        ):
+            raise subprocess.CalledProcessError(
+                completed.returncode,
+                completed.args,
+                output=completed.stdout,
+                stderr=completed.stderr,
+            )
     else:
         raise ValueError(f"unsupported restore backend {url.get_backend_name()!r}")
 

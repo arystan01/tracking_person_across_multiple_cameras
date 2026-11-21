@@ -17,6 +17,7 @@ from javes_main.application import DeadLetterService
 from javes_main.domain import OutboxRecord, OutboxState
 from javes_main.observability import JsonFormatter, redact
 from javes_main.persistence.backup import (
+    _transaction_timeout_compatibility_only,
     backup_database,
     rehearse_restore,
     restore_database,
@@ -200,6 +201,18 @@ def test_safe_restore_requires_dry_run_or_explicit_nonempty_confirmation(
         assert connection.execute("select value from evidence").fetchone() == (
             "source",
         )
+
+
+def test_pg_restore_compatibility_filter_is_strict() -> None:
+    expected = """pg_restore: error: could not execute query: ERROR:  unrecognized configuration parameter \"transaction_timeout\"
+Command was: SET transaction_timeout = 0;
+pg_restore: warning: errors ignored on restore: 1
+"""
+    assert _transaction_timeout_compatibility_only(expected)
+    assert not _transaction_timeout_compatibility_only(
+        expected
+        + "pg_restore: error: could not execute query: ERROR: permission denied\n"
+    )
 
 
 def test_isolated_restore_rehearsal_reports_real_invariants_and_timings(
