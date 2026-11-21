@@ -125,4 +125,3 @@ def audit_replay_ledgers(
         audit_case_replay_ledger(repository, case, migrate=migrate)
         for case in repository.list_cases()
     ]
-

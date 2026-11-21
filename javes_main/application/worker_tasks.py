@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from javes_contracts import (
-    ArtifactManifest,
     ClipRecord,
     ExportClipsResult,
     ProbeResult,

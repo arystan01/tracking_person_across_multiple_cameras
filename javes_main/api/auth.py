@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from javes_contracts import LoginRequest, LoginResponse
+from javes_contracts import LoginRequest as LoginRequest
+from javes_contracts import LoginResponse as LoginResponse
 from javes_main.application import Actor, AuthenticationError, AuthService
 from javes_main.domain import UserAccount, UserRole
 

@@ -8,13 +8,13 @@ import re
 from typing import Any, Mapping
 
 from javes_contracts.trace import (
-    bind_request_context,
+    bind_request_context as bind_request_context,
     current_correlation_id,
     current_traceparent,
-    outbound_trace_headers,
-    reset_request_context,
-    validate_correlation_id,
-    validate_traceparent,
+    outbound_trace_headers as outbound_trace_headers,
+    reset_request_context as reset_request_context,
+    validate_correlation_id as validate_correlation_id,
+    validate_traceparent as validate_traceparent,
 )
 
 _SENSITIVE_KEY = re.compile(

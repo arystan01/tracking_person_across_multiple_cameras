@@ -14,6 +14,7 @@ import json
 import os
 import stat
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from pydantic import BaseModel
 from javes_contracts.release import (

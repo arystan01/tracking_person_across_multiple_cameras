@@ -15,6 +15,7 @@ from javes_telemetry import (
     TelemetryConfigurationError,
     TelemetrySettings,
     configure_telemetry,
+    current_span_ids,
     instrument_fastapi,
     logging_handler,
     operation,
@@ -136,6 +137,7 @@ def test_metrics_and_correlated_logs_are_exported_redacted() -> None:
     logger.propagate = False
     try:
         with operation("retention.delete", {"component": "retention"}):
+            trace_id, span_id = current_span_ids()
             logger.info("token=super-secret operation completed")
             record_counter(
                 "javes.retention.operations",
@@ -148,6 +150,9 @@ def test_metrics_and_correlated_logs_are_exported_redacted() -> None:
     assert records
     assert all("super-secret" not in str(item.log_record.body) for item in records)
     assert any("[REDACTED]" in str(item.log_record.body) for item in records)
+    assert trace_id is not None and span_id is not None
+    assert any(f"{item.log_record.trace_id:032x}" == trace_id for item in records)
+    assert any(f"{item.log_record.span_id:016x}" == span_id for item in records)
     metrics = METRIC_READER.get_metrics_data()
     names = {
         metric.name

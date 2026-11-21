@@ -8,7 +8,6 @@ from datetime import timedelta
 from javes_main.application import CaseManager
 from javes_main.domain import RoutingTriggerState
 from javes_main.observability import redact
-from javes_main.persistence import RevisionConflict
 from javes_main.ports import CaseRepository, Clock
 from javes_telemetry import operation, record_counter
 

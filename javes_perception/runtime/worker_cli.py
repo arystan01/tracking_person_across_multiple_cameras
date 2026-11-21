@@ -55,7 +55,7 @@ def main() -> None:
     runner = PerceptionTaskRunner(worker, client, state)
     try:
         while True:
-            processed = runner.run_once()
+            runner.run_once()
             if args.once:
                 break
             time.sleep(args.poll_seconds)

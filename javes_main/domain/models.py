@@ -11,15 +11,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from javes_contracts import (
     Anchors,
     CaseLifecycle,
-    CaseSummary,
-    CaseView,
+    CaseSummary as CaseSummary,
+    CaseView as CaseView,
     ClipRecord,
     CreateCaseBody,
     LiveFeedUpdate,
     PerceptionProbeJob,
     ProbeResult,
     RenderedRouteBundle,
-    RouteMapView,
+    RouteMapView as RouteMapView,
     SearchState,
     StepResult,
 )
