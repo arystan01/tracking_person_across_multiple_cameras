@@ -283,9 +283,10 @@ assembly helpers live only under `tests/support`.
 
 The final product is not release-ready yet: real-CV quality remains below its
 12/12 identity/trajectory gates, the replacement Dashboard is pending, and the
-real Clip media worker is not implemented. `javes-boundary.v1` remains blocked
-until those two consumers pass their contract suites; current contracts are
-`v1alpha1`.
+external operational and final NVIDIA acceptance rehearsals are incomplete.
+The real Clip media worker and authenticated reference-image case-creation flow
+are integrated. `javes-boundary.v1` remains blocked until the Dashboard client
+and final producer/consumer suites pass; current contracts are `v1alpha1`.
 
 ## Perception
 
