@@ -29,7 +29,7 @@ from javes_main.adapters import (
     InMemorySiteConfig,
 )
 from javes_main.adapters.system import FixedClock
-from javes_main.domain import CaseLifecycle, JobState, ProbeResultRecord
+from javes_main.domain import CaseLifecycle, JobState, OutboxTopic, ProbeResultRecord
 from javes_main.persistence import RevisionConflict
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
@@ -619,6 +619,11 @@ def test_closed_decision_revoke_preserves_terminal_state_and_has_no_new_jobs():
     closed_at = before.closed_at
     retention_due_at = before.retention_due_at
     job_ids = [item.job_id for item in app.repository.list_jobs("case-1")]
+    gallery_messages = [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == OutboxTopic.TARGET_GALLERY.value
+    ]
 
     app.manager.revoke_decision(
         "case-1",
@@ -643,6 +648,11 @@ def test_closed_decision_revoke_preserves_terminal_state_and_has_no_new_jobs():
     assert after.latest_route.step_result.mode.value == "PAST_SUMMARY"
     assert after.latest_route.step_result.probes == []
     assert [item.job_id for item in app.repository.list_jobs("case-1")] == job_ids
+    assert [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == OutboxTopic.TARGET_GALLERY.value
+    ] == gallery_messages
 
 
 def test_decision_revoke_fails_closed_without_complete_replay_ledger():
@@ -746,6 +756,11 @@ def test_case_delete_waits_for_all_legal_holds_and_resumes_after_last_release():
     assert blocked.lifecycle == CaseLifecycle.DELETE_REQUESTED
     assert blocked.content_redacted is False
     assert blocked.pending_retention_action == "DELETE_CASE"
+    assert not any(
+        item.topic == OutboxTopic.RETENTION_COMMAND.value
+        and item.payload.get("command", {}).get("action") == "DELETE_CASE"
+        for item in app.repository.list_outbox(case_id="case-1")
+    )
     assert any(
         event["event_type"] == "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD"
         for event in app.manager.get_events("case-1")
@@ -779,6 +794,42 @@ def test_case_delete_waits_for_all_legal_holds_and_resumes_after_last_release():
     events = app.manager.get_events("case-1")
     assert sum(item["event_type"] == "LEGAL_HOLD_SET" for item in events) == 2
     assert sum(item["event_type"] == "LEGAL_HOLD_RELEASED" for item in events) == 2
+
+
+def test_legal_hold_cannot_race_an_existing_delete_request():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="delete-race-create")
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="delete-before-hold",
+            action="DELETE",
+            operator_id="root-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="delete-before-hold",
+    )
+    revision = app.repository.get("case-1").revision
+
+    with pytest.raises(ValueError, match="after deletion was requested"):
+        app.manager.set_legal_hold(
+            "case-1",
+            CreateLegalHoldBody(
+                hold_id="too-late-hold",
+                external_ticket_id="LEGAL-LATE",
+                reason="request arrived after destructive workflow started",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=71),
+                expected_case_revision=revision,
+            ),
+            idempotency_key="too-late-hold",
+        )
+
+    assert any(
+        event["event_type"] == "LEGAL_HOLD_SET_DENIED"
+        and event["payload"]["reason"] == "deletion_requested"
+        for event in app.manager.get_events("case-1")
+    )
 
 
 def test_repository_optimistic_revision_check():

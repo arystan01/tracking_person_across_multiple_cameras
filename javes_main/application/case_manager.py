@@ -58,7 +58,6 @@ from javes_main.domain.models import (
     JobState,
     LegalHoldRecord,
     OutboxRecord,
-    OutboxState,
     OutboxTopic,
     ProbeResultRecord,
     RoutingTriggerRecord,
@@ -247,19 +246,13 @@ class CaseManager:
             )
             raise ValueError("cannot set legal hold on a deleted case")
         if case.lifecycle == CaseLifecycle.DELETE_REQUESTED:
-            leased_deletion = any(
-                item.topic == OutboxTopic.RETENTION_COMMAND.value
-                and item.state == OutboxState.LEASED
-                for item in self.repository.list_outbox(case_id=case_id)
+            self._event(
+                case_id,
+                "LEGAL_HOLD_SET_DENIED",
+                actor_id=body.operator_id,
+                payload={"hold_id": body.hold_id, "reason": "deletion_requested"},
             )
-            if leased_deletion:
-                self._event(
-                    case_id,
-                    "LEGAL_HOLD_SET_DENIED",
-                    actor_id=body.operator_id,
-                    payload={"hold_id": body.hold_id, "reason": "deletion_in_flight"},
-                )
-                raise ValueError("cannot set legal hold while deletion is in flight")
+            raise ValueError("cannot set legal hold after deletion was requested")
         with self.repository.transaction():
             self.repository.lock_idempotency(storage_key)
             replay = self._idempotent_response(storage_key, fingerprint)
@@ -1941,7 +1934,10 @@ class CaseManager:
                     {"command": clip_command.model_dump(mode="json")},
                 )
 
-            if decision.decision == "CONFIRM":
+            if (
+                decision.decision == "CONFIRM"
+                and saved.lifecycle == CaseLifecycle.SEARCHING
+            ):
                 confirmed_tracklets = sorted(
                     {
                         item.tracklet_id
@@ -2161,25 +2157,36 @@ class CaseManager:
         case.next_heartbeat_at = None
         case.updated_at = now
         self.repository.save(case, expected)
-        command = RetentionCommand(
-            command_id=self.ids.new("retention", case_id, body.command_id),
-            case_id=case_id,
-            action="DELETE_CASE",
-            actor_id=body.operator_id,
-            occurred_at=body.occurred_at,
+        active_holds = sorted(
+            hold.hold_id for hold in case.legal_holds.values() if hold.active
         )
-        self._enqueue(
-            case_id,
-            OutboxTopic.RETENTION_COMMAND,
-            f"retention-command:{command.command_id}",
-            {"command": command.model_dump(mode="json")},
-        )
-        self._event(
-            case_id,
-            "CASE_DELETE_REQUESTED",
-            actor_id=body.operator_id,
-            payload={"retention_command_id": command.command_id},
-        )
+        if active_holds:
+            self._event(
+                case_id,
+                "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD",
+                actor_id=body.operator_id,
+                payload={"active_hold_ids": active_holds},
+            )
+        else:
+            command = RetentionCommand(
+                command_id=self.ids.new("retention", case_id, body.command_id),
+                case_id=case_id,
+                action="DELETE_CASE",
+                actor_id=body.operator_id,
+                occurred_at=body.occurred_at,
+            )
+            self._enqueue(
+                case_id,
+                OutboxTopic.RETENTION_COMMAND,
+                f"retention-command:{command.command_id}",
+                {"command": command.model_dump(mode="json")},
+            )
+            self._event(
+                case_id,
+                "CASE_DELETE_REQUESTED",
+                actor_id=body.operator_id,
+                payload={"retention_command_id": command.command_id},
+            )
 
     def enqueue_due_retention(self) -> int:
         """Schedule case-level TTL expiry exactly once per retained case."""
@@ -2217,18 +2224,31 @@ class CaseManager:
                 current.pending_retention_action = "TTL_EXPIRED"
                 current.updated_at = now
                 self.repository.save(current, expected)
-                self._enqueue(
-                    current.request.case_id,
-                    OutboxTopic.RETENTION_COMMAND,
-                    f"retention-command:{command.command_id}",
-                    {"command": command.model_dump(mode="json")},
+                active_holds = sorted(
+                    hold.hold_id
+                    for hold in current.legal_holds.values()
+                    if hold.active
                 )
-                self._event(
-                    current.request.case_id,
-                    "CASE_RETENTION_EXPIRED",
-                    actor_id="retention-scheduler",
-                    payload={"retention_command_id": command.command_id},
-                )
+                if active_holds:
+                    self._event(
+                        current.request.case_id,
+                        "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD",
+                        actor_id="retention-scheduler",
+                        payload={"active_hold_ids": active_holds},
+                    )
+                else:
+                    self._enqueue(
+                        current.request.case_id,
+                        OutboxTopic.RETENTION_COMMAND,
+                        f"retention-command:{command.command_id}",
+                        {"command": command.model_dump(mode="json")},
+                    )
+                    self._event(
+                        current.request.case_id,
+                        "CASE_RETENTION_EXPIRED",
+                        actor_id="retention-scheduler",
+                        payload={"retention_command_id": command.command_id},
+                    )
             scheduled += 1
         return scheduled
 
