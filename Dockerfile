@@ -20,10 +20,19 @@ RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels-perception '.[infra,p
 
 FROM python:3.11-slim AS runtime-base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install --no-install-recommends -y postgresql-client && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install --no-install-recommends -y postgresql-client \
+    && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 javes && useradd --system --uid 10001 --gid javes --home /nonexistent javes
 COPY --from=builder /wheels-infra /wheels
-RUN python -m pip install --no-cache-dir /wheels/* && rm -rf /wheels
+RUN python -m pip install --no-cache-dir /wheels/* \
+    && python -m pip install --no-cache-dir --upgrade \
+        'pip>=26.2.0' \
+        'setuptools>=84.1.0' \
+        'wheel>=0.46.2' \
+        'jaraco.context>=6.1.0' \
+    && rm -rf /wheels
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/live', timeout=2)"]
