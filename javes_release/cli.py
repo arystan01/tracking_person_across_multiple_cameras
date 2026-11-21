@@ -5,13 +5,17 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import subprocess
 from pathlib import Path
 
 from .acceptance import (
     AcceptancePolicy,
+    LegacyNvidiaReleaseEvidence,
     NvidiaReleaseEvidence,
     NvidiaReleaseReport,
     evaluate_nvidia_release,
+    legacy_failure_report,
+    verify_evidence_bundle,
 )
 
 
@@ -20,6 +24,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Evaluate an immutable JAVES-AI NVIDIA release evidence bundle"
     )
     parser.add_argument("evidence", type=Path, help="release evidence JSON")
+    parser.add_argument(
+        "--bundle-root",
+        type=Path,
+        required=True,
+        help="root containing every bundle-relative evidence path",
+    )
     parser.add_argument(
         "--policy",
         type=Path,
@@ -33,6 +43,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="directory for report.json and index.html",
+    )
+    parser.add_argument(
+        "--verify-git-commit",
+        action="store_true",
+        help="require evidence.git_commit to equal the evaluated checkout HEAD",
+    )
+    parser.add_argument(
+        "--checkout-root",
+        type=Path,
+        default=Path.cwd(),
+        help="Git checkout used with --verify-git-commit",
     )
     return parser
 
@@ -59,18 +80,42 @@ def _html_report(report: NvidiaReleaseReport) -> str:
 
 def run(
     evidence_path: Path,
+    bundle_root: Path,
     output: Path,
     policy_path: Path | None = None,
+    *,
+    verify_git_commit: bool = False,
+    checkout_root: Path | None = None,
 ) -> NvidiaReleaseReport:
-    evidence = NvidiaReleaseEvidence.model_validate_json(
-        evidence_path.read_text(encoding="utf-8")
-    )
+    raw = json.loads(evidence_path.read_text(encoding="utf-8"))
     policy = (
         AcceptancePolicy.model_validate_json(policy_path.read_text(encoding="utf-8"))
         if policy_path is not None
         else AcceptancePolicy()
     )
-    report = evaluate_nvidia_release(evidence, policy)
+    if raw.get("schema_version") == "javes-nvidia-release-evidence.v1":
+        report = legacy_failure_report(
+            LegacyNvidiaReleaseEvidence.model_validate(raw), policy
+        )
+    else:
+        evidence = NvidiaReleaseEvidence.model_validate(raw)
+        checkout_commit = None
+        if verify_git_commit:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=(checkout_root or Path.cwd()),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            checkout_commit = result.stdout.strip() if result.returncode == 0 else ""
+        verification = verify_evidence_bundle(
+            evidence,
+            bundle_root,
+            evidence_manifest_path=evidence_path,
+            checkout_commit=checkout_commit,
+        )
+        report = evaluate_nvidia_release(evidence, policy, verification)
     output.mkdir(parents=True, exist_ok=True)
     (output / "report.json").write_text(
         json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True),
@@ -82,13 +127,20 @@ def run(
 
 def main() -> None:
     args = build_parser().parse_args()
-    report = run(args.evidence, args.output, args.policy)
+    report = run(
+        args.evidence,
+        args.bundle_root,
+        args.output,
+        args.policy,
+        verify_git_commit=args.verify_git_commit,
+        checkout_root=args.checkout_root,
+    )
     print(
         json.dumps(
             {
                 "status": report.status,
                 "failed_checks": [item.check_id for item in report.failures],
-                "report": str(args.output / "report.json"),
+                "report": "report.json",
             },
             sort_keys=True,
         )
