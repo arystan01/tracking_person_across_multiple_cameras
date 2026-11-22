@@ -86,7 +86,7 @@ class DemoControlAPI:
                 seen = start + (end - start) * (i / 3) if i < 3 else end + timedelta(seconds=35)
                 case.candidates.append(Candidate(cid, cameras[i], seen.isoformat(), [0.96, 0.89, 0.84, 0.72][i],
                     observation_type="LONG_GAP" if i == 2 else "NORMAL",
-                    explanation="Long gap: staff confirmation required before inclusion in the main route." if i == 2 else "Simulated observation supplied by the control API."))
+                    explanation="Long gap between sightings. Confirm the match to add this sighting to the main route." if i == 2 else ""))
                 changed = True
         if elapsed >= 45 and not case.errors:
             case.errors = [{"code": "CAMERA_UNAVAILABLE", "camera_id": cameras[-1], "message": "Demo camera interruption. Other search work continues."}]
