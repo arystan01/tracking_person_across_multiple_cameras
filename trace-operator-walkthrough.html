@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TRACE operator walkthrough</title>
+<style>
+  :root{color-scheme:dark;--ink:#edf3ea;--muted:#bac9b5;--accent:#c8f185;--line:#394737}
+  *{box-sizing:border-box}body{margin:0;background:#111611;color:var(--ink);font:1rem/1.6 system-ui,sans-serif}
+  .wrap{width:min(67rem,calc(100% - 2rem));margin:auto}header{background:#1b271b;border-bottom:1px solid var(--line);padding:2.6rem 0 1.8rem}
+  h1{font-size:clamp(2.2rem,6vw,3.4rem);line-height:1.1;margin:0 0 .55rem;letter-spacing:-.045em}h2{line-height:1.2;font-size:1.55rem;margin:0 0 .75rem}
+  h3{font-size:1.1rem;margin:1rem 0 .4rem}p{margin:.55rem 0}.intro,.muted{color:var(--muted)}nav{display:flex;flex-wrap:wrap;gap:.6rem 1.25rem;margin-top:1.25rem}
+  a{color:var(--accent);text-underline-offset:.2em}a:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+  main{padding:1rem 0 2rem}section{margin:1rem 0;background:#1a211a;border:1px solid var(--line);border-radius:.8rem;padding:clamp(1rem,3vw,1.6rem)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,17rem),1fr));gap:.65rem;margin-top:.85rem}
+  .card{padding:.85rem;border-left:3px solid var(--accent);background:#222e21;border-radius:.35rem}.card h3{margin:0 0 .35rem}.card p{margin:0;color:var(--muted)}
+  code{background:#273526;color:#e4f5d1;padding:.07em .24em;border-radius:3px;overflow-wrap:anywhere}
+  pre{background:#111811;border:1px solid var(--line);padding:.7rem;overflow:auto;border-radius:.5rem}
+  pre code{background:none;padding:0}
+  ol{padding-left:1.5rem}li+li{margin-top:.5rem}
+  .table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:39rem}th,td{vertical-align:top;border-bottom:1px solid var(--line);padding:.65rem}thead th{color:var(--accent)}tbody th{width:19%}
+  @media print{ :root{color-scheme:light;--ink:#111;--muted:#222;--accent:#183b1b;--line:#aaa}body,header,section,.card,pre,code{background:white;color:#111}nav{display:none}.wrap{width:100%}table{min-width:0}tr{break-inside:avoid}h2{break-after:avoid} }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>TRACE operator walkthrough</h1>
+  <p class="intro">How to open a search, interpret the camera views, review candidates, and close a case in the React dashboard.</p>
+  <nav aria-label="Sections"><a href="#modes">Modes</a><a href="#walkthrough">Walkthrough</a><a href="#changes">Changes from Streamlit</a><a href="#gaps">Proposal gaps</a></nav>
+</div></header>
+<main class="wrap">
+<section id="modes">
+<h2>Which dashboard am I using?</h2>
+<div class="cards">
+  <div class="card"><h3>Original Streamlit demo</h3><p>Local simulator with an SQLite case store, a reference photo form, simulated search stages, candidate clips, and PDF reports.</p></div>
+  <div class="card"><h3>React demo mode</h3><p>The default React view follows the Streamlit simulator. Sign in with <code>operator</code> / <code>trace-demo</code>, then find a saved case, create a sample case, or upload a photo in New case.</p></div>
+  <div class="card"><h3>React connected mode</h3><p>Open the dashboard URL with <code>?controls</code> for this separate workspace. It uses the Python Controls API for sign-in and case actions. Your local test server uses in-memory fixtures and offers <code>api-case</code>. Its changes reset on server restart.</p></div>
+</div>
+</section>
+<section id="walkthrough">
+<h2>Walk through a case in React</h2>
+<h3>Streamlit workflow in the default React view</h3>
+<p>Run <code>npm run dev</code> in <code>frontend/</code>. Sign in with <code>operator</code> / <code>trace-demo</code>. In <strong>New case</strong>, choose a photo from your files, rotate or crop it if needed, select a camera by name, and enter the last-known date and time. After submitting, select <strong>Open case</strong>. In <strong>Current case</strong>, the Candidates, Route, and Case details tabs guide review through the simulated search stages. The camera wall plays sample warehouse recordings from the team repository. The review queue displays the simulator’s case candidates, with three-second warehouse excerpts available in candidate details. Case details includes the PDF report and the original close and delete actions.</p>
+<h3>Separate Controls-connected workspace</h3>
+<ol>
+  <li><strong>Connect and open a case.</strong> Run the frontend and, in a second Terminal window in <code>frontend/</code>, start the loopback fixture using the setup in <a href="frontend/README.md">the frontend README</a>. Once it says Uvicorn is running on port <code>8080</code>, select <strong>Connect to Controls</strong>. Use <code>operator</code> / <code>trace-local-demo</code> for that local server. Open <strong>Cases</strong> and select <code>api-case</code>. Team deployments use their own backend accounts.</li>
+  <li><strong>Start another case.</strong> In connected mode, an account with creation permission can choose <strong>Cases → New case</strong>. Choose a reference photo, preview or adjust it, then select the last-known camera and time in KST. The dashboard generates case and target IDs, uses the configured site and version, and submits the photo to Controls before creating the case. The dashboard uses the last-known time as the start and submission time as the end of the search window.</li>
+  <li><strong>Inspect cameras and the route.</strong> Choose <strong>Cameras</strong> to expand a tile or <strong>Route map</strong> to inspect the path and zoom. The four demo stills depict a fictional entrance, corridor, parking level, and service exit. A connected case shows the latest snapshot if Controls publishes one. An empty camera panel can occur with the local test case. Its route and candidates can still be available.</li>
+  <li><strong>Review a candidate.</strong> Open an item in <strong>Review queue</strong> to see the camera, observed times, and appearance score. Open <strong>Candidate clip</strong> when Controls has published one. Use <strong>Confirm match</strong> or <strong>Reject</strong> when available. Scores represent visual similarity and support human review. Switch to <strong>All</strong> to see candidates outside the pending queue.</li>
+  <li><strong>Check activity and finish.</strong> <strong>Search activity</strong> displays job counts, coverage gaps, and errors reported by the backend. Use <strong>Case actions → Close search</strong> when finished. In connected mode, request clip export when permitted. Open or download the merged MP4 under <strong>Case recordings</strong> when it is ready. Deletion also depends on account permission and case state.</li>
+</ol>
+</section>
+<section id="changes">
+<h2>What changed from your Streamlit demo</h2>
+<div class="table-wrap" tabindex="0" aria-label="Comparison table"><table>
+<thead><tr><th scope="col">Action</th><th scope="col">Original Streamlit simulator</th><th scope="col">Separate React Controls-connected workspace</th></tr></thead>
+<tbody>
+<tr><th scope="row">Get started</th><td>Sign in with the simulator’s demo account and select <strong>Create demo case</strong> or <strong>New case</strong>.</td><td>To create or open a backend case, sign in through <strong>Connect to Controls</strong>.</td></tr>
+<tr><th scope="row">Reference photo</th><td>Upload, rotate, and crop a photo in the form.</td><td>Upload, preview, rotate, and crop the photo. React sends it to Controls before creating the case.</td></tr>
+<tr><th scope="row">Search progression</th><td>The simulator advances through search stages on a demo clock. The active panel refreshes about every two seconds.</td><td>The connected workspace checks the case about every five seconds and displays the backend’s state.</td></tr>
+<tr><th scope="row">Cameras and route</th><td>Local demo clips accompany candidates. The simulator draws its own route visualization.</td><td>Camera tiles and the route have separate views. In connected mode, Controls supplies the SVG route and any published snapshot.</td></tr>
+<tr><th scope="row">Review</th><td>Candidate cards appear inside the active case view.</td><td>A dedicated queue filters pending and all candidates. Selecting an item opens a review dialog.</td></tr>
+<tr><th scope="row">Save and export</th><td>Simulated cases persist locally, and <strong>Download report</strong> creates a PDF.</td><td>Controls stores case actions and publishes candidate clips and the merged MP4. The workspace can play those clips and download the export.</td></tr>
+</tbody>
+</table></div>
+</section>
+<section id="gaps">
+<h2>How this fits the proposal</h2>
+<p>The case form, ranked candidate review, probable route, and evidence export action reflect the proposed operator workflow. Person re-identification, actual footage search, routing, and clip preservation depend on the deployed backend and its workers.</p>
+<p class="muted">The separate Controls-connected workspace still needs direct reference-photo upload and playback of the preserved clips. The default simulator workflow already supports photo upload. The local test server demonstrates Controls requests with sample results.</p>
+</section>
+</main>
+</body>
+</html>

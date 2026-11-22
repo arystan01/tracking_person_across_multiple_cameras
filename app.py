@@ -27,6 +27,13 @@ st.markdown("""<style>
 h1 {font-size:2rem} h2 {font-size:1.5rem}
 </style>""", unsafe_allow_html=True)
 
+if controls_url := os.environ.get("TRACE_CONTROLS_URL", "").strip():
+    from search_dashboard.live import run
+
+    run(controls_url)
+    st.stop()
+
+
 def display_time(value):
     if not value:
         return "Not available"
@@ -65,7 +72,6 @@ if not st.session_state.get("operator"):
 
 operator = st.session_state["operator"]
 store = SQLiteStore(os.environ.get("TRACE_DB_PATH", str(ROOT / "data" / "trace.sqlite3")))
-# Replace this factory with the team's ControlAPI client when transport is agreed.
 api: ControlAPI = DemoControlAPI(store)
 
 with st.sidebar:
@@ -215,8 +221,11 @@ def case_panel():
                 st.caption(f"{c.id} · {timestamp(c.observed_at).astimezone(TZ):%d %b %Y %H:%M:%S} KST")
                 st.write(f"Appearance score: {c.appearance_score:.2f}")
                 if c.observation_type == "LONG_GAP":
-                    st.warning("Long gap. Confirmation is required before this observation can enter the main route.")
-                if c.explanation:
+                    warning = "Long gap between sightings."
+                    if can_review(case) and c.decision == "UNREVIEWED" and c.review_state != "PENDING":
+                        warning += " Confirm the match to add this sighting to the main route."
+                    st.warning(warning)
+                elif c.explanation and c.explanation != "Simulated observation supplied by the control API.":
                     st.write(c.explanation)
                 with st.expander("Video", expanded=False, key=f"video_{case.id}_{c.id}", on_change="rerun"):
                     demo_clip = ROOT / "assets" / f"camera-{c.camera_id}.mp4"

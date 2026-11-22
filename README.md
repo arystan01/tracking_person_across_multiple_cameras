@@ -1,5 +1,7 @@
 # TRACE dashboard
 
+The React dashboard is in [frontend/](frontend/README.md). Follow that guide for the React simulator and the Controls-connected workspace. The instructions below cover the original Streamlit demo.
+
 Streamlit operator interface for a control API. The current runnable backend is a local simulator. No real perception/routing/media API is connected.
 
 ## Run
