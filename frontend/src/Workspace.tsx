@@ -1,0 +1,300 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Activity, ArrowUpRight, Camera, Check, ChevronRight, Crosshair, Eye, Grid2X2, Layers, Map, Minus, Plus, RotateCcw, VideoOff, X } from 'lucide-react'
+import { casePath, type Candidate, type Clip, type CaseView, type Controls, type Decision } from './controls'
+import { demoCameras } from './demo'
+
+export const label = (value?: string | null) => value
+  ? value.replaceAll('_', ' ').toLowerCase().replace(/^./, (letter) => letter.toUpperCase())
+  : 'Unavailable'
+
+const clock = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Seoul' })
+export function time(value?: string) {
+  const parsed = value ? Date.parse(value) : NaN
+  return Number.isFinite(parsed) ? clock.format(parsed) : '—'
+}
+export const pendingReview = (c: Candidate) => ['HOLD', 'UNREVIEWED'].includes(c.review_state ?? 'UNREVIEWED')
+
+export function Modal({ title, close, children, className }: { title: string; close: () => void; children: ReactNode; className?: string }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dialog = ref.current
+    dialog?.showModal()
+    return () => dialog?.close()
+  }, [])
+  return (
+    <dialog ref={ref} className={className} onCancel={(event) => { event.preventDefault(); close() }} aria-labelledby="dialog-title">
+      <div className="dialog-head"><h2 id="dialog-title">{title}</h2><button className="icon-button" aria-label="Close dialog" onClick={close}><X size={19}/></button></div>
+      {children}
+    </dialog>
+  )
+}
+
+function useMedia(client: Controls | undefined, path: string | undefined, mime: string, cycle?: number, identity = path) {
+  const [image, setImage] = useState<{ identity: string; src: string }>()
+  const [failure, setFailure] = useState<{ identity: string; error: string }>()
+  const held = useRef<string | undefined>(undefined)
+  useEffect(() => () => {
+    if (held.current) URL.revokeObjectURL(held.current)
+    held.current = undefined
+  }, [])
+  useEffect(() => {
+    if (!client || !path || !identity) return
+    const abort = new AbortController()
+    client.media(path, mime, abort.signal).then((blob) => {
+      if (abort.signal.aborted) return
+      const src = URL.createObjectURL(blob)
+      if (held.current) URL.revokeObjectURL(held.current)
+      held.current = src
+      setImage({ identity, src })
+      setFailure(undefined)
+    }).catch((error: unknown) => {
+      if (abort.signal.aborted) return
+      setFailure({ identity, error: error instanceof Error ? error.message : 'Media unavailable.' })
+    })
+    return () => abort.abort()
+  }, [client, path, mime, cycle, identity])
+  return { src: image?.identity === identity ? image?.src : undefined, error: failure?.identity === identity ? failure?.error : undefined }
+}
+
+function CameraPanel({ view, client, cycle, demo }: { view: CaseView; client?: Controls; cycle: number; demo: boolean }) {
+  const livePath = view.live?.stream_url ? casePath(view.case_id) + '/live' : undefined
+  const live = useMedia(client, livePath, 'image/jpeg', cycle, view.live?.camera_id)
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const selectedDemo = demoCameras.find((item) => item.id === expanded)
+  const watched = [...new Set(view.watch.map((item) => item.camera_id))]
+    .filter((id) => id !== view.live?.camera_id)
+  return (
+    <>
+      {demo ? <div className="camera-grid">
+        {demoCameras.map((camera, index) => (
+          <button className="camera-tile" key={camera.id} onClick={() => setExpanded(camera.id)} aria-label={'Expand ' + camera.name}>
+            <span className="camera-image" style={{ backgroundPosition: camera.position }} />
+            <span className="camera-shade" />
+            <span className="feed-flag"><i className={index === 0 ? 'dot green' : 'dot'}/>{index === 0 ? 'Preview' : 'Demo feed'}</span>
+            <span className="feed-expand"><ArrowUpRight size={16}/></span>
+            <span className="camera-caption"><span><small>{camera.id} · {camera.location}</small><strong>{camera.name}</strong></span><Camera size={17}/></span>
+          </button>
+        ))}
+      </div> : <div className="live-area">
+        {live.src ? <button className="camera-tile live-tile" onClick={() => setExpanded(view.live!.camera_id)} aria-label="Expand live camera frame">
+          <img src={live.src} alt={'Latest snapshot from ' + view.live?.camera_id}/>
+          <span className="camera-shade"/>
+          <span className="feed-flag"><i className={'dot ' + (live.error ? '' : 'green')}/>{live.error ? 'Last received frame' : 'Latest frame'}</span>
+          <span className="camera-caption"><span><small>{time(view.live?.observed_at)} KST</small><strong>{view.live?.camera_id}</strong></span><ArrowUpRight size={17}/></span>
+        </button> : <div className="media-empty"><VideoOff size={28}/><strong>No camera frame available</strong>
+          <span>{live.error ?? 'A frame will appear when Controls publishes one for this case.'}</span>
+        </div>}
+        {watched.length > 0 && <div className="observed-cameras" aria-label="Cameras on watch">
+          <strong>Cameras on watch</strong>
+          {watched.map((id) => <span key={id}><Camera size={15}/>{id}</span>)}
+        </div>}
+      </div>}
+      {expanded && <Modal title={selectedDemo?.name ?? expanded} close={() => setExpanded(null)}>
+        {selectedDemo ? <div className="large-frame camera-image" style={{ backgroundPosition: selectedDemo.position }} role="img" aria-label={selectedDemo.name + ' fictional demo frame'}/>
+        : live.src && view.live?.camera_id === expanded ? <img className="large-frame" src={live.src} alt={'Latest snapshot from ' + expanded}/>
+        : <p className="muted">The frame is no longer available.</p>}
+      </Modal>}
+    </>
+  )
+}
+
+function DemoMap() {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const canvas = ref.current
+    const context = canvas?.getContext('2d')
+    if (!canvas || !context) return
+    const { width, height } = canvas
+    context.fillStyle = '#161b17'
+    context.fillRect(0, 0, width, height)
+    context.strokeStyle = '#222a23'
+    for (let x = 0; x < width; x += 28) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke() }
+    for (let y = 0; y < height; y += 28) { context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke() }
+    context.fillStyle = '#28342b'
+    context.strokeStyle = '#405544'
+    const rooms = [[105, 76, 220, 128], [350, 76, 162, 128], [538, 76, 170, 128], [105, 255, 140, 116], [268, 255, 244, 116], [538, 255, 170, 116]]
+    for (const [x, y, w, h] of rooms) { context.fillRect(x, y, w, h); context.strokeRect(x, y, w, h) }
+    context.strokeStyle = '#c2f278'
+    context.lineWidth = 4
+    context.lineJoin = 'round'
+    context.setLineDash([7, 7])
+    context.beginPath(); context.moveTo(154, 147); context.lineTo(154, 226); context.lineTo(616, 226); context.lineTo(616, 304); context.stroke()
+    context.setLineDash([])
+    context.font = '14px system-ui'
+    for (const [x, y, name] of [[154, 147, 'CAM-01'], [412, 226, 'CAM-02'], [616, 304, 'CAM-04']] as const) {
+      context.fillStyle = '#c2f278'; context.beginPath(); context.arc(x, y, 6, 0, 2 * Math.PI); context.fill()
+      context.fillText(name, x + 12, y - 11)
+    }
+  }, [])
+  return <canvas ref={ref} width={820} height={450} aria-label="Illustrative demo floor plan connecting cameras 01, 02 and 04" role="img"/>
+}
+
+function RoutePanel({ view, client, demo }: { view: CaseView; client?: Controls; demo: boolean }) {
+  const [floor, setFloor] = useState<string>()
+  const [zoom, setZoom] = useState(1)
+  const map = view.rendered_route_maps.find((item) => item.floor_id === floor) ?? view.rendered_route_maps[0]
+  const { src, error } = useMedia(client, map?.url, 'image/svg+xml')
+  return <div className="map-shell">
+    <div className="map-controls">
+      {map ? <label><Layers size={16}/><select aria-label="Floor" value={map.floor_id} onChange={(event) => setFloor(event.target.value)}>
+        {view.rendered_route_maps.map((item) => <option key={item.floor_id}>{item.floor_id}</option>)}
+      </select></label> : demo && <span><Layers size={16}/> Demo floor plan</span>}
+      {(src || demo) && <div className="zoom">
+        <button className="icon-button" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => setZoom((n) => Math.max(1, n - .25))}><Minus size={16}/></button>
+        <button className="icon-button" aria-label="Reset zoom" disabled={zoom === 1} onClick={() => setZoom(1)}><RotateCcw size={15}/></button>
+        <button className="icon-button" aria-label="Zoom in" disabled={zoom >= 3} onClick={() => setZoom((n) => Math.min(3, n + .25))}><Plus size={16}/></button>
+      </div>}
+    </div>
+    <div className="map-viewport" tabIndex={src || demo ? 0 : undefined} aria-label="Route map viewport">
+      {src || demo ? <div className="map-image" style={{ width: zoom * 100 + '%' }}>
+        {demo ? <DemoMap/> : <img src={src} alt={map?.alt_text || 'Case route map'}/>}
+      </div> : <div className="media-empty"><Map size={28}/><strong>{error || (map ? 'Loading route map…' : 'Route map unavailable')}</strong></div>}
+    </div>
+    {!demo && <RouteSightings view={view}/>}
+  </div>
+}
+
+function RouteSightings({ view }: { view: CaseView }) {
+  const visits = view.best_hypothesis?.visits ?? []
+  const lastObserved = view.estimate?.last_observed_camera
+  const estimateTime = view.route_presentation?.search_area_as_of
+  const hasSearchArea = view.route_presentation?.shown_layers?.includes('SEARCH_AREA')
+  const alternatives = (view.alternatives ?? []).filter((route) => route.visits.length)
+  if (!visits.length && !lastObserved && !hasSearchArea && !alternatives.length) return null
+
+  return <div className="route-sightings">
+    {lastObserved && <p>Last observed at <strong>{lastObserved}</strong>
+      {view.estimate?.last_observed_time && ' · ' + time(view.estimate.last_observed_time) + ' KST'}</p>}
+    {hasSearchArea && <p>Estimated search area shown on the map{estimateTime ? ' · ' + time(estimateTime) + ' KST' : ''}.
+      {view.estimate?.valid_until && ' Valid until ' + time(view.estimate.valid_until) + ' KST.'}</p>}
+    {visits.length > 0 && <details>
+      <summary>Route sightings ({visits.length})</summary>
+      <ol>{visits.map((visit, index) => <li key={visit.visit_id ?? visit.id ?? index}>
+        {visit.camera_id ?? visit.camera ?? 'Camera unavailable'} · {time(visit.t_in)} KST
+        {visit.source === 'LAST_KNOWN' && ' · Reported last known'}
+      </li>)}</ol>
+    </details>}
+    {alternatives.length > 0 && <details>
+      <summary>Alternative routes ({alternatives.length})</summary>
+      <ol>{alternatives.map((route, index) => <li key={route.id ?? index}>
+        {route.visits.map((visit) => visit.camera_id ?? visit.camera ?? 'Unknown camera').join(' → ')}
+      </li>)}</ol>
+    </details>}
+  </div>
+}
+
+export function Workspace({ view, demo, client, cycle }: { view: CaseView; demo: boolean; client?: Controls; cycle: number }) {
+  const [tab, setTab] = useState<'cameras' | 'route'>('cameras')
+  const frameCount = demo ? demoCameras.length : Number(Boolean(view.live?.stream_url))
+  return <section className="panel monitor" aria-labelledby="monitor-title">
+    <header className="panel-head">
+      <div><h2 id="monitor-title">Monitoring workspace</h2><p>{demo ? 'North Campus · Demo footage' : 'Controls API · Case media'}</p></div>
+      <div className="view-switch" aria-label="Monitoring view">
+        <button aria-pressed={tab === 'cameras'} onClick={() => setTab('cameras')}><Grid2X2 size={15}/> Cameras</button>
+        <button aria-pressed={tab === 'route'} onClick={() => setTab('route')}><Map size={15}/> Route map</button>
+      </div>
+    </header>
+    {tab === 'cameras' ? <CameraPanel view={view} client={client} cycle={cycle} demo={demo}/>
+    : <RoutePanel view={view} client={client} demo={demo}/>}
+    <div className="panel-foot"><span><i className={'dot ' + (frameCount ? 'green' : '')}/>{frameCount} {demo ? 'demo cameras' : 'published feed' + (frameCount === 1 ? '' : 's')}</span><span>All times KST</span></div>
+  </section>
+}
+
+export function ReviewQueue({ items, onPick }: { items: Candidate[]; onPick: (candidate: Candidate) => void }) {
+  const [filter, setFilter] = useState('pending')
+  const pending = items.filter(pendingReview)
+  const visible = filter === 'pending' ? pending : items
+  return <aside className="panel review" aria-labelledby="review-heading">
+    <header className="panel-head"><div><h2 id="review-heading">Review queue</h2><p>{pending.length} awaiting review</p></div><div className="panel-icon"><Crosshair size={18}/></div></header>
+    <div className="queue-filters" aria-label="Candidate filter">
+      <button aria-pressed={filter === 'pending'} onClick={() => setFilter('pending')}>Pending <span>{pending.length}</span></button>
+      <button aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All <span>{items.length}</span></button>
+    </div>
+    <div className="queue-list">
+      {visible.map((candidate) => <button className="candidate" onClick={() => onPick(candidate)} key={candidate.candidate_id}>
+        <span className="candidate-icon"><Eye size={17}/></span>
+        <span className="candidate-copy"><strong>{candidate.camera_id ?? 'Unknown camera'}</strong><small>{time(candidate.t_start)} · {pendingReview(candidate) ? 'Pending' : label(candidate.review_state)}</small></span>
+        <span className="match">{candidate.appearance_score == null ? '—' : Math.round(candidate.appearance_score * 100) + '%'}</span>
+        <ChevronRight size={15}/>
+      </button>)}
+      {visible.length === 0 && <p className="queue-empty">No {filter === 'pending' ? 'pending ' : ''}candidates.</p>}
+    </div>
+  </aside>
+}
+
+export function CaseVideo({ client, path, title, download }: {
+  client: Controls; path: string; title: string; download?: string
+}) {
+  const [open, setOpen] = useState(false)
+  return <details className="case-video" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary>{title}</summary>
+    {open && <VideoPlayback key={path} client={client} path={path} title={title} download={download}/>}
+  </details>
+}
+
+function VideoPlayback({ client, path, title, download }: {
+  client: Controls; path: string; title: string; download?: string
+}) {
+  const { src, error } = useMedia(client, path, 'video/mp4')
+  const [playbackError, setPlaybackError] = useState(false)
+  if (error) return <p className="notice error" role="alert">{error}</p>
+  if (!src) return <p role="status">Loading video…</p>
+  return <>
+    <video className="large-frame" src={src} controls playsInline aria-label={title}
+      onError={() => setPlaybackError(true)}/>
+    {playbackError && <p className="notice error" role="alert">This video could not be played.</p>}
+    {download && <a className="case-video-download" href={src} download={download}>Download MP4</a>}
+  </>
+}
+
+function CandidateThumbnail({ client, path }: { client: Controls; path?: string }) {
+  const { src } = useMedia(client, path, 'image/*')
+  return src ? <img className="candidate-thumbnail" src={src} alt="Candidate crop from Controls"/> : null
+}
+
+export function CandidateDialog({ candidate, clip, client, close, submit, canReview, busy, error }: {
+  candidate: Candidate; clip?: Clip; client?: Controls; close: () => void; submit: (decision: Decision) => void;
+  canReview: boolean; busy: boolean; error?: string
+}) {
+  return <Modal title="Candidate review" close={close}>
+    {client && <CandidateThumbnail client={client} path={candidate.thumbnail_refs?.[0]}/>}
+    <dl className="candidate-details">
+      <div><dt>Candidate</dt><dd>{candidate.candidate_id}</dd></div>
+      <div><dt>Camera</dt><dd>{candidate.camera_id ?? 'Unknown'}</dd></div>
+      <div><dt>Observed</dt><dd>{time(candidate.t_start)} – {time(candidate.t_end)} KST</dd></div>
+      <div><dt>Appearance score</dt><dd>{candidate.appearance_score == null ? 'Unavailable' : Math.round(candidate.appearance_score * 100) + '%'}</dd></div>
+      <div><dt>Review state</dt><dd>{label(candidate.review_state ?? 'UNREVIEWED')}</dd></div>
+    </dl>
+    {client && (clip?.status === 'READY' && clip.url
+      ? <CaseVideo client={client} path={clip.url} title="Candidate clip"/>
+      : <p className="muted">Candidate clip · {clip ? label(clip.status) : 'Unavailable'}
+        {clip?.error_code && ' · ' + label(clip.error_code)}</p>)}
+    {error && <p role="alert" className="notice error">{error}</p>}
+    {canReview && pendingReview(candidate) && <div className="dialog-actions">
+      <button className="secondary" disabled={busy} onClick={() => submit('REJECT')}><X size={16}/> Reject</button>
+      <button className="primary" disabled={busy} onClick={() => submit('CONFIRM')}><Check size={16}/> Confirm match</button>
+    </div>}
+  </Modal>
+}
+
+export function CaseProgress({ view }: { view: CaseView }) {
+  const states = Object.entries(view.search_progress.jobs_by_state ?? {})
+  return <section className="panel progress" aria-labelledby="progress-title">
+    <header className="panel-head"><div><h2 id="progress-title">Search activity</h2><p>{view.stop_reason ? label(view.stop_reason) : 'Case processing and coverage'}</p></div><Activity size={18}/></header>
+    <div className="progress-stats">
+      <div><strong>{view.search_progress.jobs_total ?? '—'}</strong><span>Search jobs</span></div>
+      <div><strong>{view.search_progress.processed_camera_seconds == null ? '—'
+        : Math.round(view.search_progress.processed_camera_seconds)}</strong><span>Camera seconds processed</span></div>
+      <div><strong>{view.unobserved_windows.length}</strong><span>Coverage gaps</span></div>
+      <div><strong>{view.errors.length}</strong><span>Reported errors</span></div>
+    </div>
+    {(states.length > 0 || view.unobserved_windows.length > 0 || view.errors.length > 0) && <details>
+      <summary>View activity details</summary>
+      <ul>{states.map(([state, count]) => <li key={state}>{label(state)} · {count}</li>)}
+      {view.errors.map((error, index) => <li key={'error-' + index}>{error.camera_id && error.camera_id + ' · '}{error.message ?? error.error ?? error.code ?? 'Backend reported an error'}</li>)}
+      {view.unobserved_windows.map((gap, index) => <li key={'gap-' + index}>{gap.camera_id ?? 'Coverage gap'} · {gap.reason ?? 'Unobserved window'}
+        {gap.t_from && ' · ' + time(gap.t_from) + ' KST'}
+        {gap.t_to && (gap.t_to === 'OPEN' ? ' onward' : ' to ' + time(gap.t_to) + ' KST')}</li>)}</ul>
+    </details>}
+  </section>
+}
