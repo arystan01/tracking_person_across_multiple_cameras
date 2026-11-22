@@ -1,6 +1,6 @@
-# Control API handoff
+# Historical demo contract
 
-This is a normalized Python interface for the prototype, not a finalized network schema. The lifecycle/mode/reason names and time ownership follow the team agreement. Endpoints, authentication, field nesting, job receipts, and post-completion review policy still need exact examples from the control module.
+This document records the local prototype contract. The connected dashboard uses the JAVES-AI Controls HTTP API described in the backend README.
 
 ## Requests
 
