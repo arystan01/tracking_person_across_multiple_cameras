@@ -1,11 +1,15 @@
+export type UserRole = 'ROOT' | 'ADMIN' | 'OPERATOR' | 'VIEWER' | 'SERVICE'
+
 export type User = {
   user_id: string
   username: string
+  role: UserRole
   permissions: string[]
   must_change_password: boolean
 }
 
 export type Session = { access_token: string; user: User }
+export type Account = Pick<User, 'user_id' | 'username' | 'role' | 'must_change_password'> & { active: boolean }
 export type CaseSummary = {
   case_id: string
   target_id: string
@@ -97,7 +101,7 @@ export class Controls {
 
   private readonly referenceUploads = new WeakMap<File, { key: string; reference?: CaseInput['reference_image_ref'] }>()
 
-  constructor(private readonly token?: string) {}
+  constructor(private readonly token?: string, private readonly onExpired?: () => void) {}
 
   private async request(path: string, options: RequestOptions = {}) {
     const url = new URL(path, location.origin)
@@ -122,9 +126,20 @@ export class Controls {
       throw new ControlsError('Controls is offline or did not respond. Try again.')
     }
     if (!response.ok) {
-      if (response.status === 401) throw new ControlsError('Sign-in failed or your session expired.', 401)
       const problem = await response.json().catch(() => null)
       const detail = typeof problem?.detail === 'string' ? problem.detail : null
+      if (response.status === 401) {
+        // Controls also uses 401 when a valid session supplies the wrong current password.
+        if (path === '/v1/auth/change-password' && detail === 'current password is incorrect') {
+          throw new ControlsError('The current password is incorrect.', 401)
+        }
+        if (!this.token) throw new ControlsError('Sign-in failed. ' + (detail ?? 'Check your username and password.'), 401)
+        this.onExpired?.()
+        throw new ControlsError('Your session expired. Sign in to continue.', 401)
+      }
+      if (response.status === 403) {
+        throw new ControlsError('Access denied. ' + (detail ?? 'Your account does not have permission for this action.'), 403)
+      }
       throw new ControlsError(detail ?? 'Controls could not complete the request (' + response.status + ').', response.status)
     }
     return response
@@ -144,6 +159,10 @@ export class Controls {
     return this.json<Session>('/v1/auth/login', { body: { username, password } })
   }
 
+  me() {
+    return this.json<User>('/v1/auth/me')
+  }
+
   logout() {
     return this.json<void>('/v1/auth/logout', { method: 'POST' })
   }
@@ -151,6 +170,16 @@ export class Controls {
   changePassword(current_password: string, new_password: string) {
     return this.json<void>('/v1/auth/change-password', {
       body: { current_password, new_password }, key: crypto.randomUUID(),
+    })
+  }
+
+  accounts(signal?: AbortSignal) {
+    return this.json<Account[]>('/v1/admin/users', { signal })
+  }
+
+  createAccount(username: string, temporary_password: string, role: UserRole) {
+    return this.json<Account>('/v1/admin/users', {
+      body: { username, temporary_password, role }, key: crypto.randomUUID(),
     })
   }
 

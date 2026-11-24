@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, Aperture, Camera, Check, ChevronRight, CircleAlert, Crosshair, FileDown, FolderKanban, LayoutGrid, LogOut, Map, MapPin, Minus, Plus, RotateCcw, Search, Timer } from 'lucide-react'
 import { CaseIntake } from './CaseIntake'
-import { DemoSignIn } from './DemoSignIn'
+import { SignIn } from './SignIn'
 import { SearchStages } from './SearchStages'
 import { Modal, time } from './Workspace'
 import { RecordingWall, WarehousePlayer } from './RecordingWall'
@@ -133,7 +133,7 @@ export function Simulator() {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   })
 
-  if (!session) return <DemoSignIn busy={busy} error={error} signIn={(username, password) => {
+  if (!session) return <SignIn demo busy={busy} error={error} signIn={(username, password) => {
     void run(async () => setSession(await (await request('login', undefined, { username, password })).json()))
   }}/>
 

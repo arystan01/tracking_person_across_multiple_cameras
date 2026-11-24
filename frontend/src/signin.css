@@ -41,6 +41,8 @@
 }
 .demo-signin-content header p { font-size:1rem }
 .demo-signin-form { gap:0; margin-top:26px }
+.password-change-form { margin-top:26px }
+.password-change-form .dialog-actions { flex-wrap:wrap }
 .demo-signin-form label { margin-bottom:6px; font-size:.88rem; font-weight:600 }
 .demo-signin-field {
   position:relative;
