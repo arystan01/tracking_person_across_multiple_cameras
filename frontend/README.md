@@ -16,7 +16,7 @@ Open the URL printed by Vite and sign in with **operator / trace-demo**. Vite st
 
 ## Controls-connected workspace
 
-Open the Vite URL with `?controls` appended to open the separate Controls-connected workspace. Start Main/Controls and select **Connect to Controls** with your backend-issued account. The frontend calls `/v1` on its own origin and Vite forwards it to `http://127.0.0.1:8080` during development and preview. Set a different URL when you start Vite if needed.
+Open the Vite URL with `?controls` appended. Start Main/Controls and sign in with your backend-issued account. The frontend calls `/v1` on its own origin and Vite forwards it to `http://127.0.0.1:8080` during development and preview. Set a different URL when you start Vite if needed.
 
 ```sh
 TRACE_CONTROLS_URL=http://127.0.0.1:8080 npm run dev
@@ -28,7 +28,7 @@ For a local check, install the backend’s `[test,infra]` dependencies in a Pyth
 
 ```sh
 TRACE_CONTROLS_CHECKOUT=/path/to/backend-develop \
-TRACE_CONTROLS_PYTHON=/path/to/backend-venv/bin/python sh ./start-local-controls.command
+TRACE_CONTROLS_PYTHON=/path/to/backend-venv/bin/python ./start-local-controls.command
 ```
 
 The fixture uses test workers and a fixed timeline. Sign in with **operator / trace-local-demo** and open **api-case**. Use these site and camera values for the fixture.
@@ -40,11 +40,27 @@ VITE_TRACE_CAMERAS='{"A":"Camera A","B":"Camera B"}' npm run dev
 
 Set the same variables at build time for deployment. The camera object maps backend camera IDs to display labels.
 
+### Accounts and permissions
+
+TRACE sends credentials to Controls and uses the returned bearer token to request `/v1/auth/me`. Controls owns password verification, session expiry, and authorization. TRACE keeps the token in page memory and clears password fields after submission. Reloading the page requires signing in again.
+
+An account that uses a temporary password must set a new password and sign in again before accessing cases. The dashboard hides actions the account lacks permission to perform. An expired or revoked session returns to sign-in, including when Controls rejects a protected recording request. A permission denial explains the access issue and keeps the user signed in. ROOT users can list accounts and create staff accounts in **Accounts**.
+
 ### Reference upload contract
 
 When the operator selects **Create case**, React generates the case and target IDs, applies the preview's rotation and crop, and uploads the resulting JPEG. The frontend expects an authenticated `POST /v1/cases/{case_id}/reference-image` that accepts a multipart `file` field and an `Idempotency-Key` header. The case ID identifies a draft at this point. Controls stages the file for the authenticated operator and returns JSON containing `reference_image_ref`. The frontend passes the full returned reference unchanged in the existing `POST /v1/cases` request and opens the returned case.
 
 Use a Controls server running the team’s `develop` branch for reference uploads. The default demo URL runs the interaction locally. The current case API lacks fields for a title and notes, which the simulator supports.
+
+### NVIDIA presentation cases
+
+Use one JPEG per case. The [reference photos](../examples/nvidia-reference-photos/) are cropped from the four-camera synthetic warehouse dataset. Each shows a different person in Cam001. The offsets below identify the source frames. To reproduce the full-minute route test, select Cam001 and enter the start time of that recording in the Controls archive as the last-known time.
+
+| Reference photo | Cam001 offset | Case readiness |
+| --- | --- | --- |
+| [Red dress](../examples/nvidia-reference-photos/red-dress.jpg) | 00:30 | Passed the real-CV route test across Cam001 and Cam002. |
+| [Burgundy top](../examples/nvidia-reference-photos/burgundy-top.jpg) | 00:05 | Reference ready. Verify the Cam003 route before presenting. |
+| [Blue shirt](../examples/nvidia-reference-photos/blue-shirt.jpg) | 00:00 | Reference ready. Verify the route rendering before presenting. |
 
 ## Build and deployment
 
