@@ -28,7 +28,7 @@ test = [
   "opentelemetry-instrumentation-httpx>=0.49b0,<1",
   "opentelemetry-instrumentation-logging>=0.49b0,<1",
   "protobuf<7",
-  "cryptography>=46,<47",
+  "cryptography>=50,<51",
 ]
 infra = [
   "fastapi>=0.115,<1",
@@ -43,7 +43,7 @@ infra = [
   "opentelemetry-instrumentation-httpx>=0.49b0,<1",
   "opentelemetry-instrumentation-logging>=0.49b0,<1",
   "protobuf<7",
-  "cryptography>=46,<47",
+  "cryptography>=50,<51",
 ]
 
 perception = [
