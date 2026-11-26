@@ -75,6 +75,10 @@ export type LegalHold = {
   hold_id: string; external_ticket_id: string; reason: string; active: boolean
   set_at: string; released_at?: string | null
 }
+export type AuditExport = {
+  export_id: string; created_at: string; row_count: number
+  events_url: string; manifest_url: string; sha256: string; size_bytes: number
+}
 
 const candidateSchema = z.object({
   candidate_id: z.string(), tracklet_id: z.string(), camera_id: z.string().nullish(),
@@ -169,6 +173,14 @@ export class Controls {
   events(id: string, signal?: AbortSignal) { return this.json<Record<string, unknown>[]>(casePath(id) + '/events', { signal }) }
   decisions(id: string, signal?: AbortSignal) { return this.json<DecisionRecord[]>(casePath(id) + '/decisions', { signal }) }
   legalHolds(id: string, signal?: AbortSignal) { return this.json<LegalHold[]>(casePath(id) + '/legal-holds', { signal }) }
+  iamAudit(signal?: AbortSignal) { return this.json<Record<string, unknown>[]>('/v1/admin/audit', { signal }) }
+  createAuditExport() {
+    const export_id = 'audit-' + crypto.randomUUID()
+    return this.json<AuditExport>('/v1/audit/exports', {
+      body: { export_id, case_ids: [], actor_ids: [], event_types: [], page_size: 500 },
+      key: export_id,
+    })
+  }
   async media(path: string, mime: string, signal: AbortSignal) {
     const response = await this.request(path, { signal, mime })
     const contentType = response.headers.get('content-type')?.split(';')[0].trim()

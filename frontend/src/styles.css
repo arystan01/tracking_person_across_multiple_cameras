@@ -295,3 +295,14 @@ dialog.intake-dialog { width:min(960px,calc(100% - 26px)) }
 
 .ops-timeline li::before { content:none }
 .route-step { position:absolute; left:-23px; top:7px; width:19px; height:19px; border-radius:5px; display:grid; place-items:center; background:#215aab; color:white; font:700 .7rem/1 system-ui }
+/* Account administration and immutable governance records. */
+.account-row { flex-wrap: wrap; }
+.account-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.account-actions form, .governance-list form, .hold-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.account-actions input, .governance-list input, .hold-form input { min-width: 170px; }
+.governance details { border-top: 1px solid var(--line); padding: 14px 0; }
+.governance details:first-of-type { border-top: 0; }
+.governance summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 700; }
+.governance-list, .event-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 10px; }
+.governance-list li, .event-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.governance-list small { display: block; color: var(--muted); margin-top: 3px; }

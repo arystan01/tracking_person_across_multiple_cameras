@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Activity, Aperture, ArrowUpRight, Bell, Check, ChevronsUpDown, CircleHelp, Crosshair, FolderKanban, LayoutGrid, LogOut, Plus, Radio, RefreshCw, Search, ShieldCheck, Users } from 'lucide-react'
-import { allowed, Controls, ControlsError, type Candidate, type CaseSummary, type CaseView, type Command, type Decision, type Session, type SiteCatalog } from './controls'
+import { allowed, Controls, ControlsError, type CaseSummary, type CaseView, type Command, type Decision, type Session, type SiteCatalog } from './controls'
 import { Accounts } from './Accounts'
+import { Audit } from './Audit'
 import { CaseIntake, preparePhoto } from './CaseIntake'
+import { CaseGovernance } from './CaseGovernance'
 import { SearchStages } from './SearchStages'
 import { SignIn, SignInLayout } from './SignIn'
 import { CandidateDialog, CaseProgress, CaseVideo, label, Modal, pendingReview, ReviewQueue, time, Workspace } from './Workspace'
 
-type Screen = 'monitoring' | 'cases' | 'accounts'
-const screenLabels: Record<Screen, string> = { monitoring: 'Monitoring', cases: 'Cases', accounts: 'Accounts' }
+type Screen = 'monitoring' | 'cases' | 'accounts' | 'audit'
+const screenLabels: Record<Screen, string> = { monitoring: 'Monitoring', cases: 'Cases', accounts: 'Accounts', audit: 'Security audit' }
 const commandLabels: Record<Command, string> = { CLOSE: 'Close search', EXPORT: 'Request clip export', DELETE: 'Delete case' }
 const operationError = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong. Try again.'
 
@@ -152,7 +154,8 @@ export function App() {
 function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Session['user']; client: Controls; signOut: () => void; expiresAt: string }) {
   const canRead = allowed(user, 'case.read')
   const canManageAccounts = user.role === 'ROOT' && allowed(user, 'user.read')
-  const [screen, setScreen] = useState<Screen>(canRead ? 'cases' : canManageAccounts ? 'accounts' : 'monitoring')
+  const canReadAudit = allowed(user, 'audit.read')
+  const [screen, setScreen] = useState<Screen>(canRead ? 'cases' : canManageAccounts ? 'accounts' : canReadAudit ? 'audit' : 'monitoring')
   const [cases, setCases] = useState<CaseSummary[]>([])
   const [sites, setSites] = useState<SiteCatalog[]>([])
   const [caseId, setCaseId] = useState<string>()
@@ -280,6 +283,7 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
           <button aria-current={screen === 'cases' ? 'page' : undefined} onClick={() => setScreen('cases')}><FolderKanban size={18}/> Cases</button>
         </>}
         {canManageAccounts && <button aria-current={screen === 'accounts' ? 'page' : undefined} onClick={() => setScreen('accounts')}><Users size={18}/> Accounts</button>}
+        {canReadAudit && <button aria-current={screen === 'audit' ? 'page' : undefined} onClick={() => setScreen('audit')}><ShieldCheck size={18}/> Security audit</button>}
       </nav>
       <div className="sidebar-bottom">
         <button className="help" onClick={() => openDialog('help')}><CircleHelp size={17}/> Workspace help</button>
@@ -289,16 +293,17 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
       </div>
     </aside>
     <main id="main" className="main">
-      <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><strong>{canRead || canManageAccounts ? screenLabels[screen] : 'Access'}</strong></div>
+      <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><strong>{canRead || canManageAccounts || canReadAudit ? screenLabels[screen] : 'Access'}</strong></div>
         <div className="topbar-actions">
           <span className="mode-pill connected"><i className="dot"/>Session expires {time(expiresAt)}</span>
-          {(canRead || canManageAccounts) && <button className="icon-button" aria-label="Refresh workspace" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={17}/></button>}
+          {(canRead || canManageAccounts || canReadAudit) && <button className="icon-button" aria-label="Refresh workspace" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={17}/></button>}
         </div>
       </header>
       <div className="content">
         {screen === 'monitoring' && connectionError && <p className="notice error" role="alert">{connectionError}</p>}
         {screen !== 'accounts' && status && <p className="notice success" role="status"><Check size={16}/>{status}</p>}
-        {screen === 'accounts' && canManageAccounts ? <Accounts client={client} canCreate={allowed(user, 'user.create')} refresh={refresh}/>
+        {screen === 'accounts' && canManageAccounts ? <Accounts client={client} permissions={user.permissions} refresh={refresh}/>
+        : screen === 'audit' && canReadAudit ? <Audit client={client} refresh={refresh}/>
         : !canRead ? <div className="panel empty"><h1>Dashboard access required</h1><p className="muted">This account does not have permission to view cases.</p></div>
         : screen === 'cases' ? <>
           <div className="page-head"><div><h1>Search cases</h1><p>Open a case to view its route, camera frames and candidates.</p></div>
@@ -331,6 +336,9 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
             <ReviewQueue key={active.case_id} items={active.candidates} onPick={(candidate) => { setPicked(candidate.candidate_id); setActionError('') }}/>
           </div>
           <CaseProgress view={active}/>
+          <CaseGovernance client={client} view={active} canReview={canReview}
+            canLegalHold={allowed(user, 'case.legal_hold.manage')} onView={acceptView}
+            refresh={() => setRefresh((value) => value + 1)}/>
           {(confirmedClips.length > 0 || active.export?.status) && <section className="panel case-export" aria-labelledby="case-export-heading">
             <h2 id="case-export-heading">Case recordings</h2>
             {confirmedClips.map((clip) => {

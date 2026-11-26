@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Plus, UserRound } from 'lucide-react'
+import { KeyRound, Plus, Power, UserRound } from 'lucide-react'
 import { type Account, type Controls, type UserRole } from './controls'
 import { label, Modal } from './Workspace'
 
@@ -45,12 +45,28 @@ function CreateAccount({ client, close, created }: { client: Controls; close: ()
   </Modal>
 }
 
-export function Accounts({ client, canCreate, refresh }: { client: Controls; canCreate: boolean; refresh: number }) {
+export function Accounts({ client, permissions, refresh }: { client: Controls; permissions: string[]; refresh: number }) {
   const [accounts, setAccounts] = useState<Account[]>()
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [creating, setCreating] = useState(false)
   const [reload, setReload] = useState(0)
+  const [busyId, setBusyId] = useState('')
+  const permits = (permission: string) => permissions.includes('*') || permissions.includes(permission)
+  const canCreate = permits('user.create')
+
+  async function update(account: Account, action: 'role' | 'active' | 'password', value?: string) {
+    if (busyId) return
+    setBusyId(account.user_id); setError(''); setNotice('')
+    try {
+      if (action === 'role') await client.setRole(account.user_id, value as UserRole)
+      else if (action === 'active') await client.setActive(account.user_id, !account.active)
+      else await client.resetPassword(account.user_id, value ?? '')
+      setNotice('Account updated for ' + account.username + '.')
+      setReload((current) => current + 1)
+    } catch (failure) { setError(errorMessage(failure)) }
+    finally { setBusyId('') }
+  }
 
   useEffect(() => {
     const abort = new AbortController()
@@ -76,9 +92,22 @@ export function Accounts({ client, canCreate, refresh }: { client: Controls; can
       {notice && <p className="notice success" role="status">{notice}</p>}
       {!error && !accounts && <p className="muted" role="status">Loading accounts…</p>}
       {accounts?.length === 0 && <p className="muted">No accounts to show.</p>}
-      {accounts?.map((account) => <div className="case-row" key={account.user_id}>
+      {accounts?.map((account) => <div className="case-row account-row" key={account.user_id}>
         <UserRound size={20}/><span><strong>{account.username}</strong><small>{label(account.role)}</small></span>
         <span className="tag">{!account.active ? 'Disabled' : account.must_change_password ? 'Password change required' : 'Active'}</span>
+        <div className="account-actions">
+          {permits('user.role') && <select aria-label={'Role for ' + account.username} value={account.role} disabled={!!busyId}
+            onChange={(event) => void update(account, 'role', event.target.value)}>{humanRoles.map((role) => <option value={role} key={role}>{label(role)}</option>)}</select>}
+          {permits(account.active ? 'user.disable' : 'user.enable') && <button className="secondary" disabled={!!busyId}
+            onClick={() => void update(account, 'active')}><Power size={14}/>{account.active ? 'Disable' : 'Enable'}</button>}
+          {permits('user.reset_password') && <form onSubmit={(event) => {
+            event.preventDefault(); const form = event.currentTarget
+            const password = String(new FormData(form).get('temporary_password') ?? '')
+            void update(account, 'password', password); form.reset()
+          }}><input name="temporary_password" type="password" minLength={12} maxLength={1024} required
+              aria-label={'Temporary password for ' + account.username} placeholder="Temporary password"/>
+            <button className="secondary" disabled={!!busyId}><KeyRound size={14}/> Reset</button></form>}
+        </div>
       </div>)}
     </section>
     {canCreate && creating && <CreateAccount client={client} close={() => setCreating(false)} created={(account) => {

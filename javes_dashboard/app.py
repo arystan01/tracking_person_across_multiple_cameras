@@ -5,6 +5,7 @@ import mimetypes
 import re
 import secrets
 import uuid
+from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
@@ -109,7 +110,6 @@ def create_dashboard_app(
     *,
     controls_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="JAVES-AI Dashboard", version="1.0.0")
     codec = SessionCodec(settings.session_key, settings.previous_session_key)
     owns_client = controls_client is None
     client = controls_client or httpx.AsyncClient(
@@ -117,6 +117,14 @@ def create_dashboard_app(
         timeout=settings.controls_timeout_s,
         follow_redirects=False,
     )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        if owns_client:
+            await client.aclose()
+
+    app = FastAPI(title="JAVES-AI Dashboard", version="1.0.0", lifespan=lifespan)
     cookie_name = "__Host-javes_session" if settings.production_cookie else "javes_session"
 
     def set_cookie(response: Response, session: DashboardSession) -> None:
@@ -168,11 +176,6 @@ def create_dashboard_app(
             outbound["authorization"] = f"Bearer {session.access_token}"
         request = client.build_request(method, path, content=content, headers=outbound)
         return await client.send(request, stream=stream)
-
-    @app.on_event("shutdown")
-    async def shutdown() -> None:
-        if owns_client:
-            await client.aclose()
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
