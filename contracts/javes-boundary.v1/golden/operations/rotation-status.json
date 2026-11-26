@@ -1,0 +1,8 @@
+{
+  "perception_worker": {
+    "current_key_id": "sha256:0123456789abcdef",
+    "previous_accepted": false,
+    "previous_key_id": null,
+    "previous_valid_until": null
+  }
+}

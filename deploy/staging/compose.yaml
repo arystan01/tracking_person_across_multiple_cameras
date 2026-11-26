@@ -168,7 +168,6 @@ services:
       JAVES_WORKER_LEASE_SECRET: ${JAVES_WORKER_LEASE_SECRET:?set JAVES_WORKER_LEASE_SECRET}
       JAVES_INSTANCE_ID: main-api-1
     volumes: [artifacts:/artifacts]
-    ports: ["127.0.0.1:${JAVES_CONTROLS_PORT:-8080}:8080"]
     depends_on:
       migrate: {condition: service_completed_successfully}
       volume-init: {condition: service_completed_successfully}
@@ -181,6 +180,29 @@ services:
       timeout: 3s
       retries: 30
     deploy: {resources: {limits: {cpus: "2", memory: 2G}}}
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: dashboard-runtime
+    environment:
+      <<: *telemetry
+      JAVES_DASHBOARD_CONTROLS_URL: http://main-api:8080
+      JAVES_DASHBOARD_SESSION_KEY: ${JAVES_DASHBOARD_SESSION_KEY:?set JAVES_DASHBOARD_SESSION_KEY}
+      JAVES_DASHBOARD_PREVIOUS_SESSION_KEY: ${JAVES_DASHBOARD_PREVIOUS_SESSION_KEY:-}
+      JAVES_DASHBOARD_ENVIRONMENT: staging
+      JAVES_DASHBOARD_REQUIRE_HTTPS: "true"
+      JAVES_INSTANCE_ID: dashboard-1
+    depends_on:
+      main-api: {condition: service_healthy}
+    <<: *hardened
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/live', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy: {resources: {limits: {cpus: "1", memory: 512M}}}
 
   scheduler:
     build: *service-build
@@ -325,7 +347,7 @@ services:
       - ${JAVES_TLS_KEY:-../../runtime/tls/tls.key}:/run/secrets/tls.key:ro
     ports: ["127.0.0.1:${JAVES_TLS_PORT:-8443}:443"]
     depends_on:
-      main-api: {condition: service_healthy}
+      dashboard: {condition: service_healthy}
     restart: unless-stopped
     networks: [javes-internal]
 

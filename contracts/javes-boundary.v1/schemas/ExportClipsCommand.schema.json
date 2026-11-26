@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "clip-export.v1",
+      "default": "clip-export.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "export_request_id": {
+      "title": "Export Request Id",
+      "type": "string"
+    },
+    "format": {
+      "const": "video/mp4",
+      "default": "video/mp4",
+      "title": "Format",
+      "type": "string"
+    },
+    "ordered_clip_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ordered Clip Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "export_request_id",
+    "case_id",
+    "ordered_clip_ids"
+  ],
+  "title": "ExportClipsCommand",
+  "type": "object"
+}

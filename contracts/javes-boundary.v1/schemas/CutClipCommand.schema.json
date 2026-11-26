@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "description": "Stable storage/archive identity, never a short-lived playback URL.",
+      "properties": {
+        "archive_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archive Id"
+        },
+        "object_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Key"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uri"
+        }
+      },
+      "title": "ArtifactRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "camera_id": {
+      "title": "Camera Id",
+      "type": "string"
+    },
+    "candidate_id": {
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "clip_request_id": {
+      "title": "Clip Request Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "clip-command.v1",
+      "default": "clip-command.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "initial_state": {
+      "const": "HOLD",
+      "default": "HOLD",
+      "title": "Initial State",
+      "type": "string"
+    },
+    "padding_after_s": {
+      "default": 0.0,
+      "minimum": 0.0,
+      "title": "Padding After S",
+      "type": "number"
+    },
+    "padding_before_s": {
+      "default": 0.0,
+      "minimum": 0.0,
+      "title": "Padding Before S",
+      "type": "number"
+    },
+    "source_ref": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "t_from": {
+      "format": "date-time",
+      "title": "T From",
+      "type": "string"
+    },
+    "t_to": {
+      "format": "date-time",
+      "title": "T To",
+      "type": "string"
+    },
+    "tracklet_id": {
+      "title": "Tracklet Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "clip_request_id",
+    "case_id",
+    "candidate_id",
+    "tracklet_id",
+    "camera_id",
+    "t_from",
+    "t_to",
+    "source_ref"
+  ],
+  "title": "CutClipCommand",
+  "type": "object"
+}

@@ -3,7 +3,7 @@ name: security
 on:
   workflow_dispatch:
   push:
-    paths: ["pyproject.toml", "Dockerfile", ".github/workflows/security.yml"]
+    paths: ["pyproject.toml", "Dockerfile", "frontend/**", "javes_dashboard/**", ".github/workflows/security.yml"]
   schedule:
     - cron: "17 3 * * 1"
 
@@ -42,6 +42,19 @@ jobs:
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: javes-clip:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+  dashboard-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target dashboard-runtime -t javes-dashboard:${{ github.sha }} .
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: javes-dashboard:${{ github.sha }}
           format: table
           exit-code: "1"
           severity: CRITICAL,HIGH

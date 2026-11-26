@@ -5,15 +5,19 @@ case state and audit; Perception produces tracklets; Routing decides which
 cameras and time windows are physically plausible and produces route SVGs.
 All production component boundaries are versioned HTTP APIs.
 
-## Dashboard owner: connect and test
+## Dashboard: React/Vite + FastAPI BFF
 
-The Dashboard talks only to the Main/Controls API. It must never read SQLite,
-the artifact directory, CCTV Archive, Perception, or Routing directly.
+The supported operator UI is the React application in `frontend/`, served by
+the FastAPI BFF in `javes_dashboard`. Browsers call only same-origin
+`/dashboard-api/*`; the BFF is the sole Dashboard consumer of Main/Controls.
+It must never expose the Controls bearer, artifact `object_key`, SQLite,
+CCTV Archive, Perception, Routing, or any `/internal/*` endpoint.
 
 1. Authenticate with `POST /v1/auth/login`. There is no public signup.
-2. Upload the reference JPEG/PNG with authenticated multipart
+2. Upload the reference JPEG/PNG through the BFF with authenticated multipart
    `POST /v1/cases/{case_id}/reference-image`, then pass the returned
-   `reference_image_ref` unchanged to `POST /v1/cases`. The upload is bound to
+   `upload_id` as `reference_upload_id` to `POST /v1/cases`. The browser never
+   receives `reference_image_ref`. The upload is bound to
    the authenticated operator and case, expires after 24 hours if unused, and
    cannot be reused.
 3. Create and inspect cases with `/v1/cases` and `/v1/cases/{case_id}/view`.
@@ -28,22 +32,21 @@ the artifact directory, CCTV Archive, Perception, or Routing directly.
 7. Fetch the authorised current JPEG from `/v1/cases/{case_id}/live`; do not
    expose the internal `object_key` to the browser.
 
-Local API verification:
+Local Dashboard verification:
 
 ```bash
 python -m pip install -e '.[test,infra]'
-python -m pytest -q tests/test_controls_api.py tests/test_api_first_transport.py
+python -m pytest -q tests/test_dashboard_bff.py tests/test_dashboard_architecture.py
+cd frontend && npm ci --legacy-peer-deps && npm run lint && npm test && npm run build
 ```
 
-Example login and case read:
+Run the BFF after building `frontend/dist`:
 
 ```bash
-curl -sS http://127.0.0.1:8080/v1/auth/login \
-  -H 'content-type: application/json' \
-  -d '{"username":"root","password":"replace-me"}'
-
-curl -sS http://127.0.0.1:8080/v1/cases/CASE_ID/view \
-  -H "authorization: Bearer $ACCESS_TOKEN"
+export JAVES_DASHBOARD_CONTROLS_URL=http://127.0.0.1:8080
+export JAVES_DASHBOARD_SESSION_KEY='FERNET_KEY'
+export JAVES_DASHBOARD_ENVIRONMENT=development
+javes-dashboard --host 127.0.0.1 --port 8090
 ```
 
 The browser must treat returned SVG as an image resource, not inject it as
@@ -89,7 +92,8 @@ python -m pytest -q tests/test_adapter_acceptance.py \
 ## Runtime topology
 
 ```text
-Dashboard ──HTTP──> Main/Controls API ──HTTP──> Site Config API
+Browser ──same-origin──> React/FastAPI Dashboard BFF ──HTTP──> Main/Controls API
+                                                               ├──HTTP──> Site Config API
                            │              └──HTTP──> Routing API
                            │                              │
                            │                              └──HTTP──> Site Config API
@@ -138,7 +142,8 @@ javes-main-incident-snapshot --help
 OpenTelemetry traces, metrics and redacted logs are enabled with
 `JAVES_OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT`. Invalid enabled
 configuration fails startup/readiness instead of silently disabling export.
-The versioned staging topology is under `deploy/staging/`; it contains
+The versioned staging topology is under `deploy/staging/`; it contains the
+Dashboard BFF/React runtime,
 PostgreSQL, the API/scheduler/services/workers, shared artifact storage, NVIDIA
 Archive, the FFmpeg Clip worker and an OTel backend.
 
@@ -281,12 +286,12 @@ Run API and scheduler as separate processes against the same migrated database.
 Production composition is API-first. Deterministic doubles and in-memory
 assembly helpers live only under `tests/support`.
 
-The final product is not release-ready yet: real-CV quality remains below its
-12/12 identity/trajectory gates, the replacement Dashboard is pending, and the
-external operational and final NVIDIA acceptance rehearsals are incomplete.
-The real Clip media worker and authenticated reference-image case-creation flow
-are integrated. `javes-boundary.v1` remains blocked until the Dashboard client
-and final producer/consumer suites pass; current contracts are `v1alpha1`.
+The Dashboard, real Clip media worker and authenticated reference-image
+case-creation flow are integrated. The accepted Dashboard and Clip consumer
+contracts are frozen in `contracts/javes-boundary.v1/`; future breaking changes
+require v2. The final product is not release-ready yet: real-CV identity quality
+remains below its 12/12 gates, Routing calibration and external operational/
+NVIDIA acceptance rehearsals remain incomplete.
 
 ## Perception
 
@@ -334,5 +339,7 @@ durable Routing trigger is retried.
 - `javes_perception/`: real CV worker and durable HTTP runtime.
 - `javes_retention/`: durable inventory, deletion journal and HTTP runtime.
 - `javes_clip/`: durable FFmpeg Clip worker, Archive adapter and media lifecycle.
+- `javes_dashboard/` + `frontend/`: authenticated BFF and React operator UI.
+- `contracts/javes-boundary.v1/`: stable schemas, golden payloads and inventory.
 - `tests/`: unit, contract, HTTP, persistence, restart and integration tests;
   test doubles are isolated in `tests/support`.

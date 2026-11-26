@@ -11,9 +11,11 @@ from .boundary import (
     AuditExportRequest,
     ArtifactRef,
     CaseCommandBody,
+    CaseDetailView,
     CaseLifecycle,
     CaseSummary,
     CaseView,
+    CandidateView,
     CaseWindow,
     ClipLifecycleState,
     ClipProcessingStatus,
@@ -49,6 +51,8 @@ from .boundary import (
     ServiceHealthResponse,
     ProblemDetails,
     ReferenceImageUploadResponse,
+    SiteCatalogCamera,
+    SiteCatalogEntry,
     TargetGalleryCommand,
     TargetGalleryResult,
     VideoAvailability,
@@ -144,7 +148,7 @@ from .transport import (
     WorkerTaskResultRequest,
 )
 
-CONTRACTS_VERSION = "javes-boundary.v1alpha1"
+CONTRACTS_VERSION = "javes-boundary.v1"
 
 __all__ = [
     "CONTRACTS_VERSION",
@@ -162,9 +166,11 @@ __all__ = [
     "Candidate",
     "CameraDef",
     "CaseCommandBody",
+    "CaseDetailView",
     "CaseLifecycle",
     "CaseSummary",
     "CaseView",
+    "CandidateView",
     "CaseInfo",
     "CaseWindow",
     "ClipLifecycleState",
@@ -205,6 +211,8 @@ __all__ = [
     "PositionState",
     "ProblemDetails",
     "ReferenceImageUploadResponse",
+    "SiteCatalogCamera",
+    "SiteCatalogEntry",
     "ObservedSegment",
     "NvidiaReleaseEvidence",
     "NvidiaReleaseReport",

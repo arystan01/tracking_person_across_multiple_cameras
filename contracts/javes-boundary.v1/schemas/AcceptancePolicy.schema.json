@@ -1,0 +1,77 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_controls_api_latency_p95_s": {
+      "default": 2.0,
+      "exclusiveMinimum": 0.0,
+      "title": "Max Controls Api Latency P95 S",
+      "type": "number"
+    },
+    "max_deletion_sla_p95_s": {
+      "default": 60.0,
+      "exclusiveMinimum": 0.0,
+      "title": "Max Deletion Sla P95 S",
+      "type": "number"
+    },
+    "max_false_identity_rate": {
+      "default": 0.05,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Max False Identity Rate",
+      "type": "number"
+    },
+    "max_median_position_error_m": {
+      "default": 0.75,
+      "exclusiveMinimum": 0.0,
+      "title": "Max Median Position Error M",
+      "type": "number"
+    },
+    "max_p95_position_error_m": {
+      "default": 1.5,
+      "exclusiveMinimum": 0.0,
+      "title": "Max P95 Position Error M",
+      "type": "number"
+    },
+    "max_routing_latency_p95_s": {
+      "default": 2.0,
+      "exclusiveMinimum": 0.0,
+      "title": "Max Routing Latency P95 S",
+      "type": "number"
+    },
+    "min_hidden_point_containment": {
+      "default": 0.9,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Hidden Point Containment",
+      "type": "number"
+    },
+    "min_search_success_rate": {
+      "default": 1.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Search Success Rate",
+      "type": "number"
+    },
+    "min_top2_branch_recall": {
+      "default": 0.9,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Top2 Branch Recall",
+      "type": "number"
+    },
+    "required_active_scenarios": {
+      "default": 12,
+      "minimum": 1,
+      "title": "Required Active Scenarios",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "javes-nvidia-acceptance-policy.v1",
+      "default": "javes-nvidia-acceptance-policy.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "title": "AcceptancePolicy",
+  "type": "object"
+}

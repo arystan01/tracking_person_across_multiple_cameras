@@ -1,0 +1,7 @@
+{
+  "cancel_requested": true,
+  "contract_version": "worker-heartbeat-result.v1",
+  "lease_expires_at": null,
+  "lease_token": null,
+  "task_id": "task-001"
+}

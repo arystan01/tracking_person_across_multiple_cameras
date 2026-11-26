@@ -200,6 +200,83 @@ async def login(client: httpx.AsyncClient, username: str, password: str) -> str:
 
 
 @pytest.mark.anyio
+async def test_dashboard_catalog_case_detail_reference_and_candidate_state():
+    system = make_system()
+    app = create_app(
+        system.manager,
+        auth=system.auth,
+        scheduler=system.scheduler,
+        run_fake_jobs_inline=True,
+        allowed_site_versions=(("api-site", "v1"),),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = await login(client, "root", "root-password-for-tests")
+        catalog = await client.get(
+            "/v1/sites", headers={"authorization": f"Bearer {token}"}
+        )
+        assert catalog.status_code == 200
+        assert catalog.json()[0]["site_version"] == "v1"
+        assert [item["camera_id"] for item in catalog.json()[0]["cameras"]] == [
+            "A",
+            "B",
+        ]
+
+        uploaded = await client.post(
+            "/v1/cases/api-case/reference-image",
+            headers=headers("dashboard-upload", token),
+            files={"file": ("reference.jpg", reference_jpeg(), "image/jpeg")},
+        )
+        request = body(system.root_user.user_id).model_copy(
+            update={
+                "reference_upload_id": uploaded.json()["upload_id"],
+                "reference_image_ref": None,
+            }
+        )
+        created = await client.post(
+            "/v1/cases",
+            headers=headers("dashboard-create", token),
+            json=request.model_dump(mode="json"),
+        )
+        assert created.status_code == 201, created.text
+        detail = await client.get(
+            "/v1/cases/api-case",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        assert detail.status_code == 200
+        assert detail.json()["target_id"] == "target-1"
+        assert detail.json()["reference_preview_url"].endswith("/reference")
+        reference = await client.get(
+            detail.json()["reference_preview_url"],
+            headers={"authorization": f"Bearer {token}"},
+        )
+        assert reference.status_code == 200
+        assert reference.headers["content-type"].startswith("image/jpeg")
+
+        candidate = created.json()["candidates"][0]
+        assert candidate["decision_state"] == "UNREVIEWED"
+        decision = ReviewDecisionBody(
+            decision_id="dashboard-confirm",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id=system.root_user.user_id,
+            occurred_at=BASE + timedelta(seconds=70),
+        )
+        confirmed = await client.post(
+            "/v1/cases/api-case/decisions",
+            headers=headers("dashboard-confirm", token),
+            json=decision.model_dump(mode="json"),
+        )
+        assert confirmed.status_code == 200
+        confirmed_candidate = confirmed.json()["candidates"][0]
+        assert confirmed_candidate["decision_state"] == "CONFIRMED"
+        assert confirmed_candidate["active_decision_id"] == "dashboard-confirm"
+        assert confirmed_candidate["clip_state"] == "CONFIRMED"
+
+
+@pytest.mark.anyio
 async def test_controls_http_fake_end_to_end():
     system = make_system()
     transport = httpx.ASGITransport(

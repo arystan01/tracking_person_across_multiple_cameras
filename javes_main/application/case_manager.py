@@ -15,6 +15,7 @@ from javes_contracts import (
     ArtifactRef,
     CaseCommandBody,
     CaseInfo,
+    CaseDetailView,
     CreateLegalHoldBody,
     ClipLifecycleState,
     ClipPurgeCommand,
@@ -949,17 +950,22 @@ class CaseManager:
         *,
         for_update: bool,
     ):
-        reference = body.reference_image_ref
-        if reference.object_key is None or reference.sha256 is None:
-            raise ReferenceUploadError(
-                "REFERENCE_UPLOAD_NOT_FOUND",
-                "a registered reference image upload is required",
-                status=404,
-            )
         try:
-            upload = self.repository.get_reference_upload_by_key(
-                reference.object_key, for_update=for_update
-            )
+            if body.reference_upload_id is not None:
+                upload = self.repository.get_reference_upload(
+                    body.reference_upload_id, for_update=for_update
+                )
+            else:
+                reference = body.reference_image_ref
+                if (
+                    reference is None
+                    or reference.object_key is None
+                    or reference.sha256 is None
+                ):
+                    raise KeyError("missing reference image identity")
+                upload = self.repository.get_reference_upload_by_key(
+                    reference.object_key, for_update=for_update
+                )
         except KeyError as exc:
             raise ReferenceUploadError(
                 "REFERENCE_UPLOAD_NOT_FOUND",
@@ -990,7 +996,8 @@ class CaseManager:
                 "reference image upload has expired",
                 status=410,
             )
-        if upload.sha256 != reference.sha256:
+        reference = body.reference_image_ref
+        if reference is not None and upload.sha256 != reference.sha256:
             raise ReferenceUploadError(
                 "REFERENCE_UPLOAD_CONTENT_MISMATCH",
                 "reference image checksum does not match its upload record",
@@ -1013,6 +1020,21 @@ class CaseManager:
             )
         return upload
 
+    @staticmethod
+    def _with_reference_artifact(
+        body: CreateCaseBody, upload
+    ) -> CreateCaseBody:
+        return body.model_copy(
+            update={
+                "reference_upload_id": None,
+                "reference_image_ref": ArtifactRef(
+                    object_key=upload.object_key,
+                    sha256=upload.sha256,
+                )
+            },
+            deep=True,
+        )
+
     def create_case(
         self,
         body: CreateCaseBody,
@@ -1027,8 +1049,16 @@ class CaseManager:
             return self.get_view(str(replay["case_id"]))
 
         if reference_owner_id is not None:
-            self._validated_reference_upload(
+            upload = self._validated_reference_upload(
                 body, reference_owner_id, for_update=False
+            )
+            body = self._with_reference_artifact(body, upload)
+
+        if body.reference_image_ref is None:
+            raise ReferenceUploadError(
+                "REFERENCE_UPLOAD_NOT_FOUND",
+                "a registered reference image upload is required",
+                status=404,
             )
 
         graph = self.sites.get_graph(body.site_id, body.site_version)
@@ -1098,7 +1128,7 @@ class CaseManager:
                         "site_id": body.site_id,
                         "site_version": body.site_version,
                         "params_version": params.version,
-                        "contracts_version": "javes-boundary.v1alpha1",
+                        "contracts_version": "javes-boundary.v1",
                     },
                 )
                 self._enqueue(
@@ -1446,7 +1476,7 @@ class CaseManager:
                 "site_id": case.request.site_id,
                 "site_version": case.request.site_version,
                 "params_version": case.params_version,
-                "contracts_version": "javes-boundary.v1alpha1",
+                "contracts_version": "javes-boundary.v1",
                 "input_case_revision": expected_revision,
                 "output_case_revision": saved.revision,
                 "output_route_revision": route_revision,
@@ -2859,21 +2889,33 @@ class CaseManager:
 
         raise ValueError(f"unsupported outbox topic {message.topic!r}")
 
-    def get_case(self, case_id: str) -> dict[str, Any]:
+    def get_case(self, case_id: str) -> CaseDetailView:
         case = self.repository.get(case_id)
-        return {
-            "case_id": case.request.case_id,
-            "lifecycle": case.lifecycle.value,
-            "revision": case.revision,
-            "route_revision": (
+        return CaseDetailView(
+            case_id=case.request.case_id,
+            target_id=case.request.target_id,
+            profile=case.request.profile,
+            lifecycle=case.lifecycle,
+            revision=case.revision,
+            route_revision=(
                 case.latest_route.revision if case.latest_route is not None else 0
             ),
-            "site_id": case.request.site_id,
-            "site_version": case.request.site_version,
-            "params_version": case.params_version,
-            "created_at": case.created_at.isoformat(),
-            "updated_at": case.updated_at.isoformat(),
-        }
+            site_id=case.request.site_id,
+            site_version=case.request.site_version,
+            params_version=case.params_version,
+            last_known=case.request.last_known,
+            window=case.request.window,
+            reference_preview_url=(
+                f"/v1/cases/{case_id}/reference"
+                if case.lifecycle
+                not in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}
+                else None
+            ),
+            created_at=case.created_at,
+            updated_at=case.updated_at,
+            closed_at=case.closed_at,
+            retention_due_at=case.retention_due_at,
+        )
 
     def list_cases(
         self, *, lifecycle: CaseLifecycle | None = None
@@ -2910,8 +2952,26 @@ class CaseManager:
             outbox=self.repository.list_outbox(case_id=case_id),
             routing_triggers=self.repository.list_routing_triggers(case_id=case_id),
             probe_results=self.repository.list_probe_results(case_id),
+            decisions=self._decision_history(case_id),
             now=self.clock.now(),
         )
+
+    def get_reference_media(self, case_id: str) -> tuple[bytes, str]:
+        case = self.repository.get(case_id)
+        if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
+            raise KeyError("reference image is no longer available")
+        reference = case.request.reference_image_ref
+        if reference is None or reference.object_key is None:
+            raise KeyError("reference image is not available")
+        data, mime_type = self.artifacts.get(reference.object_key)
+        if mime_type != "image/jpeg":
+            raise RuntimeError("stored reference image has unexpected MIME type")
+        if (
+            reference.sha256 is not None
+            and hashlib.sha256(data).hexdigest() != reference.sha256
+        ):
+            raise RuntimeError("stored reference image checksum mismatch")
+        return data, mime_type
 
     def get_events(self, case_id: str) -> list[dict[str, Any]]:
         self.repository.get(case_id)

@@ -1,0 +1,11 @@
+{
+  "candidates": [],
+  "coverage_ratio": 0.0,
+  "error_code": "DECODE_FAILED",
+  "n_tracklets_total": null,
+  "probe_id": "probe-003",
+  "processed_duration_s": null,
+  "status": "FAILED",
+  "stream_closed": false,
+  "tracklets": []
+}

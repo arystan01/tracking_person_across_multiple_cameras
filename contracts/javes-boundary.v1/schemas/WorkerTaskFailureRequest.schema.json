@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "worker-task-failure.v1",
+      "default": "worker-task-failure.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Detail"
+    },
+    "error_code": {
+      "title": "Error Code",
+      "type": "string"
+    },
+    "lease_token": {
+      "title": "Lease Token",
+      "type": "string"
+    },
+    "retryable": {
+      "default": true,
+      "title": "Retryable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "lease_token",
+    "error_code"
+  ],
+  "title": "WorkerTaskFailureRequest",
+  "type": "object"
+}

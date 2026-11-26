@@ -301,6 +301,16 @@ class InMemoryRepository:
                 raise KeyError("unknown reference upload")
             return self._reference_uploads[upload_id].model_copy(deep=True)
 
+    def get_reference_upload(
+        self, upload_id: str, *, for_update: bool = False
+    ) -> ReferenceImageUploadRecord:
+        del for_update
+        with self._lock:
+            upload = self._reference_uploads.get(upload_id)
+            if upload is None:
+                raise KeyError("unknown reference upload")
+            return upload.model_copy(deep=True)
+
     def save_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
         with self._lock:
             previous = self._reference_uploads.get(upload.upload_id)

@@ -1,0 +1,95 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "created_by": {
+      "title": "Created By",
+      "type": "string"
+    },
+    "events_url": {
+      "title": "Events Url",
+      "type": "string"
+    },
+    "export_id": {
+      "title": "Export Id",
+      "type": "string"
+    },
+    "filters": {
+      "additionalProperties": true,
+      "title": "Filters",
+      "type": "object"
+    },
+    "first_event_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "First Event Id"
+    },
+    "format": {
+      "const": "javes-audit-export.v1",
+      "default": "javes-audit-export.v1",
+      "title": "Format",
+      "type": "string"
+    },
+    "last_event_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Event Id"
+    },
+    "manifest_url": {
+      "title": "Manifest Url",
+      "type": "string"
+    },
+    "row_count": {
+      "minimum": 0,
+      "title": "Row Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "javes-audit-event.v1",
+      "default": "javes-audit-event.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Sha256",
+      "type": "string"
+    },
+    "size_bytes": {
+      "minimum": 0,
+      "title": "Size Bytes",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "export_id",
+    "created_at",
+    "created_by",
+    "filters",
+    "row_count",
+    "size_bytes",
+    "sha256",
+    "events_url",
+    "manifest_url"
+  ],
+  "title": "AuditExportManifest",
+  "type": "object"
+}

@@ -42,6 +42,7 @@ ENDPOINTS = [
         "LoginResponse",
     ),
     ("Controls", "Dashboard", "GET", "/v1/auth/me", None, "ActorView"),
+    ("Controls", "Dashboard", "GET", "/v1/sites", None, "SiteCatalogEntry[]"),
     ("Controls", "Dashboard", "POST", "/v1/cases", "CreateCaseBody", "CaseView"),
     (
         "Controls",
@@ -52,6 +53,22 @@ ENDPOINTS = [
         "ReferenceImageUploadResponse",
     ),
     ("Controls", "Dashboard", "GET", "/v1/cases", None, "CaseSummary[]"),
+    (
+        "Controls",
+        "Dashboard",
+        "GET",
+        "/v1/cases/{case_id}",
+        None,
+        "CaseDetailView",
+    ),
+    (
+        "Controls",
+        "Dashboard",
+        "GET",
+        "/v1/cases/{case_id}/reference",
+        None,
+        "image/jpeg",
+    ),
     ("Controls", "Dashboard", "GET", "/v1/cases/{case_id}/view", None, "CaseView"),
     ("Controls", "Dashboard", "GET", "/v1/cases/{case_id}/clips", None, "ClipView[]"),
     (
@@ -292,8 +309,10 @@ MODEL_OWNERS = {
         "AuditExportManifest",
         "AuditExportRequest",
         "CaseCommandBody",
+        "CaseDetailView",
         "CaseSummary",
         "CaseView",
+        "CandidateView",
         "CreateCaseBody",
         "CreateLegalHoldBody",
         "DecisionRecordView",
@@ -309,6 +328,8 @@ MODEL_OWNERS = {
         "RotationKeyStatus",
         "RotationStatusResponse",
         "ServiceHealthResponse",
+        "SiteCatalogCamera",
+        "SiteCatalogEntry",
     ],
     "Main": [
         "ArtifactManifest",
@@ -380,7 +401,9 @@ def inventory_document() -> dict:
         for owner, consumer, method, path, request, response in ENDPOINTS
     ]
     return {
-        "boundary_version": "javes-boundary.v1alpha1",
+        "boundary_version": "javes-boundary.v1",
+        "release_status": "STABLE",
+        "accepted_consumers": ["dashboard-react-bff", "clip-worker"],
         "models": {
             owner: sorted(models) for owner, models in sorted(MODEL_OWNERS.items())
         },

@@ -1,0 +1,8 @@
+{
+  "checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+  "contract_version": "routing-params.v1",
+  "params": {
+    "version": "params-v1"
+  },
+  "version": "params-v1"
+}

@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "RetentionDeletionReceipt": {
+      "additionalProperties": false,
+      "description": "Path-free proof for one physical deletion attempt.",
+      "properties": {
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "backend_kind": {
+          "title": "Backend Kind",
+          "type": "string"
+        },
+        "contract_version": {
+          "const": "retention-deletion-receipt.v1",
+          "default": "retention-deletion-receipt.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "locator_hash": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Locator Hash",
+          "type": "string"
+        },
+        "locator_kind": {
+          "title": "Locator Kind",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "resource_id": {
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "DELETED",
+            "ALREADY_MISSING",
+            "FAILED"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "backend_kind",
+        "locator_kind",
+        "locator_hash",
+        "attempt",
+        "status",
+        "occurred_at"
+      ],
+      "title": "RetentionDeletionReceipt",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "CLOSE_CASE",
+        "DELETE_CASE",
+        "TTL_EXPIRED"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "audit_tombstone_id": {
+      "title": "Audit Tombstone Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "command_id": {
+      "title": "Command Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "retention-result.v1",
+      "default": "retention-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "deleted_resource_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Deleted Resource Ids",
+      "type": "array"
+    },
+    "held_resource_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Held Resource Ids",
+      "type": "array"
+    },
+    "preserved_resource_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Preserved Resource Ids",
+      "type": "array"
+    },
+    "receipts": {
+      "items": {
+        "$ref": "#/$defs/RetentionDeletionReceipt"
+      },
+      "title": "Receipts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "command_id",
+    "case_id",
+    "action",
+    "audit_tombstone_id"
+  ],
+  "title": "RetentionResult",
+  "type": "object"
+}

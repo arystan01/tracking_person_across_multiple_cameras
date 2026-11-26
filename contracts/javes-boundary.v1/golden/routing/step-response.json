@@ -1,0 +1,51 @@
+{
+  "contract_version": "routing-step-result.v1",
+  "params_checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+  "result": {
+    "rendered_route": {
+      "best_hypothesis_id": null,
+      "maps": [],
+      "presentation": null,
+      "route_revision": 1
+    },
+    "step_result": {
+      "ambiguities": [],
+      "best": null,
+      "done": false,
+      "estimate": null,
+      "hypotheses": [],
+      "mode": "CATCHING_UP",
+      "probes": [],
+      "rejected": [],
+      "state": {
+        "baseline_started": false,
+        "calibration_version": null,
+        "camera_minutes_used": 0.0,
+        "case_id": "case-001",
+        "confirmed_tracklet_ids": [],
+        "done": false,
+        "hypotheses": [],
+        "id_counter": 0,
+        "mode": "CATCHING_UP",
+        "params_version": "params-v1",
+        "pending_probes": [],
+        "pending_review_visits": [],
+        "probed_windows": [],
+        "processed_duration_s_by_probe": {},
+        "processed_result_ids": [],
+        "profile": "ADULT",
+        "rejected_tracklet_ids": [],
+        "round_number": 0,
+        "search_frontier": null,
+        "site_version": "site-v1",
+        "state_version": 0,
+        "stop_reason": null,
+        "unobserved_windows": [],
+        "window_end": "2026-01-02T03:05:05Z",
+        "window_start": "2026-01-02T03:04:05Z"
+      },
+      "stop_reason": null
+    }
+  },
+  "site_checksum": "0000000000000000000000000000000000000000000000000000000000000000"
+}

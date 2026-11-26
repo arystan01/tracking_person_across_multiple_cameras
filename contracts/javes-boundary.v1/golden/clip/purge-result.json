@@ -1,0 +1,6 @@
+{
+  "case_id": "case-001",
+  "command_id": "purge-001",
+  "contract_version": "clip-purge-result.v1",
+  "purged": true
+}

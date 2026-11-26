@@ -43,6 +43,9 @@ class MainSettings(BaseModel):
     require_https: bool = False
     trusted_proxy_cidrs: list[str] = Field(default_factory=list)
     cors_origins: list[str] = Field(default_factory=list)
+    allowed_site_versions: list[str] = Field(
+        default_factory=lambda: ["nvidia-mtmc-12cam@nvidia-12cam-v1"]
+    )
     log_level: str = "INFO"
 
     @classmethod
@@ -108,6 +111,14 @@ class MainSettings(BaseModel):
                 for item in os.environ.get(f"{prefix}CORS_ORIGINS", "").split(",")
                 if item.strip()
             ],
+            "allowed_site_versions": [
+                item.strip()
+                for item in os.environ.get(
+                    f"{prefix}ALLOWED_SITE_VERSIONS",
+                    "nvidia-mtmc-12cam@nvidia-12cam-v1",
+                ).split(",")
+                if item.strip()
+            ],
             "log_level": os.environ.get(f"{prefix}LOG_LEVEL", "INFO"),
         }
         numeric = {
@@ -125,6 +136,11 @@ class MainSettings(BaseModel):
             if value is not None:
                 values[field] = converter(value)
         settings = cls.model_validate(values)
+        if any(
+            item.count("@") != 1 or not all(part.strip() for part in item.split("@"))
+            for item in settings.allowed_site_versions
+        ):
+            raise ValueError("allowed site versions must use site_id@site_version")
         from javes_security import RotationWindow
 
         for component in ("perception", "clip", "retention"):

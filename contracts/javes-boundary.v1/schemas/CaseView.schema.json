@@ -1,0 +1,490 @@
+{
+  "$defs": {
+    "CandidateView": {
+      "additionalProperties": false,
+      "properties": {
+        "active_decision_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Decision Id"
+        },
+        "appearance_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Appearance Score"
+        },
+        "association_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Association Id"
+        },
+        "bbox_first": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox First"
+        },
+        "bbox_last": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox Last"
+        },
+        "calibration_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Version"
+        },
+        "camera_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Id"
+        },
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "clip_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clip Id"
+        },
+        "clip_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clip State"
+        },
+        "clip_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clip Status"
+        },
+        "cosine": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cosine"
+        },
+        "decision_state": {
+          "default": "UNREVIEWED",
+          "enum": [
+            "UNREVIEWED",
+            "CONFIRMED",
+            "REJECTED"
+          ],
+          "title": "Decision State",
+          "type": "string"
+        },
+        "flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "requires_confirmation": {
+          "default": false,
+          "title": "Requires Confirmation",
+          "type": "boolean"
+        },
+        "review_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Review State"
+        },
+        "t_end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T End"
+        },
+        "t_start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T Start"
+        },
+        "thumbnail_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Thumbnail Refs",
+          "type": "array"
+        },
+        "tracklet_id": {
+          "title": "Tracklet Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "tracklet_id"
+      ],
+      "title": "CandidateView",
+      "type": "object"
+    },
+    "CaseLifecycle": {
+      "enum": [
+        "PREPARING",
+        "SEARCHING",
+        "CLOSED",
+        "EXPORTING",
+        "SAVED",
+        "DELETE_REQUESTED",
+        "DELETED",
+        "FAILED"
+      ],
+      "title": "CaseLifecycle",
+      "type": "string"
+    },
+    "RouteMapView": {
+      "additionalProperties": false,
+      "properties": {
+        "alt_text": {
+          "title": "Alt Text",
+          "type": "string"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "floor_id",
+        "mime_type",
+        "url",
+        "alt_text",
+        "width",
+        "height"
+      ],
+      "title": "RouteMapView",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "alternatives": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Alternatives",
+      "type": "array"
+    },
+    "best_hypothesis": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Best Hypothesis"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/CandidateView"
+      },
+      "title": "Candidates",
+      "type": "array"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "clips": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Clips",
+      "type": "array"
+    },
+    "done": {
+      "default": false,
+      "title": "Done",
+      "type": "boolean"
+    },
+    "errors": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "estimate": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Estimate"
+    },
+    "export": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Export"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/CaseLifecycle"
+    },
+    "live": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Live"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mode"
+    },
+    "rendered_route_maps": {
+      "items": {
+        "$ref": "#/$defs/RouteMapView"
+      },
+      "title": "Rendered Route Maps",
+      "type": "array"
+    },
+    "revision": {
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "route_presentation": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Route Presentation"
+    },
+    "route_revision": {
+      "minimum": 0,
+      "title": "Route Revision",
+      "type": "integer"
+    },
+    "search_progress": {
+      "additionalProperties": true,
+      "title": "Search Progress",
+      "type": "object"
+    },
+    "stop_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stop Reason"
+    },
+    "unobserved_windows": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Unobserved Windows",
+      "type": "array"
+    },
+    "watch": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Watch",
+      "type": "array"
+    }
+  },
+  "required": [
+    "case_id",
+    "revision",
+    "route_revision",
+    "lifecycle"
+  ],
+  "title": "CaseView",
+  "type": "object"
+}

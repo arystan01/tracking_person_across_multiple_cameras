@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "computed_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "computed_size_bytes": 123,
+      "declared_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "declared_size_bytes": 123,
+      "failure_code": null,
+      "media_type": "application/json",
+      "name": "fast-python-3.13",
+      "passed": true,
+      "path": "suites/fast-python-3.13.json",
+      "schema_valid": true
+    }
+  ],
+  "git_commit_failure_code": null,
+  "git_commit_verified": null,
+  "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "schema_version": "javes-evidence-verification.v1"
+}

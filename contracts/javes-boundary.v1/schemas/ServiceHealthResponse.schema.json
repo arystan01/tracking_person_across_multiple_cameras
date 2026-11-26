@@ -1,0 +1,56 @@
+{
+  "additionalProperties": false,
+  "description": "Common live/ready payload; service-specific readiness facts are additive.",
+  "properties": {
+    "cameras": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cameras"
+    },
+    "manifest_checksum": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Manifest Checksum"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "ready"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "telemetry": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Telemetry"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "ServiceHealthResponse",
+  "type": "object"
+}

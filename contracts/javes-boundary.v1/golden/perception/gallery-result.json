@@ -1,0 +1,8 @@
+{
+  "case_id": "case-001",
+  "command_id": "gallery-001",
+  "contract_version": "target-gallery-result.v1",
+  "gallery_ref": "cases/case-001/gallery.bin",
+  "model_version": "osnet_ain_x1_0_msmt17",
+  "source_count": 1
+}

@@ -23,6 +23,8 @@ venv/
 *.sqlite3
 demo_out/
 schemas/
+!contracts/javes-boundary.v1/schemas/
+!contracts/javes-boundary.v1/schemas/*.schema.json
 artifacts/
 /runtime/
 backups/

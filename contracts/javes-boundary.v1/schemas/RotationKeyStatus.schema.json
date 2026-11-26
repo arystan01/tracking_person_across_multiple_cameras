@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "current_key_id": {
+      "title": "Current Key Id",
+      "type": "string"
+    },
+    "previous_accepted": {
+      "default": false,
+      "title": "Previous Accepted",
+      "type": "boolean"
+    },
+    "previous_key_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Key Id"
+    },
+    "previous_valid_until": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Valid Until"
+    }
+  },
+  "required": [
+    "current_key_id"
+  ],
+  "title": "RotationKeyStatus",
+  "type": "object"
+}

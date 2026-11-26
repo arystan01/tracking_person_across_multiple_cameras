@@ -1,0 +1,202 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "description": "Stable storage/archive identity, never a short-lived playback URL.",
+      "properties": {
+        "archive_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archive Id"
+        },
+        "object_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Key"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uri"
+        }
+      },
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "ClipLifecycleState": {
+      "enum": [
+        "HOLD",
+        "CONFIRMED",
+        "RELEASED"
+      ],
+      "title": "ClipLifecycleState",
+      "type": "string"
+    },
+    "ClipProcessingStatus": {
+      "enum": [
+        "PENDING",
+        "READY",
+        "FAILED",
+        "UNAVAILABLE"
+      ],
+      "title": "ClipProcessingStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifact_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "camera_id": {
+      "title": "Camera Id",
+      "type": "string"
+    },
+    "candidate_id": {
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "checksum": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checksum"
+    },
+    "clip_id": {
+      "title": "Clip Id",
+      "type": "string"
+    },
+    "clip_request_id": {
+      "title": "Clip Request Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "clip-record.v1",
+      "default": "clip-record.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "duration_s": {
+      "minimum": 0.0,
+      "title": "Duration S",
+      "type": "number"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "mime_type": {
+      "default": "video/mp4",
+      "title": "Mime Type",
+      "type": "string"
+    },
+    "revision": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClipLifecycleState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "status": {
+      "$ref": "#/$defs/ClipProcessingStatus"
+    },
+    "t_end": {
+      "format": "date-time",
+      "title": "T End",
+      "type": "string"
+    },
+    "t_start": {
+      "format": "date-time",
+      "title": "T Start",
+      "type": "string"
+    },
+    "tracklet_id": {
+      "title": "Tracklet Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "clip_request_id",
+    "clip_id",
+    "case_id",
+    "candidate_id",
+    "tracklet_id",
+    "status",
+    "camera_id",
+    "t_start",
+    "t_end",
+    "duration_s"
+  ],
+  "title": "ClipRecord",
+  "type": "object"
+}

@@ -23,6 +23,7 @@ from javes_contracts import (
     AuditExportManifest,
     AuditExportRequest,
     CaseCommandBody,
+    CaseDetailView,
     CreateCaseBody,
     CreateLegalHoldBody,
     LegalHoldView,
@@ -33,6 +34,8 @@ from javes_contracts import (
     RevokeDecisionBody,
     ReleaseLegalHoldBody,
     ServiceHealthResponse,
+    SiteCatalogCamera,
+    SiteCatalogEntry,
     RotationStatusResponse,
     DecisionRecordView,
     ReviewDecisionBody,
@@ -115,6 +118,7 @@ def create_app(
     require_https: bool = False,
     trusted_proxies: Iterable[str] = (),
     cors_origins: Iterable[str] = (),
+    allowed_site_versions: Iterable[tuple[str, str]] = (),
     rotation_status: dict | Callable[[], dict] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="JAVES-AI Controls", version="1.0.0-alpha")
@@ -197,6 +201,8 @@ def create_app(
     )
     if run_fake_jobs_inline and scheduler is None:
         raise ValueError("run_fake_jobs_inline requires a SchedulerRunner")
+
+    site_allowlist = tuple(dict.fromkeys(allowed_site_versions))
 
     def require_worker(
         component: str,
@@ -645,6 +651,40 @@ def create_app(
         )
         return result
 
+    @app.get("/v1/sites", response_model=list[SiteCatalogEntry])
+    async def list_sites(
+        actor: Actor = Depends(current_actor),
+    ) -> list[SiteCatalogEntry]:
+        require_permission(actor, "case.create")
+        values: list[SiteCatalogEntry] = []
+        for site_id, site_version in site_allowlist:
+            graph = manager.sites.get_graph(site_id, site_version)
+            snapshot_method = getattr(manager.sites, "site_snapshot", None)
+            checksum = None
+            if callable(snapshot_method):
+                checksum = snapshot_method(site_id, site_version).checksum
+            cameras = [
+                SiteCatalogCamera(
+                    camera_id=camera.id,
+                    display_name=camera.id,
+                    floor_id=camera.floor,
+                    zone_id=camera.zone or None,
+                )
+                for camera in sorted(graph.cameras.values(), key=lambda item: item.id)
+            ]
+            values.append(
+                SiteCatalogEntry(
+                    site_id=site_id,
+                    site_version=site_version,
+                    display_name=site_id,
+                    timezone=graph.timezone,
+                    checksum=checksum,
+                    cameras=cameras,
+                    zones=sorted({item.zone for item in graph.cameras.values() if item.zone}),
+                )
+            )
+        return values
+
     @app.post("/v1/cases", response_model=CaseView, status_code=201)
     async def create_case(
         body: CreateCaseBody,
@@ -672,10 +712,24 @@ def create_app(
             view = manager.get_view(body.case_id)
         return view
 
-    @app.get("/v1/cases/{case_id}")
-    async def get_case(case_id: str, actor: Actor = Depends(current_actor)) -> dict:
+    @app.get("/v1/cases/{case_id}", response_model=CaseDetailView)
+    async def get_case(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> CaseDetailView:
         require_permission(actor, "case.read")
         return manager.get_case(case_id)
+
+    @app.get("/v1/cases/{case_id}/reference")
+    async def reference_image(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_reference_media(case_id)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
 
     @app.get("/v1/cases", response_model=list[CaseSummary])
     async def list_cases(

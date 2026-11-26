@@ -1,0 +1,8 @@
+{
+  "expected_case_revision": 3,
+  "external_ticket_id": "LEGAL-2026-001",
+  "hold_id": "hold-001",
+  "occurred_at": "2026-01-02T03:05:05Z",
+  "operator_id": "root-001",
+  "reason": "Preservation request"
+}

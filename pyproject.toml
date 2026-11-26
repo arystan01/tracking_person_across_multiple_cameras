@@ -28,6 +28,7 @@ test = [
   "opentelemetry-instrumentation-httpx>=0.49b0,<1",
   "opentelemetry-instrumentation-logging>=0.49b0,<1",
   "protobuf<7",
+  "cryptography>=46,<47",
 ]
 infra = [
   "fastapi>=0.115,<1",
@@ -42,6 +43,7 @@ infra = [
   "opentelemetry-instrumentation-httpx>=0.49b0,<1",
   "opentelemetry-instrumentation-logging>=0.49b0,<1",
   "protobuf<7",
+  "cryptography>=46,<47",
 ]
 
 perception = [
@@ -83,9 +85,10 @@ javes-clip-worker = "javes_clip.worker_cli:main"
 javes-nvidia-archive-api = "javes_archive.cli:api_main"
 javes-nvidia-archive-inspect = "javes_archive.cli:inspect_main"
 javes-nvidia-acceptance = "javes_release.cli:main"
+javes-dashboard = "javes_dashboard.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*", "javes_telemetry*", "javes_security*"]
+include = ["javes_routing*", "javes_contracts*", "javes_main*", "javes_retention*", "javes_perception*", "javes_site_config*", "javes_workers*", "javes_clip*", "javes_archive*", "javes_release*", "javes_telemetry*", "javes_security*", "javes_dashboard*"]
 
 [tool.setuptools.package-data]
 "javes_main.persistence.migrations" = ["script.py.mako"]
