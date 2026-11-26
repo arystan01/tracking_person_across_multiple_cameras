@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from javes_contracts import ClipLifecycleState, Hypothesis
+from javes_contracts import ClipLifecycleState, DecisionRecordView, Hypothesis
 
 from javes_main.domain.models import (
     CaseRecord,
@@ -79,7 +79,12 @@ def _published_live(case: CaseRecord, now: datetime | None) -> dict | None:
     }
 
 
-def _candidate_views(case: CaseRecord) -> list[dict]:
+def _candidate_views(
+    case: CaseRecord, decisions: list[DecisionRecordView]
+) -> list[dict]:
+    active_decisions = {
+        item.candidate_id: item for item in decisions if item.active
+    }
     values: list[dict] = []
     for candidate_id, raw in case.candidates.items():
         candidate = dict(raw)
@@ -101,7 +106,25 @@ def _candidate_views(case: CaseRecord) -> list[dict]:
             )
         clip_id = case.candidate_to_clip.get(candidate_id)
         clip = case.clips.get(clip_id or "")
+        decision = active_decisions.get(candidate_id)
         candidate["clip_id"] = clip_id
+        candidate["candidate_id"] = candidate_id
+        candidate["decision_state"] = (
+            "CONFIRMED"
+            if decision is not None and decision.decision == "CONFIRM"
+            else (
+                "REJECTED"
+                if decision is not None and decision.decision == "REJECT"
+                else "UNREVIEWED"
+            )
+        )
+        candidate["active_decision_id"] = (
+            decision.decision_id if decision is not None else None
+        )
+        candidate["clip_status"] = clip.status.value if clip is not None else None
+        candidate["clip_state"] = (
+            clip.state.value if clip is not None and clip.state is not None else None
+        )
         candidate["review_state"] = (
             clip.state.value
             if clip is not None and clip.state is not None
@@ -124,12 +147,14 @@ def build_case_view(
     outbox: list[OutboxRecord] | None = None,
     routing_triggers: list[RoutingTriggerRecord] | None = None,
     probe_results: list[ProbeResultRecord] | None = None,
+    decisions: list[DecisionRecordView] | None = None,
     now: datetime | None = None,
 ) -> CaseView:
     jobs = jobs or []
     outbox = outbox or []
     routing_triggers = routing_triggers or []
     probe_results = probe_results or []
+    decisions = decisions or []
     if case.lifecycle.value in {"DELETE_REQUESTED", "DELETED"}:
         return CaseView(
             case_id=case.request.case_id,
@@ -221,7 +246,7 @@ def build_case_view(
             revision=case.revision,
             route_revision=0,
             lifecycle=case.lifecycle,
-            candidates=_candidate_views(case) if reviewable_view else [],
+            candidates=_candidate_views(case, decisions) if reviewable_view else [],
             clips=visible_clips(),
             export=_export_view(case.request.case_id, case.export_ref),
             search_progress=progress,
@@ -251,7 +276,7 @@ def build_case_view(
         )
         for item in route.rendered.maps
     ]
-    candidates = _candidate_views(case) if reviewable_view else []
+    candidates = _candidate_views(case, decisions) if reviewable_view else []
     live = None if retained_view else _published_live(case, now)
     if live is None and step.mode.value == "LIVE_TRACKING" and best is not None and best.visits:
         visit = best.visits[-1]

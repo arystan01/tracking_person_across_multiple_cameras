@@ -32,6 +32,9 @@ def main() -> None:
         require_https=settings.require_https,
         trusted_proxies=settings.trusted_proxy_cidrs,
         cors_origins=settings.cors_origins,
+        allowed_site_versions=[
+            tuple(item.split("@", 1)) for item in settings.allowed_site_versions
+        ],
         rotation_status=lambda: rotation_status(settings),
     )
     import uvicorn

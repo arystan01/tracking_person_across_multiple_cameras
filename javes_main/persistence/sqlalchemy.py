@@ -635,6 +635,20 @@ class SqlAlchemyRepository:
                 raise KeyError("unknown reference upload")
             return ReferenceImageUploadRecord.model_validate(row.payload)
 
+    def get_reference_upload(
+        self, upload_id: str, *, for_update: bool = False
+    ) -> ReferenceImageUploadRecord:
+        statement = select(ReferenceImageUploadRow).where(
+            ReferenceImageUploadRow.upload_id == upload_id
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        with self._read_session() as session:
+            row = session.scalar(statement)
+            if row is None:
+                raise KeyError("unknown reference upload")
+            return ReferenceImageUploadRecord.model_validate(row.payload)
+
     def save_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
         with self._write_session() as session:
             row = session.get(ReferenceImageUploadRow, upload.upload_id)

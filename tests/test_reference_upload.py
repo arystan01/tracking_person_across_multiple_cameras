@@ -112,6 +112,39 @@ async def test_authenticated_upload_is_canonical_and_consumed_atomically():
         assert reused.json()["code"] == "REFERENCE_UPLOAD_ALREADY_USED"
 
 
+async def test_upload_id_is_the_browser_safe_case_creation_handle():
+    system = make_system()
+    app = create_app(
+        system.manager,
+        auth=system.auth,
+        scheduler=system.scheduler,
+        run_fake_jobs_inline=True,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = await login(client, "root", "root-password-for-tests")
+        uploaded = await upload(client, token, key="upload-by-id")
+        request = body(system.root_user.user_id).model_copy(
+            update={
+                "reference_upload_id": uploaded.json()["upload_id"],
+                "reference_image_ref": None,
+            }
+        )
+        created = await client.post(
+            "/v1/cases",
+            headers=headers("create-by-upload-id", token),
+            json=request.model_dump(mode="json"),
+        )
+        assert created.status_code == 201, created.text
+        stored = system.repository.get("api-case")
+        assert stored.request.reference_upload_id is None
+        assert stored.request.reference_image_ref is not None
+        assert stored.request.reference_image_ref.object_key.startswith(
+            "cases/api-case/reference/"
+        )
+
+
 async def test_exif_orientation_is_applied_and_metadata_is_removed():
     system = make_system()
     app = create_app(system.manager, auth=system.auth)

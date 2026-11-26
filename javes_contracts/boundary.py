@@ -645,12 +645,21 @@ class CreateCaseBody(ContractModel):
     case_id: str
     operator_id: str
     target_id: str
-    reference_image_ref: ArtifactRef
+    reference_upload_id: str | None = Field(default=None, min_length=1, max_length=200)
+    reference_image_ref: ArtifactRef | None = None
     last_known: LastKnown
     window: CaseWindow
     profile: Literal["ADULT", "CHILD", "ELDERLY"] = "ADULT"
     site_id: str
     site_version: str
+
+    @model_validator(mode="after")
+    def _one_reference_source(self) -> CreateCaseBody:
+        if bool(self.reference_upload_id) == bool(self.reference_image_ref):
+            raise ValueError(
+                "exactly one of reference_upload_id or reference_image_ref is required"
+            )
+        return self
 
 
 class ReferenceImageUploadResponse(ContractModel):
@@ -667,6 +676,23 @@ class ReferenceImageUploadResponse(ContractModel):
     @classmethod
     def _aware_expiry(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
+class SiteCatalogCamera(ContractModel):
+    camera_id: str
+    display_name: str
+    floor_id: str | None = None
+    zone_id: str | None = None
+
+
+class SiteCatalogEntry(ContractModel):
+    site_id: str
+    site_version: str
+    display_name: str
+    timezone: str
+    checksum: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    cameras: list[SiteCatalogCamera]
+    zones: list[str] = Field(default_factory=list)
 
 
 class ReviewDecisionBody(ContractModel):
@@ -775,6 +801,65 @@ class CaseSummary(ContractModel):
         return aware_utc(value)  # type: ignore[return-value]
 
 
+class CaseDetailView(ContractModel):
+    case_id: str
+    target_id: str
+    profile: Literal["ADULT", "CHILD", "ELDERLY"]
+    lifecycle: CaseLifecycle
+    revision: int = Field(ge=0)
+    route_revision: int = Field(ge=0)
+    site_id: str
+    site_version: str
+    params_version: str
+    last_known: LastKnown
+    window: CaseWindow
+    reference_preview_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+    retention_due_at: datetime | None = None
+
+    @field_validator(
+        "created_at", "updated_at", "closed_at", "retention_due_at", mode="after"
+    )
+    @classmethod
+    def _aware_detail_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+
+class CandidateView(ContractModel):
+    candidate_id: str
+    tracklet_id: str
+    camera_id: str | None = None
+    t_start: datetime | None = None
+    t_end: datetime | None = None
+    appearance_score: float | None = None
+    cosine: float | None = None
+    calibration_version: str | None = None
+    association_id: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    requires_confirmation: bool = False
+    decision_state: Literal["UNREVIEWED", "CONFIRMED", "REJECTED"] = "UNREVIEWED"
+    active_decision_id: str | None = None
+    clip_id: str | None = None
+    clip_status: str | None = None
+    clip_state: str | None = None
+    thumbnail_refs: list[str] = Field(default_factory=list)
+    bbox_first: tuple[float, float, float, float] | None = None
+    bbox_last: tuple[float, float, float, float] | None = None
+    review_state: str | None = None
+
+    @field_validator("t_start", "t_end", mode="after")
+    @classmethod
+    def _aware_candidate_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+    def __getitem__(self, key: str) -> Any:
+        """Keep the existing in-process projection seam mapping-compatible."""
+
+        return getattr(self, key)
+
+
 class CaseView(ContractModel):
     case_id: str
     revision: int = Field(ge=0)
@@ -785,7 +870,7 @@ class CaseView(ContractModel):
     stop_reason: str | None = None
     best_hypothesis: dict[str, Any] | None = None
     alternatives: list[dict[str, Any]] = Field(default_factory=list)
-    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    candidates: list[CandidateView] = Field(default_factory=list)
     estimate: dict[str, Any] | None = None
     route_presentation: dict[str, Any] | None = None
     rendered_route_maps: list[RouteMapView] = Field(default_factory=list)
