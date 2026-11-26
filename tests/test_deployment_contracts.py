@@ -81,13 +81,14 @@ def test_staging_compose_is_api_first_private_and_persistent() -> None:
         "archive",
         "otel-collector",
         "observability-backend",
+            "dashboard",
     } <= set(services)
     assert compose["networks"]["javes-internal"]["internal"] is True
     assert {"postgres-data", "artifacts", "site-config", "worker-state"} <= set(
         compose["volumes"]
     )
     exposed = {name for name, service in services.items() if service.get("ports")}
-    assert exposed == {"main-api", "reverse-proxy"}
+    assert exposed == {"reverse-proxy"}
     assert (
         services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
     )

@@ -43,6 +43,7 @@ infra = [
   "opentelemetry-instrumentation-httpx>=0.49b0,<1",
   "opentelemetry-instrumentation-logging>=0.49b0,<1",
   "protobuf<7",
+  "cryptography>=46,<47",
 ]
 
 perception = [

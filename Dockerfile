@@ -1,3 +1,10 @@
+FROM node:22.14-bookworm-slim AS dashboard-frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --legacy-peer-deps
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.11-slim AS builder
 WORKDIR /build
 COPY pyproject.toml README.md ./
@@ -13,6 +20,7 @@ COPY javes_archive javes_archive
 COPY javes_release javes_release
 COPY javes_telemetry javes_telemetry
 COPY javes_security javes_security
+COPY javes_dashboard javes_dashboard
 RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels-infra '.[infra]'
 
 FROM builder AS perception-builder
@@ -55,6 +63,14 @@ RUN apt-get update && apt-get install --no-install-recommends -y ffmpeg \
 USER 10001:10001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD ["sh", "-c", "kill -0 1"]
 ENTRYPOINT ["javes-clip-worker"]
+
+FROM runtime-base AS dashboard-runtime
+COPY --from=dashboard-frontend /frontend/dist /app/frontend/dist
+ENV JAVES_DASHBOARD_STATIC_ROOT=/app/frontend/dist
+WORKDIR /app
+EXPOSE 8090
+ENTRYPOINT ["javes-dashboard"]
+CMD ["--host", "0.0.0.0", "--port", "8090"]
 
 FROM runtime-base AS runtime
 USER root
