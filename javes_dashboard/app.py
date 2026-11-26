@@ -8,7 +8,6 @@ import uuid
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import httpx

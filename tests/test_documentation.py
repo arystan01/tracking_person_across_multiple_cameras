@@ -12,7 +12,9 @@ MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 def test_all_local_markdown_links_resolve() -> None:
     broken: list[str] = []
     markdown_files = sorted(
-        path for path in ROOT.rglob("*.md") if ".git" not in path.parts
+        path
+        for path in ROOT.rglob("*.md")
+        if not {".git", "node_modules", "dist"}.intersection(path.parts)
     )
     for document in markdown_files:
         for raw_target in MARKDOWN_LINK.findall(

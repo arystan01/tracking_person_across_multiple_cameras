@@ -10,6 +10,8 @@ from cryptography.fernet import Fernet
 
 from javes_dashboard import DashboardSettings, create_dashboard_app
 from javes_dashboard.session import DashboardSession, SessionCodec
+from javes_main.api import create_app
+from tests.test_controls_api import BASE, make_system, reference_jpeg
 
 
 UTC = timezone.utc
@@ -194,3 +196,69 @@ def test_session_key_rotation_and_production_cookie(tmp_path: Path):
 
     settings = _settings(tmp_path, production=True)
     assert settings.production_cookie
+
+
+@pytest.mark.anyio
+async def test_real_bff_controls_upload_id_case_creation_flow(tmp_path: Path):
+    system = make_system()
+    system.clock.set(datetime.now(UTC))
+    main = create_app(
+        system.manager,
+        auth=system.auth,
+        scheduler=system.scheduler,
+        allowed_site_versions=(("api-site", "v1"),),
+    )
+    controls = httpx.AsyncClient(
+        base_url="http://controls.test", transport=httpx.ASGITransport(app=main)
+    )
+    dashboard = create_dashboard_app(_settings(tmp_path), controls_client=controls)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=dashboard),
+        base_url="http://dashboard.test",
+    ) as client:
+        login = await client.post(
+            "/dashboard-api/session/login",
+            json={"username": "root", "password": "root-password-for-tests"},
+        )
+        assert login.status_code == 200, login.text
+        csrf = login.json()["csrf_token"]
+        sites = await client.get("/dashboard-api/controls/v1/sites")
+        assert sites.status_code == 200
+        assert sites.json()[0]["site_version"] == "v1"
+
+        upload = await client.post(
+            "/dashboard-api/controls/v1/cases/dashboard-e2e/reference-image",
+            headers={"x-javes-csrf": csrf, "idempotency-key": "upload-e2e"},
+            files={"file": ("reference.jpg", reference_jpeg(), "image/jpeg")},
+        )
+        assert upload.status_code == 201, upload.text
+        assert "reference_image_ref" not in upload.json()
+        assert "object_key" not in upload.text
+
+        created = await client.post(
+            "/dashboard-api/controls/v1/cases",
+            headers={"x-javes-csrf": csrf, "idempotency-key": "case-e2e"},
+            json={
+                "case_id": "dashboard-e2e",
+                "target_id": "target-e2e",
+                "reference_upload_id": upload.json()["upload_id"],
+                "last_known": {"camera_id": "A", "time": BASE.isoformat()},
+                "window": {
+                    "start": BASE.isoformat(),
+                    "end": (BASE + timedelta(minutes=5)).isoformat(),
+                },
+                "site_id": "api-site",
+                "site_version": "v1",
+                "profile": "ADULT",
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["case_id"] == "dashboard-e2e"
+        assert "object_key" not in created.text
+
+        view = await client.get(
+            "/dashboard-api/controls/v1/cases/dashboard-e2e/view"
+        )
+        assert view.status_code == 200
+        assert view.json()["case_id"] == "dashboard-e2e"
+    await controls.aclose()
