@@ -11,6 +11,26 @@ permissions:
   contents: read
 
 jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: npm ci --legacy-peer-deps
+        working-directory: frontend
+      - run: npm run lint && npm test && npm run build
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium firefox
+        working-directory: frontend
+      - run: npm run test:a11y
+        working-directory: frontend
+      - run: python -m pip install -e '.[test,infra]'
+      - run: python -m pytest -q tests/test_dashboard_bff.py tests/test_dashboard_architecture.py
+      - run: javes-dashboard --help
+
   fast:
     runs-on: ubuntu-latest
     strategy:

@@ -8,5 +8,8 @@ export default defineConfig(({ mode }) => {
       changeOrigin: true,
     },
   }
-  return { server: { proxy }, preview: { proxy } }
+  return {
+    server: { proxy }, preview: { proxy },
+    test: { environment: 'jsdom', include: ['src/**/*.test.ts', 'src/**/*.test.tsx'], setupFiles: ['./src/test/setup.ts'], restoreMocks: true },
+  }
 })
