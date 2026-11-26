@@ -56,7 +56,17 @@ function useMedia(client: Controls | undefined, path: string | undefined, mime: 
 }
 
 function CameraPanel({ view, client, cycle }: { view: CaseView; client?: Controls; cycle: number }) {
-  const livePath = view.live?.stream_url ? casePath(view.case_id) + '/live' : undefined
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 5_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const expiresAt = view.live?.expires_at ? Date.parse(view.live.expires_at) : NaN
+  const observedAt = view.live?.observed_at ? Date.parse(view.live.observed_at) : NaN
+  const expired = now > 0 && Number.isFinite(expiresAt) && expiresAt <= now
+  const stale = now > 0 && !expired && Number.isFinite(observedAt) && now - observedAt > 15_000
+  const livePath = view.live?.stream_url && !expired ? casePath(view.case_id) + '/live' : undefined
   const live = useMedia(client, livePath, 'image/jpeg', cycle, view.live?.camera_id)
   const [expanded, setExpanded] = useState<string | null>(null)
   const watched = [...new Set(view.watch.map((item) => item.camera_id))]
@@ -67,10 +77,10 @@ function CameraPanel({ view, client, cycle }: { view: CaseView; client?: Control
         {live.src ? <button className="camera-tile live-tile" onClick={() => setExpanded(view.live!.camera_id)} aria-label="Expand live camera frame">
           <img src={live.src} alt={'Latest snapshot from ' + view.live?.camera_id}/>
           <span className="camera-shade"/>
-          <span className="feed-flag"><i className={'dot ' + (live.error ? '' : 'green')}/>{live.error ? 'Last received frame' : 'Latest frame'}</span>
+          <span className="feed-flag"><i className={'dot ' + (!live.error && !stale ? 'green' : '')}/>{live.error ? 'Unavailable' : stale ? 'Stale frame' : 'Fresh frame'}</span>
           <span className="camera-caption"><span><small>{time(view.live?.observed_at)} KST</small><strong>{view.live?.camera_id}</strong></span><ArrowUpRight size={17}/></span>
         </button> : <div className="media-empty"><VideoOff size={28}/><strong>No camera frame available</strong>
-          <span>{live.error ?? 'A frame will appear when Controls publishes one for this case.'}</span>
+          <span>{expired ? 'The last published frame expired.' : live.error ?? 'A frame will appear when Controls publishes one for this case.'}</span>
         </div>}
         {watched.length > 0 && <div className="observed-cameras" aria-label="Cameras on watch">
           <strong>Cameras on watch</strong>
@@ -151,7 +161,7 @@ export function Workspace({ view, client, cycle }: { view: CaseView; client?: Co
       </div>
     </header>
     {tab === 'cameras' ? <CameraPanel view={view} client={client} cycle={cycle}/>
-    : <RoutePanel view={view} client={client}/>} 
+    : <RoutePanel view={view} client={client}/>}
     <div className="panel-foot"><span><i className={'dot ' + (frameCount ? 'green' : '')}/>{frameCount} {'published feed' + (frameCount === 1 ? '' : 's')}</span><span>All times KST</span></div>
   </section>
 }

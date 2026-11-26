@@ -199,6 +199,50 @@ def test_session_key_rotation_and_production_cookie(tmp_path: Path):
 
 
 @pytest.mark.anyio
+async def test_production_health_bypasses_tls_redirect_and_upstream_errors_are_redacted(
+    tmp_path: Path,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/cases":
+            return httpx.Response(
+                500,
+                json={
+                    "detail": "ffmpeg failed at /srv/private/cases/case-secret",
+                    "code": "INTERNAL_ERROR",
+                    "debug": {"token": "secret"},
+                },
+            )
+        return _controls_handler(request)
+
+    controls = httpx.AsyncClient(
+        base_url="http://controls.test", transport=httpx.MockTransport(handler)
+    )
+    app = create_dashboard_app(
+        _settings(tmp_path, production=True), controls_client=controls
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://dashboard.test"
+    ) as client:
+        assert (await client.get("/health/live")).status_code == 200
+        assert (await client.get("/")).status_code == 400
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://dashboard.test"
+    ) as client:
+        login = await client.post(
+            "/dashboard-api/session/login",
+            json={"username": "operator", "password": "valid-password"},
+        )
+        assert "Secure" in login.headers["set-cookie"]
+        failed = await client.get("/dashboard-api/controls/v1/cases")
+        assert failed.status_code == 500
+        assert failed.headers["content-type"].startswith("application/problem+json")
+        assert failed.json()["detail"] == "Controls is temporarily unavailable"
+        assert "/srv/private" not in failed.text
+        assert "secret" not in failed.text
+    await controls.aclose()
+
+
+@pytest.mark.anyio
 async def test_real_bff_controls_upload_id_case_creation_flow(tmp_path: Path):
     system = make_system()
     system.clock.set(datetime.now(UTC))

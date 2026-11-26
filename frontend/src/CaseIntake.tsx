@@ -63,8 +63,8 @@ export async function preparePhoto(photo: Photo) {
   })
 }
 
-export function CaseIntake({ cameras, submit }: {
-  cameras: Record<string, string>
+export function CaseIntake({ locations, submit }: {
+  locations: Record<string, string>
   submit: (fields: IntakeFields) => Promise<void>
 }) {
   const [src, setSrc] = useState('')
@@ -160,16 +160,16 @@ export function CaseIntake({ cameras, submit }: {
     <section className="panel form intake-card">
       <header className="ops-panel-header"><span className="ops-panel-icon"><FolderKanban size={18}/></span><div><h2>Case information</h2><p>Record the last known sighting</p></div></header>
       <div className="intake-fields">
-      <label>Last-known camera<select name="camera" required disabled={busy}>{Object.entries(cameras).map(([id, name]) => <option key={id} value={id}>{id} · {name}</option>)}</select></label>
+      <label>Last-known camera or zone<select name="camera" required disabled={busy}>{Object.entries(locations).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
       <div className="field-row">
         <label>Last-known date<input type="date" name="date" defaultValue={known.date} required disabled={busy}/></label>
         <label>Last-known time<input type="time" name="time" defaultValue={known.time} required disabled={busy}/></label>
       </div>
       <p className="muted">Asia/Seoul. If the time is approximate, enter an earlier estimate.</p>
       {error && <p className="notice error" role="alert">{error}</p>}
-      {!Object.keys(cameras).length && <p className="notice error" role="alert">Configure the site cameras to create a connected case.</p>}
+      {!Object.keys(locations).length && <p className="notice error" role="alert">Configure site cameras or zones to create a connected case.</p>}
       </div>
-      <footer className="intake-actions"><button type="submit" className="primary" disabled={busy || reading || !Object.keys(cameras).length}><Plus size={16}/>{busy ? 'Uploading and creating…' : 'Create case'}</button></footer>
+      <footer className="intake-actions"><button type="submit" className="primary" disabled={busy || reading || !Object.keys(locations).length}><Plus size={16}/>{busy ? 'Uploading and creating…' : 'Create case'}</button></footer>
     </section>
   </form>
 }

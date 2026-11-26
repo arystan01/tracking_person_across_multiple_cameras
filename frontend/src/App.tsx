@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Activity, Aperture, ArrowUpRight, Bell, Check, ChevronsUpDown, CircleHelp, Crosshair, FolderKanban, LayoutGrid, LogOut, Plus, Radio, RefreshCw, Search, ShieldCheck, Users } from 'lucide-react'
-import { allowed, Controls, ControlsError, type CaseSummary, type CaseView, type Command, type Decision, type Session, type SiteCatalog } from './controls'
+import { allowed, Controls, ControlsError, type CaseDetail, type CaseSummary, type CaseView, type Command, type Decision, type Session, type SiteCatalog } from './controls'
 import { Accounts } from './Accounts'
 import { Audit } from './Audit'
 import { CaseIntake, preparePhoto } from './CaseIntake'
@@ -60,7 +60,10 @@ function NewCase({ close, client, sites, created }: {
   const [profile, setProfile] = useState<'ADULT' | 'CHILD' | 'ELDERLY'>('ADULT')
   const upload = useRef<{ src: string; edits: string; file: File }>(undefined)
   const site = sites.find((item) => item.site_id + '@' + item.site_version === siteKey)
-  const cameras = Object.fromEntries((site?.cameras ?? []).map((item) => [item.camera_id, item.display_name]))
+  const locations = Object.fromEntries([
+    ...(site?.cameras ?? []).map((item) => [item.camera_id, item.camera_id + ' · ' + item.display_name]),
+    ...(site?.zones ?? []).map((zone) => ['zone:' + zone, 'Zone · ' + zone]),
+  ])
 
   return <Modal title="New case" className="intake-dialog" close={() => { if (!busy) close() }}>
     <div className="field-row site-profile-fields">
@@ -71,7 +74,7 @@ function NewCase({ close, client, sites, created }: {
         <option value="ADULT">Adult</option><option value="CHILD">Child</option><option value="ELDERLY">Elderly</option>
       </select></label>
     </div>
-    <CaseIntake cameras={cameras} submit={async ({ camera, known, photo }) => {
+    <CaseIntake locations={locations} submit={async ({ camera, known, photo }) => {
       if (!photo || !site) return
       setBusy(true)
       try {
@@ -83,7 +86,8 @@ function NewCase({ close, client, sites, created }: {
         const start = new Date(known).toISOString()
         created(await client.create({
           case_id: caseId, target_id: targetId, site_id: site.site_id, site_version: site.site_version,
-          reference_upload_id, last_known: { camera_id: camera, time: start },
+          reference_upload_id,
+          last_known: camera.startsWith('zone:') ? { zone_id: camera.slice(5), time: start } : { camera_id: camera, time: start },
           window: { start, end: new Date().toISOString() }, profile,
         }))
       } finally {
@@ -160,6 +164,7 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
   const [sites, setSites] = useState<SiteCatalog[]>([])
   const [caseId, setCaseId] = useState<string>()
   const [active, setView] = useState<CaseView>()
+  const [detail, setDetail] = useState<CaseDetail>()
   const [dialog, setDialog] = useState<'create' | 'help' | Command>()
   const [picked, setPicked] = useState<string>()
   const [busy, setBusy] = useState(false)
@@ -219,8 +224,15 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
     return () => { abort.abort(); clearTimeout(timer) }
   }, [client, caseId, screen, canRead, refresh, acceptView])
 
+  useEffect(() => {
+    if (!canRead || !caseId || screen !== 'monitoring') return
+    const abort = new AbortController()
+    client.detail(caseId, abort.signal).then(setDetail).catch(() => {})
+    return () => abort.abort()
+  }, [client, caseId, screen, canRead, refresh])
+
   function openCase(id: string) {
-    if (caseId !== id) setView(undefined)
+    if (caseId !== id) { setView(undefined); setDetail(undefined) }
     setCaseId(id); setConnectionError(''); setStatus(''); setScreen('monitoring')
   }
 
@@ -317,7 +329,8 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
         </> : active ? <>
           <div className="page-head">
             <div><div className="case-kicker"><Crosshair size={15}/>{active.case_id}<span className="tag">{label(active.lifecycle)}</span></div>
-              <h1>Case monitoring</h1><p>{selected?.target_id ?? active.case_id}{selected?.site_id && ' · ' + selected.site_id}</p></div>
+              <h1>Case monitoring</h1><p>{selected?.target_id ?? active.case_id}{selected?.site_id && ' · ' + selected.site_id}
+                {detail && ' · ' + label(detail.profile) + ' · last known ' + (detail.last_known.camera_id ?? detail.last_known.zone_id ?? 'unknown') + ' at ' + time(detail.last_known.time) + ' KST'}</p></div>
             <div className="head-actions">
               <button className="secondary" onClick={() => setScreen('cases')}><FolderKanban size={16}/> All cases</button>
               {actions.length > 0 && <select className="secondary" aria-label="Case actions" value="" onChange={(event) => openDialog(event.target.value as Command)}>

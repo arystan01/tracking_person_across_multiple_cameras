@@ -178,7 +178,12 @@ def create_dashboard_app(
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
-        if settings.require_https and request.url.scheme != "https" and request.headers.get("x-forwarded-proto") != "https":
+        if (
+            settings.require_https
+            and not request.url.path.startswith("/health/")
+            and request.url.scheme != "https"
+            and request.headers.get("x-forwarded-proto") != "https"
+        ):
             return _problem(400, "HTTPS is required", "HTTPS_REQUIRED")
         response = await call_next(request)
         response.headers["content-security-policy"] = (
@@ -330,19 +335,50 @@ def create_dashboard_app(
             marker in path
             for marker in ("/routes/", "/thumbnails/", "/clips/", "/live", "/reference", "/export")
         )
-        upstream = await controls_request(
-            request.method,
-            path,
-            session=session,
-            content=body or None,
-            headers=headers,
-            stream=media_expected,
+        operation_name = (
+            "upload" if path.endswith("/reference-image") else "media" if media_expected else "proxy"
         )
+        with operation(
+            "dashboard.proxy",
+            {"component": "dashboard", "operation": operation_name},
+        ):
+            upstream = await controls_request(
+                request.method,
+                path,
+                session=session,
+                content=body or None,
+                headers=headers,
+                stream=media_expected,
+            )
         if upstream.status_code == 401:
             await upstream.aclose()
             response = _problem(401, "Dashboard session expired", "AUTHENTICATION_REQUIRED")
             clear_cookie(response)
             return response
+        if upstream.status_code >= 400:
+            content = await upstream.aread()
+            await upstream.aclose()
+            try:
+                payload = json.loads(content) if content else {}
+            except json.JSONDecodeError:
+                payload = {}
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            code = payload.get("code") if isinstance(payload, dict) else None
+            if upstream.status_code >= 500:
+                detail = "Controls is temporarily unavailable"
+            if not isinstance(detail, str):
+                detail = "The request could not be completed"
+            if not isinstance(code, str):
+                code = "UPSTREAM_ERROR"
+            record_counter(
+                "javes.dashboard.proxy.failures",
+                attributes={
+                    "component": "dashboard",
+                    "operation": operation_name,
+                    "outcome": str(upstream.status_code),
+                },
+            )
+            return _problem(upstream.status_code, detail, code)
         response_headers = {
             key: value
             for key, value in upstream.headers.items()
