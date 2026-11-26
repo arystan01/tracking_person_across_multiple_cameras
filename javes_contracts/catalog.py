@@ -401,7 +401,9 @@ def inventory_document() -> dict:
         for owner, consumer, method, path, request, response in ENDPOINTS
     ]
     return {
-        "boundary_version": "javes-boundary.v1alpha1",
+        "boundary_version": "javes-boundary.v1",
+        "release_status": "STABLE",
+        "accepted_consumers": ["dashboard-react-bff", "clip-worker"],
         "models": {
             owner: sorted(models) for owner, models in sorted(MODEL_OWNERS.items())
         },

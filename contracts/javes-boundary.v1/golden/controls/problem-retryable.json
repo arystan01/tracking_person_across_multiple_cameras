@@ -1,0 +1,10 @@
+{
+  "code": "REVISION_CONFLICT",
+  "detail": "reload the case and retry",
+  "errors": null,
+  "request_id": null,
+  "retryable": true,
+  "status": 409,
+  "title": "Revision Conflict",
+  "type": "urn:javes:problem:revision-conflict"
+}

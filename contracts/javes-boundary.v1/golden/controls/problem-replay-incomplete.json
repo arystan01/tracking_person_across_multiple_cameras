@@ -1,0 +1,10 @@
+{
+  "code": "REPLAY_EVIDENCE_INCOMPLETE",
+  "detail": "stored evidence is incomplete",
+  "errors": null,
+  "request_id": null,
+  "retryable": false,
+  "status": 409,
+  "title": "Replay Evidence Incomplete",
+  "type": "urn:javes:problem:replay-evidence-incomplete"
+}

@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "command_id": {
+      "title": "Command Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "clip-purge-result.v1",
+      "default": "clip-purge-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "purged": {
+      "default": true,
+      "title": "Purged",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "command_id",
+    "case_id"
+  ],
+  "title": "ClipPurgeResult",
+  "type": "object"
+}

@@ -1,0 +1,99 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "active": {
+      "default": true,
+      "title": "Active",
+      "type": "boolean"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "external_ticket_id": {
+      "title": "External Ticket Id",
+      "type": "string"
+    },
+    "hold_id": {
+      "title": "Hold Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "release_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Release Id"
+    },
+    "release_pending": {
+      "default": false,
+      "title": "Release Pending",
+      "type": "boolean"
+    },
+    "release_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Release Reason"
+    },
+    "released_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Released At"
+    },
+    "released_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Released By"
+    },
+    "set_at": {
+      "format": "date-time",
+      "title": "Set At",
+      "type": "string"
+    },
+    "set_by": {
+      "title": "Set By",
+      "type": "string"
+    }
+  },
+  "required": [
+    "hold_id",
+    "case_id",
+    "external_ticket_id",
+    "reason",
+    "set_by",
+    "set_at"
+  ],
+  "title": "LegalHoldView",
+  "type": "object"
+}

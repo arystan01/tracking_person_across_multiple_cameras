@@ -1,0 +1,853 @@
+{
+  "$defs": {
+    "BlindNodeDef": {
+      "additionalProperties": false,
+      "properties": {
+        "borders": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Borders",
+          "type": "array"
+        },
+        "dwell_median_s": {
+          "default": 30.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Dwell Median S",
+          "type": "number"
+        },
+        "dwell_sigma": {
+          "default": 0.8,
+          "exclusiveMinimum": 0.0,
+          "title": "Dwell Sigma",
+          "type": "number"
+        },
+        "exits": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Exits",
+          "type": "object"
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Floor"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "default": "blind",
+          "enum": [
+            "room",
+            "elevator",
+            "escalator",
+            "blind"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "map_xy": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Map Xy"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "BlindNodeDef",
+      "type": "object"
+    },
+    "CameraCalibration": {
+      "additionalProperties": false,
+      "properties": {
+        "error_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Error M",
+          "type": "number"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "frame_size_px": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Frame Size Px",
+          "type": "array"
+        },
+        "homography": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            }
+          ],
+          "title": "Homography",
+          "type": "array"
+        }
+      },
+      "required": [
+        "frame_size_px",
+        "homography",
+        "floor_id"
+      ],
+      "title": "CameraCalibration",
+      "type": "object"
+    },
+    "CameraDef": {
+      "additionalProperties": false,
+      "properties": {
+        "appearance_floor": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Appearance Floor"
+        },
+        "available_from": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available From"
+        },
+        "busy": {
+          "default": false,
+          "title": "Busy",
+          "type": "boolean"
+        },
+        "calibration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CameraCalibration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "clock_offset_s": {
+          "default": 0.0,
+          "title": "Clock Offset S",
+          "type": "number"
+        },
+        "coverage_polygon": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Coverage Polygon",
+          "type": "array"
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Floor"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "map_xy": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Map Xy"
+        },
+        "overlap_camera_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Overlap Camera Ids",
+          "type": "array"
+        },
+        "p_det": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P Det"
+        },
+        "regions": {
+          "items": {
+            "$ref": "#/$defs/RegionDef"
+          },
+          "title": "Regions",
+          "type": "array"
+        },
+        "zone": {
+          "default": "",
+          "title": "Zone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "CameraDef",
+      "type": "object"
+    },
+    "EdgeDef": {
+      "additionalProperties": false,
+      "properties": {
+        "d_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "D M"
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Floor"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "map_path": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Map Path",
+          "type": "array"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "t_max": {
+          "exclusiveMinimum": 0.0,
+          "title": "T Max",
+          "type": "number"
+        },
+        "t_min": {
+          "exclusiveMinimum": 0.0,
+          "title": "T Min",
+          "type": "number"
+        },
+        "t_typ": {
+          "exclusiveMinimum": 0.0,
+          "title": "T Typ",
+          "type": "number"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "vertical": {
+          "default": false,
+          "title": "Vertical",
+          "type": "boolean"
+        },
+        "via": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Via"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "target",
+        "t_min",
+        "t_typ",
+        "t_max"
+      ],
+      "title": "EdgeDef",
+      "type": "object"
+    },
+    "MapDef": {
+      "additionalProperties": false,
+      "properties": {
+        "floors": {
+          "items": {
+            "$ref": "#/$defs/MapFloor"
+          },
+          "title": "Floors",
+          "type": "array"
+        }
+      },
+      "title": "MapDef",
+      "type": "object"
+    },
+    "MapFloor": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked_polygons": {
+          "items": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Blocked Polygons",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
+        "m_per_px": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "M Per Px"
+        },
+        "size_px": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Size Px",
+          "type": "array"
+        },
+        "walkable_polygons": {
+          "items": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Walkable Polygons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "size_px"
+      ],
+      "title": "MapFloor",
+      "type": "object"
+    },
+    "OutsideDef": {
+      "additionalProperties": false,
+      "properties": {
+        "dwell_median_s": {
+          "default": 300.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Dwell Median S",
+          "type": "number"
+        },
+        "dwell_sigma": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Dwell Sigma",
+          "type": "number"
+        },
+        "entrances": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Entrances",
+          "type": "object"
+        }
+      },
+      "required": [
+        "entrances"
+      ],
+      "title": "OutsideDef",
+      "type": "object"
+    },
+    "RegionDef": {
+      "additionalProperties": false,
+      "properties": {
+        "edges": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "polygon": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Polygon",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "polygon"
+      ],
+      "title": "RegionDef",
+      "type": "object"
+    },
+    "WalkEdgeDef": {
+      "additionalProperties": false,
+      "properties": {
+        "bidirectional": {
+          "default": false,
+          "title": "Bidirectional",
+          "type": "boolean"
+        },
+        "branch_prior": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Prior"
+        },
+        "d_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "D M"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "map_path": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Map Path",
+          "type": "array"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "width_m": {
+          "default": 1.5,
+          "exclusiveMinimum": 0.0,
+          "title": "Width M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "target",
+        "floor_id"
+      ],
+      "title": "WalkEdgeDef",
+      "type": "object"
+    },
+    "WalkGraphDef": {
+      "additionalProperties": false,
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/WalkEdgeDef"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "nodes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/WalkNodeDef"
+          },
+          "title": "Nodes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "nodes",
+        "edges"
+      ],
+      "title": "WalkGraphDef",
+      "type": "object"
+    },
+    "WalkNodeDef": {
+      "additionalProperties": false,
+      "properties": {
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "default": "WAYPOINT",
+          "enum": [
+            "WAYPOINT",
+            "ENTRANCE",
+            "BLIND",
+            "OUTSIDE"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "map_xy": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Map Xy",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "floor_id",
+        "map_xy"
+      ],
+      "title": "WalkNodeDef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "blind_nodes": {
+      "items": {
+        "$ref": "#/$defs/BlindNodeDef"
+      },
+      "title": "Blind Nodes",
+      "type": "array"
+    },
+    "cameras": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CameraDef"
+      },
+      "title": "Cameras",
+      "type": "object"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/EdgeDef"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "map": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MapDef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "max_gap_s": {
+      "default": 2400.0,
+      "exclusiveMinimum": 0.0,
+      "title": "Max Gap S",
+      "type": "number"
+    },
+    "outside": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OutsideDef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "site_id": {
+      "default": "site",
+      "title": "Site Id",
+      "type": "string"
+    },
+    "timezone": {
+      "default": "UTC",
+      "title": "Timezone",
+      "type": "string"
+    },
+    "version": {
+      "default": "1",
+      "title": "Version",
+      "type": "string"
+    },
+    "walk_graph": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WalkGraphDef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "cameras",
+    "edges"
+  ],
+  "title": "SiteGraph",
+  "type": "object"
+}

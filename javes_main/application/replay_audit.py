@@ -66,7 +66,7 @@ def audit_case_replay_ledger(
             "site_id": case.request.site_id,
             "site_version": case.request.site_version,
             "params_version": case.params_version,
-            "contracts_version": "javes-boundary.v1alpha1",
+            "contracts_version": "javes-boundary.v1",
             "input_case_revision": run.payload.get("input_case_revision"),
             "output_case_revision": run.payload.get("output_case_revision"),
             "output_route_revision": run.payload.get("route_revision"),

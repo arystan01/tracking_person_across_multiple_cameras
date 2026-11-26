@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "must_change_password": {
+      "title": "Must Change Password",
+      "type": "boolean"
+    },
+    "permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Permissions",
+      "type": "array"
+    },
+    "role": {
+      "enum": [
+        "ROOT",
+        "ADMIN",
+        "OPERATOR",
+        "VIEWER",
+        "SERVICE"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "user_id": {
+      "title": "User Id",
+      "type": "string"
+    },
+    "username": {
+      "title": "Username",
+      "type": "string"
+    }
+  },
+  "required": [
+    "user_id",
+    "username",
+    "role",
+    "permissions",
+    "must_change_password"
+  ],
+  "title": "ActorView",
+  "type": "object"
+}

@@ -148,7 +148,7 @@ from .transport import (
     WorkerTaskResultRequest,
 )
 
-CONTRACTS_VERSION = "javes-boundary.v1alpha1"
+CONTRACTS_VERSION = "javes-boundary.v1"
 
 __all__ = [
     "CONTRACTS_VERSION",

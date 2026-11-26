@@ -1,0 +1,8 @@
+{
+  "candidate_id": "candidate-001",
+  "decision": "CONFIRM",
+  "decision_id": "decision-001",
+  "occurred_at": "2026-01-02T03:05:05Z",
+  "operator_id": "user-001",
+  "tracklet_id": "tracklet-001"
+}

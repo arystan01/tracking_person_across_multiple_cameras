@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "WorkerTaskEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "component": {
+          "enum": [
+            "perception",
+            "clip",
+            "retention"
+          ],
+          "title": "Component",
+          "type": "string"
+        },
+        "contract_version": {
+          "const": "worker-task.v1",
+          "default": "worker-task.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "deadline": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deadline"
+        },
+        "lease_expires_at": {
+          "format": "date-time",
+          "title": "Lease Expires At",
+          "type": "string"
+        },
+        "lease_token": {
+          "title": "Lease Token",
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "GALLERY_BUILD",
+            "PROBE",
+            "PERCEPTION_CANCEL",
+            "CLIP_CUT",
+            "CLIP_STATE",
+            "CLIP_EXPORT",
+            "CLIP_PURGE",
+            "RETENTION_REGISTER",
+            "RETENTION_DELETE"
+          ],
+          "title": "Operation",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "case_id",
+        "component",
+        "operation",
+        "attempt",
+        "lease_token",
+        "lease_expires_at",
+        "payload"
+      ],
+      "title": "WorkerTaskEnvelope",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "worker-claim-result.v1",
+      "default": "worker-claim-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/WorkerTaskEnvelope"
+      },
+      "title": "Tasks",
+      "type": "array"
+    }
+  },
+  "title": "WorkerClaimResponse",
+  "type": "object"
+}

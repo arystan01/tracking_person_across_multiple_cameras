@@ -1,0 +1,8 @@
+{
+  "action": "DELETE_CASE",
+  "actor_id": "user-001",
+  "case_id": "case-001",
+  "command_id": "retention-001",
+  "contract_version": "retention-command.v1",
+  "occurred_at": "2026-01-02T03:05:05Z"
+}

@@ -1,0 +1,6 @@
+{
+  "action": "CLOSE",
+  "command_id": "command-001",
+  "occurred_at": "2026-01-02T03:05:05Z",
+  "operator_id": "user-001"
+}

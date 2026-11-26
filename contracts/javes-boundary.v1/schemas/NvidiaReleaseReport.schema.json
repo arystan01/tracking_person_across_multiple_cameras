@@ -1,0 +1,241 @@
+{
+  "$defs": {
+    "EvidenceBundleVerification": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/VerifiedEvidenceFile"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "git_commit_failure_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Git Commit Failure Code"
+        },
+        "git_commit_verified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Git Commit Verified"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "javes-evidence-verification.v1",
+          "default": "javes-evidence-verification.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_sha256",
+        "files"
+      ],
+      "title": "EvidenceBundleVerification",
+      "type": "object"
+    },
+    "GateCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "check_id": {
+          "title": "Check Id",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "check_id",
+        "category",
+        "passed",
+        "detail"
+      ],
+      "title": "GateCheck",
+      "type": "object"
+    },
+    "VerifiedEvidenceFile": {
+      "additionalProperties": false,
+      "properties": {
+        "computed_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Computed Sha256"
+        },
+        "computed_size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Computed Size Bytes"
+        },
+        "declared_sha256": {
+          "title": "Declared Sha256",
+          "type": "string"
+        },
+        "declared_size_bytes": {
+          "title": "Declared Size Bytes",
+          "type": "integer"
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Code"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "schema_valid": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Valid"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "media_type",
+        "declared_sha256",
+        "declared_size_bytes",
+        "passed"
+      ],
+      "title": "VerifiedEvidenceFile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/GateCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Evidence Sha256",
+      "type": "string"
+    },
+    "git_commit": {
+      "title": "Git Commit",
+      "type": "string"
+    },
+    "policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Sha256",
+      "type": "string"
+    },
+    "release_id": {
+      "title": "Release Id",
+      "type": "string"
+    },
+    "release_version": {
+      "title": "Release Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "javes-nvidia-release-report.v2",
+      "default": "javes-nvidia-release-report.v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "PASS",
+        "BLOCKED"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "verification": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EvidenceBundleVerification"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "release_id",
+    "release_version",
+    "git_commit",
+    "status",
+    "evidence_sha256",
+    "policy_sha256",
+    "checks"
+  ],
+  "title": "NvidiaReleaseReport",
+  "type": "object"
+}

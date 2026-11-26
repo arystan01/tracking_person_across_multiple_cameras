@@ -33,7 +33,7 @@ def test_contract_bundle_is_deterministic_and_self_describing(tmp_path) -> None:
     assert _tree(first) == _tree(second)
     manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["boundary_version"] == CONTRACTS_VERSION
-    assert manifest["release_status"] == "BLOCKED"
+    assert manifest["release_status"] == "STABLE"
     assert manifest["schema_count"] == len(PUBLIC_MODELS)
     assert manifest["fixture_count"] == len(GOLDEN_FIXTURES)
     assert "manifest.json" not in manifest["files"]
@@ -157,9 +157,10 @@ def test_problem_retry_taxonomy_is_machine_readable() -> None:
     assert classify_problem("validation").retryable is False
     assert classify_problem("vendor-specific", 503).retryable is True
     conventions = conventions_document()
-    assert conventions["release_status"] == "BLOCKED"
-    assert "dashboard-contract-tests" in conventions["release_blockers"]
-    assert "clip-worker-contract-tests" in conventions["release_blockers"]
+    assert conventions["release_status"] == "STABLE"
+    assert conventions["release_blockers"] == []
+    assert conventions["accepted_consumers"]["dashboard"] == "react-vite-fastapi-bff"
+    assert conventions["accepted_consumers"]["clip"] == "ffmpeg-pull-lease-worker"
     assert "operator-decision-revoke-semantics" not in conventions["release_blockers"]
     assert "legal-hold-authority" not in conventions["release_blockers"]
     ProblemDetails.model_validate(

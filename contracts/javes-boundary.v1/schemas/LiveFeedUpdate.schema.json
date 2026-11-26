@@ -1,0 +1,91 @@
+{
+  "additionalProperties": false,
+  "description": "Latest authorised live-view metadata emitted by Perception.",
+  "properties": {
+    "bbox": {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Bbox",
+      "type": "array"
+    },
+    "camera_id": {
+      "title": "Camera Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "live-feed-update.v1",
+      "default": "live-feed-update.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expires At"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "stream_kind": {
+      "default": "JPEG",
+      "enum": [
+        "JPEG",
+        "MJPEG",
+        "HLS"
+      ],
+      "title": "Stream Kind",
+      "type": "string"
+    },
+    "stream_ref": {
+      "title": "Stream Ref",
+      "type": "string"
+    },
+    "tracklet_id": {
+      "title": "Tracklet Id",
+      "type": "string"
+    },
+    "update_id": {
+      "title": "Update Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "update_id",
+    "case_id",
+    "camera_id",
+    "tracklet_id",
+    "bbox",
+    "observed_at",
+    "stream_ref"
+  ],
+  "title": "LiveFeedUpdate",
+  "type": "object"
+}

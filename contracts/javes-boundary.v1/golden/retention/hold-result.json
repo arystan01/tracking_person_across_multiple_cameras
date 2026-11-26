@@ -1,0 +1,10 @@
+{
+  "action": "SET",
+  "active_hold_ids": [
+    "hold-001"
+  ],
+  "case_id": "case-001",
+  "command_id": "retention-hold-001",
+  "contract_version": "retention-hold-result.v1",
+  "hold_id": "hold-001"
+}

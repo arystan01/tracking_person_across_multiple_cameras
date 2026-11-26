@@ -1,0 +1,48 @@
+{
+  "candidates": [
+    {
+      "appearance_score": 0.82,
+      "association_id": null,
+      "calibration_version": null,
+      "candidate_id": "candidate-001",
+      "cosine": null,
+      "tracklet_id": "tracklet-001"
+    }
+  ],
+  "coverage_ratio": 1.0,
+  "error_code": null,
+  "n_tracklets_total": null,
+  "probe_id": "probe-001",
+  "processed_duration_s": 60.0,
+  "status": "DONE",
+  "stream_closed": false,
+  "tracklets": [
+    {
+      "bbox_first": [
+        10.0,
+        20.0,
+        30.0,
+        60.0
+      ],
+      "bbox_last": [
+        20.0,
+        20.0,
+        30.0,
+        60.0
+      ],
+      "camera_id": "Cam001",
+      "case_id": null,
+      "clip_ref": null,
+      "clipped_end": false,
+      "clipped_start": false,
+      "crop_paths": [],
+      "embedding_path": null,
+      "open": false,
+      "probe_id": null,
+      "t_end": "2026-01-02T03:05:05Z",
+      "t_start": "2026-01-02T03:04:05Z",
+      "tracklet_id": "tracklet-001",
+      "trajectory": null
+    }
+  ]
+}

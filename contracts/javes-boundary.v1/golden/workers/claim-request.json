@@ -1,0 +1,6 @@
+{
+  "contract_version": "worker-claim.v1",
+  "lease_seconds": 30,
+  "limit": 1,
+  "worker_id": "perception-01"
+}

@@ -1,0 +1,74 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "actor_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Actor Ids",
+      "type": "array"
+    },
+    "case_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Case Ids",
+      "type": "array"
+    },
+    "event_types": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Event Types",
+      "type": "array"
+    },
+    "export_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Export Id",
+      "type": "string"
+    },
+    "from_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "From Time"
+    },
+    "page_size": {
+      "default": 500,
+      "maximum": 2000,
+      "minimum": 1,
+      "title": "Page Size",
+      "type": "integer"
+    },
+    "to_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "To Time"
+    }
+  },
+  "required": [
+    "export_id"
+  ],
+  "title": "AuditExportRequest",
+  "type": "object"
+}

@@ -1128,7 +1128,7 @@ class CaseManager:
                         "site_id": body.site_id,
                         "site_version": body.site_version,
                         "params_version": params.version,
-                        "contracts_version": "javes-boundary.v1alpha1",
+                        "contracts_version": "javes-boundary.v1",
                     },
                 )
                 self._enqueue(
@@ -1476,7 +1476,7 @@ class CaseManager:
                 "site_id": case.request.site_id,
                 "site_version": case.request.site_version,
                 "params_version": case.params_version,
-                "contracts_version": "javes-boundary.v1alpha1",
+                "contracts_version": "javes-boundary.v1",
                 "input_case_revision": expected_revision,
                 "output_case_revision": saved.revision,
                 "output_route_revision": route_revision,

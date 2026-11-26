@@ -1,0 +1,203 @@
+{
+  "$defs": {
+    "TrajectoryPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "x_px": {
+          "title": "X Px",
+          "type": "number"
+        },
+        "y_px": {
+          "title": "Y Px",
+          "type": "number"
+        }
+      },
+      "required": [
+        "timestamp",
+        "x_px",
+        "y_px"
+      ],
+      "title": "TrajectoryPoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "bbox_first": {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Bbox First",
+      "type": "array"
+    },
+    "bbox_last": {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Bbox Last",
+      "type": "array"
+    },
+    "camera": {
+      "title": "Camera",
+      "type": "string"
+    },
+    "case_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Case Id"
+    },
+    "clip_ref": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Clip Ref"
+    },
+    "clipped_in": {
+      "default": false,
+      "title": "Clipped In",
+      "type": "boolean"
+    },
+    "clipped_out": {
+      "default": false,
+      "title": "Clipped Out",
+      "type": "boolean"
+    },
+    "crop_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Crop Paths",
+      "type": "array"
+    },
+    "embedding_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Embedding Path"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "open": {
+      "default": false,
+      "title": "Open",
+      "type": "boolean"
+    },
+    "probe_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Probe Id"
+    },
+    "t_in": {
+      "format": "date-time",
+      "title": "T In",
+      "type": "string"
+    },
+    "t_out": {
+      "format": "date-time",
+      "title": "T Out",
+      "type": "string"
+    },
+    "trajectory": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/TrajectoryPoint"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trajectory"
+    }
+  },
+  "required": [
+    "id",
+    "camera",
+    "t_in",
+    "t_out",
+    "bbox_first",
+    "bbox_last"
+  ],
+  "title": "Tracklet",
+  "type": "object"
+}

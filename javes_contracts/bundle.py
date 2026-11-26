@@ -1,4 +1,4 @@
-"""Build the deterministic v1alpha1 schema/golden handoff bundle."""
+"""Build the deterministic stable v1 schema/golden handoff bundle."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def build_bundle(output: str | Path) -> list[Path]:
     manifest = {
         "format": "javes-contract-bundle.v1",
         "boundary_version": CONTRACTS_VERSION,
-        "release_status": "BLOCKED",
+        "release_status": "STABLE",
         "fixture_count": len(GOLDEN_FIXTURES),
         "schema_count": len(PUBLIC_MODELS),
         "files": hashes,

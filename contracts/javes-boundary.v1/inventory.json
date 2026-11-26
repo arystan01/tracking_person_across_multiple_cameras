@@ -1,0 +1,467 @@
+{
+  "accepted_consumers": [
+    "dashboard-react-bff",
+    "clip-worker"
+  ],
+  "boundary_version": "javes-boundary.v1",
+  "endpoints": [
+    {
+      "consumer": "Operators",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/health/live",
+      "request": null,
+      "response": "ServiceHealthResponse"
+    },
+    {
+      "consumer": "Perception/Clip",
+      "method": "GET",
+      "owner": "Archive",
+      "path": "/health/live",
+      "request": null,
+      "response": "ServiceHealthResponse"
+    },
+    {
+      "consumer": "Operators",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/health/ready",
+      "request": null,
+      "response": "ServiceHealthResponse"
+    },
+    {
+      "consumer": "Main",
+      "method": "GET",
+      "owner": "Routing",
+      "path": "/health/ready",
+      "request": null,
+      "response": "ServiceHealthResponse"
+    },
+    {
+      "consumer": "Main/Routing",
+      "method": "GET",
+      "owner": "SiteConfig",
+      "path": "/health/ready",
+      "request": null,
+      "response": "ServiceHealthResponse"
+    },
+    {
+      "consumer": "Perception/Clip",
+      "method": "GET",
+      "owner": "Archive",
+      "path": "/health/ready",
+      "request": null,
+      "response": "ServiceHealthResponse"
+    },
+    {
+      "consumer": "Operators",
+      "method": "GET",
+      "owner": "Archive",
+      "path": "/internal/v1/archive/inspect",
+      "request": null,
+      "response": "archive-inspection.v1"
+    },
+    {
+      "consumer": "Perception",
+      "method": "POST",
+      "owner": "Main",
+      "path": "/internal/v1/cases/{case_id}/live",
+      "request": "LiveFeedUpdate",
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Operators",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/internal/v1/rotation-status",
+      "request": null,
+      "response": "RotationStatusResponse"
+    },
+    {
+      "consumer": "Routing",
+      "method": "GET",
+      "owner": "SiteConfig",
+      "path": "/internal/v1/routing-params/{version}",
+      "request": null,
+      "response": "RoutingParamsResponse"
+    },
+    {
+      "consumer": "Main",
+      "method": "POST",
+      "owner": "Routing",
+      "path": "/internal/v1/routing/init",
+      "request": "RoutingInitRequest",
+      "response": "RoutingInitResponse"
+    },
+    {
+      "consumer": "Main",
+      "method": "POST",
+      "owner": "Routing",
+      "path": "/internal/v1/routing/step",
+      "request": "RoutingStepRequest",
+      "response": "RoutingStepResponse"
+    },
+    {
+      "consumer": "Main/Routing",
+      "method": "GET",
+      "owner": "SiteConfig",
+      "path": "/internal/v1/sites/{site_id}/versions/{version}",
+      "request": null,
+      "response": "SiteVersionResponse"
+    },
+    {
+      "consumer": "Main/Routing",
+      "method": "GET",
+      "owner": "SiteConfig",
+      "path": "/internal/v1/sites/{site_id}/versions/{version}/assets/{asset_id}",
+      "request": null,
+      "response": "binary"
+    },
+    {
+      "consumer": "Workers",
+      "method": "POST",
+      "owner": "Main",
+      "path": "/internal/v1/workers/{component}/tasks/claim",
+      "request": "WorkerClaimRequest",
+      "response": "WorkerClaimResponse"
+    },
+    {
+      "consumer": "Workers",
+      "method": "POST",
+      "owner": "Main",
+      "path": "/internal/v1/workers/{component}/tasks/{task_id}/failure",
+      "request": "WorkerTaskFailureRequest",
+      "response": "WorkerTaskAck"
+    },
+    {
+      "consumer": "Workers",
+      "method": "POST",
+      "owner": "Main",
+      "path": "/internal/v1/workers/{component}/tasks/{task_id}/heartbeat",
+      "request": "WorkerHeartbeatRequest",
+      "response": "WorkerHeartbeatResponse"
+    },
+    {
+      "consumer": "Workers",
+      "method": "POST",
+      "owner": "Main",
+      "path": "/internal/v1/workers/{component}/tasks/{task_id}/result",
+      "request": "WorkerTaskResultRequest",
+      "response": "WorkerTaskAck"
+    },
+    {
+      "consumer": "ROOT",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/audit/exports",
+      "request": "AuditExportRequest",
+      "response": "AuditExportManifest"
+    },
+    {
+      "consumer": "ROOT",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/audit/exports/{export_id}/events",
+      "request": null,
+      "response": "binary"
+    },
+    {
+      "consumer": "ROOT",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/audit/exports/{export_id}/manifest",
+      "request": null,
+      "response": "AuditExportManifest"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/auth/login",
+      "request": "LoginRequest",
+      "response": "LoginResponse"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/auth/me",
+      "request": null,
+      "response": "ActorView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases",
+      "request": null,
+      "response": "CaseSummary[]"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases",
+      "request": "CreateCaseBody",
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}",
+      "request": null,
+      "response": "CaseDetailView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/candidates/{candidate_id}/thumbnails/{index}",
+      "request": null,
+      "response": "image/jpeg"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/clips",
+      "request": null,
+      "response": "ClipView[]"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/clips/{clip_id}",
+      "request": null,
+      "response": "video/mp4"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/commands/close",
+      "request": "CaseCommandBody",
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/commands/delete",
+      "request": "CaseCommandBody",
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/commands/export",
+      "request": "CaseCommandBody",
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/decisions",
+      "request": null,
+      "response": "DecisionRecordView[]"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/decisions",
+      "request": "ReviewDecisionBody",
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/decisions/{decision_id}/revoke",
+      "request": "RevokeDecisionBody",
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/export",
+      "request": null,
+      "response": "video/mp4"
+    },
+    {
+      "consumer": "ROOT",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/legal-holds",
+      "request": null,
+      "response": "LegalHoldView[]"
+    },
+    {
+      "consumer": "ROOT",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/legal-holds",
+      "request": "CreateLegalHoldBody",
+      "response": "LegalHoldView"
+    },
+    {
+      "consumer": "ROOT",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/legal-holds/{hold_id}/release",
+      "request": "ReleaseLegalHoldBody",
+      "response": "LegalHoldView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/live",
+      "request": null,
+      "response": "binary"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/reference",
+      "request": null,
+      "response": "image/jpeg"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "POST",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/reference-image",
+      "request": "multipart:file",
+      "response": "ReferenceImageUploadResponse"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/routes/{revision}/{floor_id}.svg",
+      "request": null,
+      "response": "image/svg+xml"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/cases/{case_id}/view",
+      "request": null,
+      "response": "CaseView"
+    },
+    {
+      "consumer": "Dashboard",
+      "method": "GET",
+      "owner": "Controls",
+      "path": "/v1/sites",
+      "request": null,
+      "response": "SiteCatalogEntry[]"
+    },
+    {
+      "consumer": "Perception/Clip",
+      "method": "POST",
+      "owner": "Archive",
+      "path": "/v1/video-segments",
+      "request": "VideoSegmentRequest",
+      "response": "VideoSegmentResult"
+    }
+  ],
+  "models": {
+    "Archive": [
+      "VideoSegmentRequest",
+      "VideoSegmentResult"
+    ],
+    "Clip": [
+      "ClipPurgeCommand",
+      "ClipPurgeResult",
+      "ClipRecord",
+      "ClipStateCommand",
+      "CutClipCommand",
+      "ExportClipsCommand",
+      "ExportClipsResult"
+    ],
+    "Controls": [
+      "ActorView",
+      "AuditExportManifest",
+      "AuditExportRequest",
+      "CandidateView",
+      "CaseCommandBody",
+      "CaseDetailView",
+      "CaseSummary",
+      "CaseView",
+      "CreateCaseBody",
+      "CreateLegalHoldBody",
+      "DecisionRecordView",
+      "LegalHoldView",
+      "LoginRequest",
+      "LoginResponse",
+      "ProblemDetails",
+      "ReferenceImageUploadResponse",
+      "ReleaseLegalHoldBody",
+      "ReviewDecisionBody",
+      "RevokeDecisionBody",
+      "RotationKeyStatus",
+      "RotationStatusResponse",
+      "RouteMapView",
+      "ServiceHealthResponse",
+      "SiteCatalogCamera",
+      "SiteCatalogEntry"
+    ],
+    "Main": [
+      "ArtifactManifest",
+      "WorkerClaimRequest",
+      "WorkerClaimResponse",
+      "WorkerHeartbeatRequest",
+      "WorkerHeartbeatResponse",
+      "WorkerTaskAck",
+      "WorkerTaskEnvelope",
+      "WorkerTaskFailureRequest",
+      "WorkerTaskResultRequest"
+    ],
+    "Perception": [
+      "Candidate",
+      "LiveFeedUpdate",
+      "PerceptionProbeJob",
+      "ProbeResult",
+      "TargetGalleryCommand",
+      "TargetGalleryResult",
+      "Tracklet"
+    ],
+    "Release": [
+      "AcceptancePolicy",
+      "EvidenceBundleVerification",
+      "EvidenceRef",
+      "NvidiaReleaseEvidence",
+      "NvidiaReleaseReport",
+      "VerifiedEvidenceFile"
+    ],
+    "Retention": [
+      "RetentionCommand",
+      "RetentionHoldCommand",
+      "RetentionHoldResult",
+      "RetentionResource",
+      "RetentionResult"
+    ],
+    "Routing": [
+      "ProbeRequest",
+      "RoutingInitRequest",
+      "RoutingInitResponse",
+      "RoutingStepRequest",
+      "RoutingStepResponse",
+      "SiteGraph"
+    ],
+    "SiteConfig": [
+      "RoutingParamsResponse",
+      "SiteVersionResponse"
+    ]
+  },
+  "release_status": "STABLE"
+}

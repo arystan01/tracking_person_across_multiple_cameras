@@ -1,0 +1,41 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "command_id": {
+      "title": "Command Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "target-gallery-result.v1",
+      "default": "target-gallery-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "gallery_ref": {
+      "title": "Gallery Ref",
+      "type": "string"
+    },
+    "model_version": {
+      "title": "Model Version",
+      "type": "string"
+    },
+    "source_count": {
+      "minimum": 1,
+      "title": "Source Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "command_id",
+    "case_id",
+    "gallery_ref",
+    "source_count",
+    "model_version"
+  ],
+  "title": "TargetGalleryResult",
+  "type": "object"
+}

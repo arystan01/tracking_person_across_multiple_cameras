@@ -1,0 +1,53 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "CLOSE_CASE",
+        "DELETE_CASE",
+        "TTL_EXPIRED"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "actor_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Actor Id"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "command_id": {
+      "title": "Command Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "retention-command.v1",
+      "default": "retention-command.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "command_id",
+    "case_id",
+    "action",
+    "occurred_at"
+  ],
+  "title": "RetentionCommand",
+  "type": "object"
+}

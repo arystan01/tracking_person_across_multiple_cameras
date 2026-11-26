@@ -1,0 +1,9 @@
+{
+  "actor_ids": [],
+  "case_ids": [],
+  "event_types": [],
+  "export_id": "audit-2026-001",
+  "from_time": "2026-01-02T03:04:05Z",
+  "page_size": 500,
+  "to_time": "2026-01-02T03:05:05Z"
+}

@@ -1,0 +1,285 @@
+{
+  "$defs": {
+    "CaseLifecycle": {
+      "enum": [
+        "PREPARING",
+        "SEARCHING",
+        "CLOSED",
+        "EXPORTING",
+        "SAVED",
+        "DELETE_REQUESTED",
+        "DELETED",
+        "FAILED"
+      ],
+      "title": "CaseLifecycle",
+      "type": "string"
+    },
+    "CaseWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "CaseWindow",
+      "type": "object"
+    },
+    "LastKnown": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox_xywh": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox Xywh"
+        },
+        "camera_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Id"
+        },
+        "footpoint_px": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Footpoint Px"
+        },
+        "map_position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MapPosition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "time": {
+          "format": "date-time",
+          "title": "Time",
+          "type": "string"
+        },
+        "zone_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zone Id"
+        }
+      },
+      "required": [
+        "time"
+      ],
+      "title": "LastKnown",
+      "type": "object"
+    },
+    "MapPosition": {
+      "additionalProperties": false,
+      "properties": {
+        "error_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Error M",
+          "type": "number"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "floor_id"
+      ],
+      "title": "MapPosition",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "closed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Closed At"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "last_known": {
+      "$ref": "#/$defs/LastKnown"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/CaseLifecycle"
+    },
+    "params_version": {
+      "title": "Params Version",
+      "type": "string"
+    },
+    "profile": {
+      "enum": [
+        "ADULT",
+        "CHILD",
+        "ELDERLY"
+      ],
+      "title": "Profile",
+      "type": "string"
+    },
+    "reference_preview_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reference Preview Url"
+    },
+    "retention_due_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retention Due At"
+    },
+    "revision": {
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "route_revision": {
+      "minimum": 0,
+      "title": "Route Revision",
+      "type": "integer"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "site_version": {
+      "title": "Site Version",
+      "type": "string"
+    },
+    "target_id": {
+      "title": "Target Id",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "window": {
+      "$ref": "#/$defs/CaseWindow"
+    }
+  },
+  "required": [
+    "case_id",
+    "target_id",
+    "profile",
+    "lifecycle",
+    "revision",
+    "route_revision",
+    "site_id",
+    "site_version",
+    "params_version",
+    "last_known",
+    "window",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "CaseDetailView",
+  "type": "object"
+}

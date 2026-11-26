@@ -1,4 +1,4 @@
-"""Cross-service boundary conventions for the v1alpha1 handoff."""
+"""Cross-service boundary conventions for the stable v1 handoff."""
 
 from __future__ import annotations
 
@@ -66,12 +66,17 @@ def classify_problem(slug: str, status: int | None = None) -> ProblemPolicy:
 
 def conventions_document() -> dict:
     return {
-        "boundary_version": "javes-boundary.v1alpha1",
-        "release_status": "BLOCKED",
-        "release_blockers": [
-            "dashboard-contract-tests",
-            "clip-worker-contract-tests",
-        ],
+        "boundary_version": "javes-boundary.v1",
+        "release_status": "STABLE",
+        "release_blockers": [],
+        "accepted_consumers": {
+            "dashboard": "react-vite-fastapi-bff",
+            "clip": "ffmpeg-pull-lease-worker",
+        },
+        "compatibility": {
+            "additive_optional_fields": "ALLOWED",
+            "breaking_change": "REQUIRES_JAVES_BOUNDARY_V2",
+        },
         "timestamps": {
             "wire_format": "RFC3339",
             "timezone": "UTC",

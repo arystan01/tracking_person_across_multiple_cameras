@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "command_id": {
+      "title": "Command Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "clip-purge.v1",
+      "default": "clip-purge.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "command_id",
+    "case_id",
+    "occurred_at"
+  ],
+  "title": "ClipPurgeCommand",
+  "type": "object"
+}

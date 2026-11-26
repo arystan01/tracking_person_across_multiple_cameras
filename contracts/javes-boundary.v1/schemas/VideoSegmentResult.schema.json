@@ -1,0 +1,186 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "description": "Stable storage/archive identity, never a short-lived playback URL.",
+      "properties": {
+        "archive_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archive Id"
+        },
+        "object_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Key"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uri"
+        }
+      },
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "VideoAvailability": {
+      "enum": [
+        "AVAILABLE",
+        "PARTIAL",
+        "UNAVAILABLE"
+      ],
+      "title": "VideoAvailability",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "availability": {
+      "$ref": "#/$defs/VideoAvailability"
+    },
+    "camera_id": {
+      "title": "Camera Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "video-archive-result.v1",
+      "default": "video-archive-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "coverage_ratio": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Coverage Ratio",
+      "type": "number"
+    },
+    "covered_from": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Covered From"
+    },
+    "covered_to": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Covered To"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "requested_from": {
+      "format": "date-time",
+      "title": "Requested From",
+      "type": "string"
+    },
+    "requested_to": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "const": "OPEN",
+          "type": "string"
+        }
+      ],
+      "title": "Requested To"
+    },
+    "source_clock": {
+      "const": "UTC_CORRECTED",
+      "default": "UTC_CORRECTED",
+      "title": "Source Clock",
+      "type": "string"
+    },
+    "source_offset_s": {
+      "default": 0.0,
+      "description": "Offset of covered_from inside the immutable source object.",
+      "minimum": 0.0,
+      "title": "Source Offset S",
+      "type": "number"
+    },
+    "source_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "request_id",
+    "camera_id",
+    "availability",
+    "requested_from",
+    "requested_to",
+    "coverage_ratio"
+  ],
+  "title": "VideoSegmentResult",
+  "type": "object"
+}

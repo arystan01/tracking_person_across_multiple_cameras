@@ -1,0 +1,8 @@
+{
+  "media_type": "application/json",
+  "name": "fast-python-3.13",
+  "path": "suites/fast-python-3.13.json",
+  "schema_id": "javes-release-evidence-document.v1",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "size_bytes": 123
+}

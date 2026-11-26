@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "ArtifactManifest": {
+      "additionalProperties": false,
+      "description": "One product-owned object in the shared private filesystem.",
+      "properties": {
+        "contract_version": {
+          "const": "artifact-manifest.v1",
+          "default": "artifact-manifest.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "crop",
+            "embedding",
+            "gallery",
+            "live_jpeg",
+            "clip",
+            "route_svg",
+            "export"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "mime_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mime Type"
+        },
+        "object_key": {
+          "title": "Object Key",
+          "type": "string"
+        },
+        "policy_revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "retention_class": {
+          "default": "case_14d",
+          "enum": [
+            "ephemeral",
+            "case_14d",
+            "review_hold",
+            "confirmed_evidence"
+          ],
+          "title": "Retention Class",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "object_key",
+        "kind",
+        "size_bytes",
+        "sha256",
+        "created_at"
+      ],
+      "title": "ArtifactManifest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactManifest"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "contract_version": {
+      "const": "worker-task-result.v1",
+      "default": "worker-task-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "lease_token": {
+      "title": "Lease Token",
+      "type": "string"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result"
+    }
+  },
+  "required": [
+    "lease_token"
+  ],
+  "title": "WorkerTaskResultRequest",
+  "type": "object"
+}

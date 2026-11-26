@@ -1,0 +1,468 @@
+{
+  "$defs": {
+    "BlockEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "$ref": "#/$defs/EvidenceStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "BlockEvidence",
+      "type": "object"
+    },
+    "ComponentDisposition": {
+      "enum": [
+        "ACCEPTED",
+        "UNAVAILABLE"
+      ],
+      "title": "ComponentDisposition",
+      "type": "string"
+    },
+    "DeliveryScope": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_reference": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Reference"
+        },
+        "clip_worker": {
+          "$ref": "#/$defs/ComponentDisposition"
+        },
+        "dashboard": {
+          "$ref": "#/$defs/ComponentDisposition"
+        },
+        "intermediate_delivery_approved": {
+          "default": false,
+          "title": "Intermediate Delivery Approved",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "dashboard",
+        "clip_worker"
+      ],
+      "title": "DeliveryScope",
+      "type": "object"
+    },
+    "EvidenceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "schema_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Id"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "size_bytes",
+        "sha256",
+        "media_type"
+      ],
+      "title": "EvidenceRef",
+      "type": "object"
+    },
+    "EvidenceStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "WAIVED",
+        "OUT_OF_SCOPE"
+      ],
+      "title": "EvidenceStatus",
+      "type": "string"
+    },
+    "OperationalEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "audit_complete": {
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "cold_warm_business_equal": {
+          "title": "Cold Warm Business Equal",
+          "type": "boolean"
+        },
+        "controls_api_latency_p95_s": {
+          "minimum": 0.0,
+          "title": "Controls Api Latency P95 S",
+          "type": "number"
+        },
+        "deletion_sla_p95_s": {
+          "minimum": 0.0,
+          "title": "Deletion Sla P95 S",
+          "type": "number"
+        },
+        "mean_camera_minutes": {
+          "minimum": 0.0,
+          "title": "Mean Camera Minutes",
+          "type": "number"
+        },
+        "queue_latency_p95_s": {
+          "minimum": 0.0,
+          "title": "Queue Latency P95 S",
+          "type": "number"
+        },
+        "restart_repeatable": {
+          "title": "Restart Repeatable",
+          "type": "boolean"
+        },
+        "retry_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Retry Rate",
+          "type": "number"
+        },
+        "routing_latency_p95_s": {
+          "minimum": 0.0,
+          "title": "Routing Latency P95 S",
+          "type": "number"
+        },
+        "search_time_p95_s": {
+          "minimum": 0.0,
+          "title": "Search Time P95 S",
+          "type": "number"
+        },
+        "worker_latency_p95_s": {
+          "minimum": 0.0,
+          "title": "Worker Latency P95 S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "controls_api_latency_p95_s",
+        "search_time_p95_s",
+        "mean_camera_minutes",
+        "queue_latency_p95_s",
+        "worker_latency_p95_s",
+        "routing_latency_p95_s",
+        "retry_rate",
+        "deletion_sla_p95_s",
+        "audit_complete",
+        "cold_warm_business_equal",
+        "restart_repeatable"
+      ],
+      "title": "OperationalEvidence",
+      "type": "object"
+    },
+    "QualityEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "active_scenarios": {
+          "minimum": 0,
+          "title": "Active Scenarios",
+          "type": "integer"
+        },
+        "false_identity_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "False Identity Rate",
+          "type": "number"
+        },
+        "hidden_point_containment": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Hidden Point Containment",
+          "type": "number"
+        },
+        "identity_precision": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Identity Precision",
+          "type": "number"
+        },
+        "identity_recall": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Identity Recall",
+          "type": "number"
+        },
+        "median_position_error_m": {
+          "minimum": 0.0,
+          "title": "Median Position Error M",
+          "type": "number"
+        },
+        "p95_position_error_m": {
+          "minimum": 0.0,
+          "title": "P95 Position Error M",
+          "type": "number"
+        },
+        "passed_scenarios": {
+          "minimum": 0,
+          "title": "Passed Scenarios",
+          "type": "integer"
+        },
+        "quarantined_scenarios": {
+          "minimum": 0,
+          "title": "Quarantined Scenarios",
+          "type": "integer"
+        },
+        "search_success_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Search Success Rate",
+          "type": "number"
+        },
+        "target_specific_tuning": {
+          "title": "Target Specific Tuning",
+          "type": "boolean"
+        },
+        "top2_branch_recall": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Top2 Branch Recall",
+          "type": "number"
+        },
+        "tracklet_precision": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Tracklet Precision",
+          "type": "number"
+        },
+        "tracklet_recall": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Tracklet Recall",
+          "type": "number"
+        }
+      },
+      "required": [
+        "active_scenarios",
+        "passed_scenarios",
+        "quarantined_scenarios",
+        "identity_precision",
+        "identity_recall",
+        "false_identity_rate",
+        "tracklet_precision",
+        "tracklet_recall",
+        "median_position_error_m",
+        "p95_position_error_m",
+        "hidden_point_containment",
+        "top2_branch_recall",
+        "search_success_rate",
+        "target_specific_tuning"
+      ],
+      "title": "QualityEvidence",
+      "type": "object"
+    },
+    "SuiteEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passed",
+        "evidence"
+      ],
+      "title": "SuiteEvidence",
+      "type": "object"
+    },
+    "WorkflowCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "$ref": "#/$defs/EvidenceStatus"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "evidence"
+      ],
+      "title": "WorkflowCheck",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "blocks": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BlockEvidence"
+      },
+      "title": "Blocks",
+      "type": "object"
+    },
+    "dataset_manifest": {
+      "$ref": "#/$defs/EvidenceRef"
+    },
+    "git_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Git Commit",
+      "type": "string"
+    },
+    "inspectable_artifacts": {
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      },
+      "title": "Inspectable Artifacts",
+      "type": "array"
+    },
+    "models": {
+      "additionalProperties": {
+        "$ref": "#/$defs/EvidenceRef"
+      },
+      "title": "Models",
+      "type": "object"
+    },
+    "operations": {
+      "$ref": "#/$defs/OperationalEvidence"
+    },
+    "profile_fingerprint": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Profile Fingerprint",
+      "type": "string"
+    },
+    "quality": {
+      "$ref": "#/$defs/QualityEvidence"
+    },
+    "release_id": {
+      "minLength": 1,
+      "title": "Release Id",
+      "type": "string"
+    },
+    "release_version": {
+      "minLength": 1,
+      "title": "Release Version",
+      "type": "string"
+    },
+    "routing_params": {
+      "$ref": "#/$defs/EvidenceRef"
+    },
+    "schema_version": {
+      "const": "javes-nvidia-release-evidence.v2",
+      "default": "javes-nvidia-release-evidence.v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/DeliveryScope"
+    },
+    "site_bundle": {
+      "$ref": "#/$defs/EvidenceRef"
+    },
+    "suites": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SuiteEvidence"
+      },
+      "title": "Suites",
+      "type": "object"
+    },
+    "workflow": {
+      "items": {
+        "$ref": "#/$defs/WorkflowCheck"
+      },
+      "title": "Workflow",
+      "type": "array"
+    }
+  },
+  "required": [
+    "release_id",
+    "git_commit",
+    "release_version",
+    "dataset_manifest",
+    "site_bundle",
+    "routing_params",
+    "models",
+    "profile_fingerprint",
+    "scope",
+    "blocks",
+    "suites",
+    "quality",
+    "operations",
+    "workflow",
+    "inspectable_artifacts"
+  ],
+  "title": "NvidiaReleaseEvidence",
+  "type": "object"
+}

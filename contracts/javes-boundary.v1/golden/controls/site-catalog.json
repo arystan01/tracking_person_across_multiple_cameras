@@ -1,0 +1,18 @@
+{
+  "cameras": [
+    {
+      "camera_id": "Cam001",
+      "display_name": "Cam001",
+      "floor_id": "warehouse",
+      "zone_id": "warehouse"
+    }
+  ],
+  "checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+  "display_name": "NVIDIA MTMC 12-camera warehouse",
+  "site_id": "nvidia-mtmc-12cam",
+  "site_version": "nvidia-12cam-v1",
+  "timezone": "UTC",
+  "zones": [
+    "warehouse"
+  ]
+}

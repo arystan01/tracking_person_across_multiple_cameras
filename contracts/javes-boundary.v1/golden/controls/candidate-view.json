@@ -1,0 +1,24 @@
+{
+  "active_decision_id": null,
+  "appearance_score": 0.82,
+  "association_id": null,
+  "bbox_first": null,
+  "bbox_last": null,
+  "calibration_version": "osnet-v1",
+  "camera_id": "Cam001",
+  "candidate_id": "candidate-001",
+  "clip_id": null,
+  "clip_state": "HOLD",
+  "clip_status": "READY",
+  "cosine": null,
+  "decision_state": "UNREVIEWED",
+  "flags": [],
+  "requires_confirmation": false,
+  "review_state": null,
+  "t_end": "2026-01-02T03:05:05Z",
+  "t_start": "2026-01-02T03:04:05Z",
+  "thumbnail_refs": [
+    "/v1/cases/case-001/candidates/candidate-001/thumbnails/0"
+  ],
+  "tracklet_id": "tracklet-001"
+}

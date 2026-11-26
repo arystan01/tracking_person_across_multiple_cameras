@@ -1,0 +1,8 @@
+{
+  "artifacts": [],
+  "contract_version": "worker-task-result.v1",
+  "lease_token": "opaque-example",
+  "result": {
+    "status": "DONE"
+  }
+}
