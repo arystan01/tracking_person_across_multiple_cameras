@@ -32,6 +32,11 @@ requested timestamps and (when supplied) archive identity must match. The
 resolved media can begin before `covered_from`, so extraction seeks by
 `source_offset_s + command.t_from - covered_from`.
 Padding is already included in `t_from`/`t_to` by Main and is not added again.
+Main's default context is two seconds before and after the sighting, bounded
+by the case window. An existing immutable cut is not recut when this default
+changes. Exports concatenate the exact confirmed input clips, including any
+context or overlapping camera time; they do not load complete camera recordings
+or perform another person-detection pass to remove empty frames.
 
 The archive must return a complete finite window. A missing or partial window
 returns `UNAVAILABLE` without a fake output. A changed source identity or

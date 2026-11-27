@@ -32,6 +32,35 @@ CCTV Archive, Perception, Routing, or any `/internal/*` endpoint.
 7. Fetch the authorised current JPEG from `/v1/cases/{case_id}/live`; do not
    expose the internal `object_key` to the browser.
 
+Confirm/Reject rebuilds Routing from the immutable evidence ledger with the
+current active decisions, not only the already-pruned beam. Closed review
+keeps the case closed and cannot launch new searches or gallery jobs. The
+Dashboard opens closed cases on **Route map**; **Case recordings** contains
+confirmed videos. After closure the live-preview tab becomes **Merged video**,
+with inline playback/download of the ready export or its preparation/error
+status. **Generate merged video** explicitly requests export after
+recalculation and confirmed clips are ready. Closing alone does not export.
+Export is blocked rather than silently omitting a confirmed observation that
+has no ready clip on the route.
+Export finalizes the case as `SAVED`, ending candidate review; the Dashboard
+asks for confirmation before doing so. Cuts include up to two seconds of
+context before and after a sighting, clipped to the case window. Merging joins
+those confirmed clips in route order, not complete camera recordings. Existing
+immutable clips retain the context with which they were originally created.
+
+Case lifecycle is distinct from processing health: `search_progress` reports
+blocked or retrying Routing separately from active video work. A terminal
+Routing failure must not be displayed as an ongoing camera search. Route media
+URLs resolve only committed revisions, even if an interrupted attempt left a
+private file behind.
+
+The BFF retries interrupted GET transport reads at most twice within one total
+timeout budget, never automatically repeating mutations or restarting a media
+stream after bytes have been delivered. Exhausted connection/timeouts return
+safe RFC7807 `503/504` responses, without logging the operator out. Governance
+shows which section failed, retains successful sections and clears the read
+error after a successful **Reload history** or workspace **Refresh**.
+
 Local Dashboard verification:
 
 ```bash
