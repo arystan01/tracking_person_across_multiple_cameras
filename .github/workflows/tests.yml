@@ -4,31 +4,148 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: read
 
 jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: npm ci --legacy-peer-deps
+        working-directory: frontend
+      - run: npm run lint && npm test && npm run build
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium firefox
+        working-directory: frontend
+      - run: npm run test:a11y
+        working-directory: frontend
+      - run: python -m pip install -e '.[test,infra]'
+      - run: python -m pytest -q tests/test_dashboard_bff.py tests/test_dashboard_architecture.py
+      - run: javes-dashboard --help
+
   fast:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install -e '.[test,infra]'
+      - run: python -m pytest -q -m 'not real_cv' --junitxml=artifacts/junit-fast-${{ matrix.python-version }}.xml
+      - run: python -m javes_main.security --root .
+      - run: python -m pip wheel . --no-deps --wheel-dir dist
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fast-${{ matrix.python-version }}
+          path: |
+            artifacts/junit-fast-${{ matrix.python-version }}.xml
+            dist/*.whl
+          if-no-files-found: error
+
+  clip-media:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: python -m pip install -e '.[test,infra]'
-      - run: python -m pytest -q -m 'not real_cv'
+      - run: python -m pytest -q tests/test_clip_worker.py --junitxml=artifacts/junit-clip-media.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-media
+          path: artifacts/junit-clip-media.xml
+          if-no-files-found: error
 
-  real-cv:
-    if: github.event_name == 'workflow_dispatch'
+  cached-real-cv:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: artifacts/real-cv-eval/extraction-cache
+          key: nvidia-extraction-v1-${{ runner.os }}-${{ hashFiles('data/nvidia_mtmc/mtmc_12cam/videos/*.mp4', 'models/*.pt', 'tests/support/nvidia_12cam_site.py', 'javes_perception/core/extraction.py') }}
+      - run: python -m pip install -e '.[test,infra,perception]'
+      - name: Run cached NVIDIA evaluation
+        env:
+          JAVES_RUN_REAL_CV: "1"
+          JAVES_REAL_CV_EVAL_OUT: artifacts/real-cv-eval/cached
+        run: python -m pytest -q -s tests/test_real_cv_eval.py --junitxml=artifacts/junit-real-cv-cached.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-cv-evaluation-cached
+          path: |
+            artifacts/real-cv-eval/cached/
+            artifacts/junit-real-cv-cached.xml
+          if-no-files-found: warn
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: javes
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d javes"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      JAVES_TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/javes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: python -m pip install -e '.[test,infra]'
+      - run: python -m pytest -q tests/test_postgres_integration.py
+
+  cold-real-cv:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - run: python -m pip install -e '.[test,infra,perception]'
-      - run: JAVES_RUN_REAL_CV=1 python -m pytest -q -m real_cv
+      - name: Run cold API-first NVIDIA E2E
+        env:
+          JAVES_RUN_REAL_CV: "1"
+          JAVES_REAL_CV_REFRESH: "1"
+          JAVES_REAL_CV_EVAL_OUT: artifacts/real-cv-eval/cold
+        run: python -m pytest -q -s -m real_cv --junitxml=artifacts/junit-real-cv-cold.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: real-cv-e2e-output
-          path: artifacts/real-cv-e2e/
+          name: real-cv-evaluation-cold
+          path: |
+            artifacts/real-cv-eval/
+            artifacts/real-cv-e2e/
+            artifacts/junit-real-cv-cold.xml
           if-no-files-found: warn

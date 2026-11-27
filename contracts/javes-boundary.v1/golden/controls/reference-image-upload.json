@@ -1,0 +1,15 @@
+{
+  "case_id": "case-001",
+  "expires_at": "2026-01-02T03:05:05Z",
+  "height_px": 640,
+  "mime_type": "image/jpeg",
+  "reference_image_ref": {
+    "archive_id": null,
+    "object_key": "cases/case-001/reference/reference-upload-001.jpg",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "uri": null
+  },
+  "size_bytes": 12345,
+  "upload_id": "reference-upload-001",
+  "width_px": 320
+}

@@ -1,0 +1,50 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "expected_case_revision": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Case Revision"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "operator_id": {
+      "title": "Operator Id",
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Reason",
+      "type": "string"
+    },
+    "revocation_id": {
+      "title": "Revocation Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "revocation_id",
+    "decision_id",
+    "operator_id",
+    "reason",
+    "occurred_at"
+  ],
+  "title": "RevokeDecisionBody",
+  "type": "object"
+}

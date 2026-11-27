@@ -269,11 +269,15 @@ def merge_tracklets_to_visits(
 
 def _scale_edge(edge: EdgeDef, params: RoutingParams, profile: str = "ADULT") -> EdgeDef:
     factors = params.profiles.get(profile, params.profiles["ADULT"])
+    timing = params.edge_timing_overrides.get(edge.id)
+    t_min = edge.t_min if timing is None else float(timing["t_min"])
+    t_typ = edge.t_typ if timing is None else float(timing["t_typ"])
+    t_max = edge.t_max if timing is None else float(timing["t_max"])
     return edge.model_copy(
         update={
-            "t_min": edge.t_min * factors["tmin_k"],
-            "t_typ": edge.t_typ * factors["ttyp_k"],
-            "t_max": edge.t_max * factors["tmax_k"],
+            "t_min": t_min * factors["tmin_k"],
+            "t_typ": t_typ * factors["ttyp_k"],
+            "t_max": t_max * factors["tmax_k"],
         }
     )
 
@@ -465,7 +469,11 @@ def gate_visit_details(
                 max(dt, minimum), minimum, typical, maximum
             )
             intermediate_nodes = tuple(edge.target for edge in path[:-1])
-            miss_factor = (1.0 - params.p_det) ** len(intermediate_nodes)
+            miss_cameras = [
+                node for node in intermediate_nodes if node in graph.cameras
+            ]
+            miss_groups = _overlap_components(miss_cameras, graph)
+            miss_factor = (1.0 - params.p_det) ** len(miss_groups)
             candidates.append(
                 (
                     max(likelihood * miss_factor, 1e-12),
@@ -1021,6 +1029,31 @@ def compute_miss_log_lik(p_det: float, f_mass: float = 1.0) -> float:
     return math.log(max(1.0 - p_det * min(max(f_mass, 0.0), 1.0), 1e-12))
 
 
+def _overlap_components(camera_ids: list[str], graph: SiteGraph) -> list[list[str]]:
+    """Connected overlap cameras represent one physical detection opportunity."""
+
+    remaining = set(camera_ids)
+    components: list[list[str]] = []
+    while remaining:
+        seed = min(remaining)
+        stack = [seed]
+        component: set[str] = set()
+        while stack:
+            camera_id = stack.pop()
+            if camera_id in component:
+                continue
+            component.add(camera_id)
+            remaining.discard(camera_id)
+            camera = graph.cameras[camera_id]
+            stack.extend(
+                other
+                for other in camera.overlap_camera_ids
+                if other in remaining
+            )
+        components.append(sorted(component))
+    return components
+
+
 def _arrival_mass(
     t_out: datetime,
     edge: EdgeDef,
@@ -1078,15 +1111,24 @@ def recompute_hypothesis_score(
     if hypothesis.visits and hypothesis.status == HypothesisStatus.ALIVE:
         last = hypothesis.visits[-1]
         if not last.open:
+            edges_by_camera: dict[str, list[EdgeDef]] = {}
             for edge in graph.get_edges_from(last.camera):
-                if edge.target not in graph.cameras:
-                    continue
-                scaled = _scale_edge(edge, params, profile)
-                covered = _arrival_mass(last.t_out, scaled, probed_windows, now)
-                if covered:
-                    camera_p_det = graph.cameras[edge.target].p_det
+                if edge.target in graph.cameras:
+                    edges_by_camera.setdefault(edge.target, []).append(edge)
+            for component in _overlap_components(list(edges_by_camera), graph):
+                # Correlated overlapping views cannot multiply one absence into
+                # several independent misses. Use only the strongest covered
+                # detection opportunity in the physical overlap group.
+                effective_detection = 0.0
+                for camera_id in component:
+                    camera_p_det = graph.cameras[camera_id].p_det
                     p_det = params.p_det if camera_p_det is None else camera_p_det
-                    score += compute_miss_log_lik(p_det, covered)
+                    for edge in edges_by_camera[camera_id]:
+                        scaled = _scale_edge(edge, params, profile)
+                        covered = _arrival_mass(last.t_out, scaled, probed_windows, now)
+                        effective_detection = max(effective_detection, p_det * covered)
+                if effective_detection:
+                    score += math.log(max(1.0 - effective_detection, 1e-12))
     return score
 
 
@@ -1118,11 +1160,28 @@ def _process_probe_results(
 
     for result in sorted(probe_results, key=lambda item: item.probe_id):
         fingerprint = _result_fingerprint(result)
-        if fingerprint in processed:
+        duplicate = fingerprint in processed
+        if duplicate and result.probe_id not in pending_by_id:
             logger.info("Ignoring duplicate ProbeResult %s", result.probe_id)
             continue
         processed.add(fingerprint)
         matching = pending_by_id.get(result.probe_id)
+        if matching is not None and (
+            (state.window_end is not None and matching.t_from >= state.window_end)
+            or (state.window_start is not None and matching.t_to is not None
+                and matching.t_to <= state.window_start)
+        ):
+            # Old deployments could dispatch neighbours after window_end.
+            # Their unavailable results are not gaps in this case's window.
+            finished_probe_ids.add(matching.probe_id)
+            if state.search_frontier is not None:
+                root = matching.retry_of or matching.probe_id
+                state.search_frontier.required_probe_ids = [
+                    probe_id for probe_id in state.search_frontier.required_probe_ids if probe_id != root
+                ]
+                state.search_frontier.reached_at_by_probe.pop(root, None)
+            logger.warning("Ignoring out-of-window probe result %s", result.probe_id)
+            continue
         valid_result_tracklets: list[Tracklet] = []
         for tracklet in result.tracklets:
             if tracklet.camera not in graph.cameras:
@@ -1172,8 +1231,9 @@ def _process_probe_results(
                 miss_coverage *= 0.5
             if result.status == ProbeStatus.DONE and effective_coverage < 1.0:
                 low_coverage = effective_coverage < params.min_coverage
-                if low_coverage:
-                    miss_coverage = 0.0
+                # Partial archive/decode coverage is an outage region, never
+                # reliable negative evidence, regardless of its percentage.
+                miss_coverage = 0.0
                 state.unobserved_windows.append(
                     {
                         "camera_id": matching.camera,
@@ -1185,17 +1245,17 @@ def _process_probe_results(
                         "coverage_ratio": effective_coverage,
                     }
                 )
-            state.probed_windows.append(
-                ProbedWindow(
-                    camera=matching.camera,
-                    t_from=matching.t_from,
-                    t_to=matching.t_to,
-                    probe_id=result.probe_id,
-                    status=result.status,
-                    coverage_ratio=miss_coverage,
-                    found=found,
-                )
+            window = ProbedWindow(
+                camera=matching.camera,
+                t_from=matching.t_from,
+                t_to=matching.t_to,
+                probe_id=result.probe_id,
+                status=result.status,
+                coverage_ratio=miss_coverage,
+                found=found,
             )
+            if window not in state.probed_windows:
+                state.probed_windows.append(window)
             if duration:
                 previous_duration = state.processed_duration_s_by_probe.get(result.probe_id, 0.0)
                 chargeable_duration = max(duration - previous_duration, 0.0)
@@ -1247,7 +1307,7 @@ def _process_probe_results(
                 terminal=terminal,
             )
 
-        if result.status == ProbeStatus.DONE:
+        if result.status == ProbeStatus.DONE and not duplicate:
             tracklets.extend(valid_result_tracklets)
             candidates.extend(valid_result_candidates)
 
@@ -1514,6 +1574,9 @@ def update_hypotheses(
         ]
     banned = set(state.rejected_tracklet_ids) | set(anchors.reject)
     confirmed = set(state.confirmed_tracklet_ids) | set(anchors.confirm)
+    # Reject before grouping/ranking. Otherwise a rejected fragment can consume
+    # a beam slot or poison an associated Visit containing accepted evidence.
+    tracklets = [tracklet for tracklet in tracklets if tracklet.id not in banned]
     visits = merge_tracklets_to_visits(tracklets, candidates, graph, params, now)
     # Beam expansion remains bounded by ``cands_per_probe``, but every
     # Candidate already exposed to Controls must remain confirmable later.

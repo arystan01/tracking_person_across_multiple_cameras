@@ -13,13 +13,21 @@ dist/
 *.egg-info/
 .venv/
 venv/
+.env
+.env.*
+!.env.example
+!deploy/staging/.env.example
 
 # Local runtime state and generated output
 *.sqlite
 *.sqlite3
 demo_out/
 schemas/
+!contracts/javes-boundary.v1/schemas/
+!contracts/javes-boundary.v1/schemas/*.schema.json
 artifacts/
+/runtime/
+backups/
 .presentation_work/
 deliverables/
 .~lock.*#

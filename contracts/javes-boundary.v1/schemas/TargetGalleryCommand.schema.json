@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "description": "Stable storage/archive identity, never a short-lived playback URL.",
+      "properties": {
+        "archive_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archive Id"
+        },
+        "object_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Key"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uri"
+        }
+      },
+      "title": "ArtifactRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "base_gallery_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Base Gallery Ref"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "command_id": {
+      "title": "Command Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "target-gallery.v1",
+      "default": "target-gallery.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "image_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "model_version": {
+      "default": "osnet_ain_x1_0_msmt17",
+      "title": "Model Version",
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "reference",
+        "confirmed_tracklet",
+        "rebuild"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "tracklet_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tracklet Id"
+    },
+    "tracklet_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tracklet Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "command_id",
+    "case_id",
+    "source"
+  ],
+  "title": "TargetGalleryCommand",
+  "type": "object"
+}

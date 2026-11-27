@@ -15,6 +15,8 @@ from javes_main.domain.models import (
     OutboxRecord,
     OutboxState,
     ProbeResultRecord,
+    ReferenceImageUploadRecord,
+    ReferenceImageUploadStatus,
     RoutingTriggerRecord,
     RoutingTriggerState,
     UserAccount,
@@ -41,6 +43,8 @@ class InMemoryRepository:
         self._case_data: dict[tuple[str, str, str], CaseDataRecord] = {}
         self._routing_triggers: dict[str, RoutingTriggerRecord] = {}
         self._routing_trigger_dedupe: dict[str, str] = {}
+        self._reference_uploads: dict[str, ReferenceImageUploadRecord] = {}
+        self._reference_upload_keys: dict[str, str] = {}
         self._lock = RLock()
 
     @contextmanager
@@ -61,6 +65,8 @@ class InMemoryRepository:
                 "case_data": copy.deepcopy(self._case_data),
                 "routing_triggers": copy.deepcopy(self._routing_triggers),
                 "routing_trigger_dedupe": copy.deepcopy(self._routing_trigger_dedupe),
+                "reference_uploads": copy.deepcopy(self._reference_uploads),
+                "reference_upload_keys": copy.deepcopy(self._reference_upload_keys),
             }
             try:
                 yield self
@@ -79,6 +85,8 @@ class InMemoryRepository:
                 self._case_data = snapshots["case_data"]
                 self._routing_triggers = snapshots["routing_triggers"]
                 self._routing_trigger_dedupe = snapshots["routing_trigger_dedupe"]
+                self._reference_uploads = snapshots["reference_uploads"]
+                self._reference_upload_keys = snapshots["reference_upload_keys"]
                 raise
 
     def add(self, case: CaseRecord) -> None:
@@ -114,7 +122,9 @@ class InMemoryRepository:
                 raise RevisionConflict(
                     f"case {case_id!r} revision is {current.revision}, expected {expected_revision}"
                 )
-            saved = case.model_copy(update={"revision": expected_revision + 1}, deep=True)
+            saved = case.model_copy(
+                update={"revision": expected_revision + 1}, deep=True
+            )
             self._cases[case_id] = saved
             return saved.model_copy(deep=True)
 
@@ -222,11 +232,38 @@ class InMemoryRepository:
 
     def list_events(self, case_id: str) -> list[AuditEvent]:
         with self._lock:
-            return [item.model_copy(deep=True) for item in self._events.get(case_id, [])]
+            return [
+                item.model_copy(deep=True) for item in self._events.get(case_id, [])
+            ]
 
-    def remember_idempotency(
-        self, key: str, fingerprint: str, response: dict
-    ) -> None:
+    def list_audit_events(
+        self,
+        *,
+        after: tuple[datetime, str] | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+        case_ids: set[str] | None = None,
+        actor_ids: set[str] | None = None,
+        event_types: set[str] | None = None,
+        limit: int = 500,
+    ) -> list[AuditEvent]:
+        with self._lock:
+            events = sorted(
+                (item for values in self._events.values() for item in values),
+                key=lambda item: (item.occurred_at, item.event_id),
+            )
+            return [
+                item.model_copy(deep=True)
+                for item in events
+                if (after is None or (item.occurred_at, item.event_id) > after)
+                and (from_time is None or item.occurred_at >= from_time)
+                and (to_time is None or item.occurred_at <= to_time)
+                and (not case_ids or item.case_id in case_ids)
+                and (not actor_ids or item.actor_id in actor_ids)
+                and (not event_types or item.event_type in event_types)
+            ][:limit]
+
+    def remember_idempotency(self, key: str, fingerprint: str, response: dict) -> None:
         with self._lock:
             previous = self._idempotency.get(key)
             if previous is not None and previous[0] != fingerprint:
@@ -244,6 +281,57 @@ class InMemoryRepository:
         # transaction() already owns the repository-wide re-entrant lock.
         # Keeping this explicit mirrors the PostgreSQL repository contract.
         return None
+
+    def add_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
+        with self._lock:
+            if upload.upload_id in self._reference_uploads:
+                raise ValueError("reference upload id already exists")
+            if upload.object_key in self._reference_upload_keys:
+                raise ValueError("reference upload object key already exists")
+            self._reference_uploads[upload.upload_id] = upload.model_copy(deep=True)
+            self._reference_upload_keys[upload.object_key] = upload.upload_id
+
+    def get_reference_upload_by_key(
+        self, object_key: str, *, for_update: bool = False
+    ) -> ReferenceImageUploadRecord:
+        del for_update
+        with self._lock:
+            upload_id = self._reference_upload_keys.get(object_key)
+            if upload_id is None:
+                raise KeyError("unknown reference upload")
+            return self._reference_uploads[upload_id].model_copy(deep=True)
+
+    def get_reference_upload(
+        self, upload_id: str, *, for_update: bool = False
+    ) -> ReferenceImageUploadRecord:
+        del for_update
+        with self._lock:
+            upload = self._reference_uploads.get(upload_id)
+            if upload is None:
+                raise KeyError("unknown reference upload")
+            return upload.model_copy(deep=True)
+
+    def save_reference_upload(self, upload: ReferenceImageUploadRecord) -> None:
+        with self._lock:
+            previous = self._reference_uploads.get(upload.upload_id)
+            if previous is None or previous.object_key != upload.object_key:
+                raise KeyError("unknown reference upload")
+            self._reference_uploads[upload.upload_id] = upload.model_copy(deep=True)
+
+    def list_expired_reference_uploads(
+        self, *, now: datetime, limit: int = 100
+    ) -> list[ReferenceImageUploadRecord]:
+        with self._lock:
+            values = sorted(
+                (
+                    item
+                    for item in self._reference_uploads.values()
+                    if item.status == ReferenceImageUploadStatus.READY
+                    and item.expires_at <= now
+                ),
+                key=lambda item: (item.expires_at, item.upload_id),
+            )[:limit]
+            return [item.model_copy(deep=True) for item in values]
 
     def add_user(self, user: UserAccount) -> None:
         username = user.username.casefold()
@@ -287,7 +375,10 @@ class InMemoryRepository:
         with self._lock:
             if session.session_id in self._sessions:
                 raise ValueError("session already exists")
-            if any(item.token_hash == session.token_hash for item in self._sessions.values()):
+            if any(
+                item.token_hash == session.token_hash
+                for item in self._sessions.values()
+            ):
                 raise ValueError("session token already exists")
             self._sessions[session.session_id] = session.model_copy(deep=True)
 
@@ -320,7 +411,10 @@ class InMemoryRepository:
             previous_id = self._outbox_dedupe.get(message.dedupe_key)
             if previous_id is not None:
                 previous = self._outbox[previous_id]
-                if previous.topic != message.topic or previous.payload != message.payload:
+                if (
+                    previous.topic != message.topic
+                    or previous.payload != message.payload
+                ):
                     raise ValueError("outbox dedupe key reused with different payload")
                 return
             if message.message_id in self._outbox:
@@ -369,7 +463,8 @@ class InMemoryRepository:
                 (
                     item
                     for item in self._outbox.values()
-                    if item.state == OutboxState.PENDING and item.available_at <= now
+                    if item.state == OutboxState.PENDING
+                    and item.available_at <= now
                     and (topics is None or item.topic in topics)
                 ),
                 key=lambda item: (item.available_at, item.created_at, item.message_id),
@@ -388,7 +483,8 @@ class InMemoryRepository:
         with self._lock:
             reclaimed: list[OutboxRecord] = []
             for item in sorted(
-                self._outbox.values(), key=lambda value: (value.created_at, value.message_id)
+                self._outbox.values(),
+                key=lambda value: (value.created_at, value.message_id),
             ):
                 if (
                     item.state != OutboxState.LEASED
@@ -434,8 +530,7 @@ class InMemoryRepository:
                     or previous.payload != record.payload
                 ):
                     raise ValueError(
-                        "case data record id reused with different payload: "
-                        f"{key!r}"
+                        "case data record id reused with different payload: " f"{key!r}"
                     )
                 return
             self._case_data[key] = record.model_copy(deep=True)
@@ -559,7 +654,9 @@ class InMemoryRepository:
             # Audit events are append-only security records. Case retention
             # removes operational and media content, never the event identity,
             # actor, timestamp, action, or details.
-            job_ids = [key for key, value in self._jobs.items() if value.case_id == case_id]
+            job_ids = [
+                key for key, value in self._jobs.items() if value.case_id == case_id
+            ]
             for job_id in job_ids:
                 job = self._jobs.pop(job_id)
                 self._job_dedupe.pop(job.dedupe_key, None)
@@ -582,7 +679,10 @@ class InMemoryRepository:
                 trigger = self._routing_triggers.pop(trigger_id)
                 self._routing_trigger_dedupe.pop(trigger.dedupe_key, None)
             for message_id, message in list(self._outbox.items()):
-                if message.case_id == case_id and message_id != preserve_outbox_message_id:
+                if (
+                    message.case_id == case_id
+                    and message_id != preserve_outbox_message_id
+                ):
                     next_state = (
                         OutboxState.CANCELLED
                         if message.state in {OutboxState.PENDING, OutboxState.LEASED}
@@ -666,12 +766,9 @@ class InMemoryRepository:
                         deep=True,
                     )
             for key, record in list(self._case_data.items()):
-                temporary_artifact = (
-                    record.kind.value == "ARTIFACT"
-                    and (
-                        record.payload.get("kind") == "HOLD_CLIP"
-                        or record.payload.get("state") == "RELEASED"
-                    )
+                temporary_artifact = record.kind.value == "ARTIFACT" and (
+                    record.payload.get("kind") == "HOLD_CLIP"
+                    or record.payload.get("state") == "RELEASED"
                 )
                 if record.case_id == case_id and (
                     record.kind.value in temporary_kinds or temporary_artifact
@@ -680,7 +777,10 @@ class InMemoryRepository:
                         update={"payload": {"redacted": True}}, deep=True
                     )
             for message_id, message in list(self._outbox.items()):
-                if message.case_id == case_id and message_id != preserve_outbox_message_id:
+                if (
+                    message.case_id == case_id
+                    and message_id != preserve_outbox_message_id
+                ):
                     self._outbox[message_id] = message.model_copy(
                         update={"payload": {"redacted": True}}, deep=True
                     )

@@ -1,0 +1,11 @@
+version: javes-slo.v1
+scope: nvidia-12cam
+objectives:
+  controls_availability: {target: 0.999, window_days: 30}
+  controls_api_p95_s: {target: 2.0, window_days: 7}
+  worker_callback_success: {target: 0.995, window_days: 30}
+  routing_step_p95_s: {target: 2.0, window_days: 7}
+  deletion_completion_p95_s: {target: 60.0, window_days: 30}
+  archive_available_ratio: {target: 0.99, window_days: 7}
+  recovery_point_hours: {target: 24}
+  recovery_time_hours: {target: 4}

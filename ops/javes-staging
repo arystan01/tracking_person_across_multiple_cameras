@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+COMPOSE="$ROOT/deploy/staging/compose.yaml"
+ENV_FILE="$ROOT/deploy/staging/.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "missing $ENV_FILE; copy deploy/staging/.env.example and replace placeholders" >&2
+  exit 2
+fi
+
+action=${1:-help}
+shift || true
+case "$action" in
+  config) docker compose --env-file "$ENV_FILE" -f "$COMPOSE" config "$@" ;;
+  build) docker compose --env-file "$ENV_FILE" -f "$COMPOSE" build "$@" ;;
+  start) docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --wait "$@" ;;
+  stop) docker compose --env-file "$ENV_FILE" -f "$COMPOSE" down "$@" ;;
+  status) docker compose --env-file "$ENV_FILE" -f "$COMPOSE" ps "$@" ;;
+  backup) docker compose --env-file "$ENV_FILE" -f "$COMPOSE" --profile backup run --rm backup "$@" ;;
+  clean)
+    echo "refusing destructive clean without JAVES_CONFIRM_CLEAN=DELETE_LOCAL_STAGING" >&2
+    [ "${JAVES_CONFIRM_CLEAN:-}" = DELETE_LOCAL_STAGING ] || exit 3
+    docker compose --env-file "$ENV_FILE" -f "$COMPOSE" down --volumes --remove-orphans "$@"
+    ;;
+  *)
+    echo "usage: ops/javes-staging {config|build|start|stop|status|backup|clean}" >&2
+    exit 2
+    ;;
+esac

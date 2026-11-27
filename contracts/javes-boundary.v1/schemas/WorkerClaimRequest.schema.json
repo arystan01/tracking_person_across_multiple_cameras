@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "worker-claim.v1",
+      "default": "worker-claim.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "lease_seconds": {
+      "default": 30,
+      "maximum": 600,
+      "minimum": 5,
+      "title": "Lease Seconds",
+      "type": "integer"
+    },
+    "limit": {
+      "default": 1,
+      "maximum": 100,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "worker_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Worker Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "worker_id"
+  ],
+  "title": "WorkerClaimRequest",
+  "type": "object"
+}

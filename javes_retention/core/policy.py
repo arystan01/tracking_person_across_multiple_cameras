@@ -21,7 +21,7 @@ class RetentionPolicy:
     action and details) after case content is deleted.
     """
 
-    version: str = "retention-policy.v1"
+    version: str = "retention-policy.v2"
     always_preserve_classes: frozenset[RetentionClass] = field(
         default_factory=lambda: frozenset({RetentionClass.AUDIT})
     )
@@ -62,26 +62,3 @@ class RetentionPolicy:
         if deleted_or_expired:
             return True
         return False
-
-    @staticmethod
-    def allows_class_transition(
-        previous: RetentionClass, incoming: RetentionClass
-    ) -> bool:
-        """Reject stale at-least-once registrations without a wire revision.
-
-        The v1 resource contract has no monotonic revision.  Its valid lifecycle
-        is nevertheless one-way: HOLD may become confirmed/released, and a
-        superseded case result may become ephemeral.  Terminal registrations
-        must not be resurrected by an older outbox delivery.
-        """
-
-        if previous == incoming:
-            return True
-        return (
-            previous == RetentionClass.REVIEW_HOLD
-            and incoming
-            in {RetentionClass.CONFIRMED_EVIDENCE, RetentionClass.EPHEMERAL}
-        ) or (
-            previous == RetentionClass.CASE_RESULT
-            and incoming == RetentionClass.EPHEMERAL
-        )

@@ -1,0 +1,25 @@
+{
+  "action": "DELETE_CASE",
+  "audit_tombstone_id": "audit-001",
+  "case_id": "case-001",
+  "command_id": "retention-001",
+  "contract_version": "retention-result.v1",
+  "deleted_resource_ids": [
+    "resource-001"
+  ],
+  "held_resource_ids": [],
+  "preserved_resource_ids": [],
+  "receipts": [
+    {
+      "attempt": 1,
+      "backend_kind": "shared-filesystem",
+      "contract_version": "retention-deletion-receipt.v1",
+      "error_code": null,
+      "locator_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "locator_kind": "object_key",
+      "occurred_at": "2026-01-02T03:05:05Z",
+      "resource_id": "resource-001",
+      "status": "DELETED"
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "accepted_consumers": {
+    "clip": "ffmpeg-pull-lease-worker",
+    "dashboard": "react-vite-fastapi-bff"
+  },
+  "boundary_version": "javes-boundary.v1",
+  "compatibility": {
+    "additive_optional_fields": "ALLOWED",
+    "breaking_change": "REQUIRES_JAVES_BOUNDARY_V2"
+  },
+  "delivery": {
+    "callback_semantics": "IDEMPOTENT_BY_TASK_ID_AND_FINGERPRINT",
+    "cancellation": "heartbeat cancel_requested=true is terminal for new work; a worker may return a cancellation acknowledgement but must not publish later artifacts",
+    "deadline": "absolute UTC; workers must not start expired work",
+    "expired_lease": "REJECT_AND_RECLAIM",
+    "retry": "only retryable failures; exponential backoff with bounded attempts",
+    "worker_semantics": "AT_LEAST_ONCE"
+  },
+  "id_ownership": {
+    "candidate_id": "Perception",
+    "case_id": "Controls client; made immutable by Main",
+    "command_id": "calling component",
+    "decision_id": "Dashboard/Controls client",
+    "lease_token": "Main; opaque and secret",
+    "probe_id": "Routing",
+    "resource_id": "artifact producer or Main registration boundary",
+    "route_revision": "Main after Routing CAS",
+    "task_id": "Main",
+    "tracklet_id": "Perception"
+  },
+  "legal_hold": {
+    "authority": "ROOT with case.legal_hold.manage",
+    "external_ticket_id": "required for set and release",
+    "retention": "deletion remains paused until the final active hold is released"
+  },
+  "operator_decisions": {
+    "closed_case": "replay may revise route but must not restart search",
+    "revoke": "immutable revocation followed by deterministic evidence replay",
+    "revoke_idempotency": "revocation_id plus Idempotency-Key"
+  },
+  "problems": {
+    "authentication": {
+      "code": "AUTHENTICATION_REQUIRED",
+      "consumer_action": "login",
+      "default_status": 401,
+      "retryable": false,
+      "slug": "authentication"
+    },
+    "authorization": {
+      "code": "FORBIDDEN",
+      "consumer_action": "stop",
+      "default_status": 403,
+      "retryable": false,
+      "slug": "authorization"
+    },
+    "conflict": {
+      "code": "CONFLICT",
+      "consumer_action": "operator-or-new-command",
+      "default_status": 409,
+      "retryable": false,
+      "slug": "conflict"
+    },
+    "http": {
+      "code": "HTTP_ERROR",
+      "consumer_action": "inspect-status",
+      "default_status": 400,
+      "retryable": false,
+      "slug": "http"
+    },
+    "internal": {
+      "code": "INTERNAL_ERROR",
+      "consumer_action": "retry-with-backoff",
+      "default_status": 500,
+      "retryable": true,
+      "slug": "internal"
+    },
+    "not-found": {
+      "code": "NOT_FOUND",
+      "consumer_action": "stop",
+      "default_status": 404,
+      "retryable": false,
+      "slug": "not-found"
+    },
+    "rate-limit": {
+      "code": "RATE_LIMITED",
+      "consumer_action": "retry-after",
+      "default_status": 429,
+      "retryable": true,
+      "slug": "rate-limit"
+    },
+    "replay-evidence-incomplete": {
+      "code": "REPLAY_EVIDENCE_INCOMPLETE",
+      "consumer_action": "disable-revoke-for-case",
+      "default_status": 409,
+      "retryable": false,
+      "slug": "replay-evidence-incomplete"
+    },
+    "revision-conflict": {
+      "code": "REVISION_CONFLICT",
+      "consumer_action": "reload-and-retry",
+      "default_status": 409,
+      "retryable": true,
+      "slug": "revision-conflict"
+    },
+    "service-unavailable": {
+      "code": "SERVICE_UNAVAILABLE",
+      "consumer_action": "retry-with-backoff",
+      "default_status": 503,
+      "retryable": true,
+      "slug": "service-unavailable"
+    },
+    "timeout": {
+      "code": "UPSTREAM_TIMEOUT",
+      "consumer_action": "retry-with-backoff",
+      "default_status": 504,
+      "retryable": true,
+      "slug": "timeout"
+    },
+    "validation": {
+      "code": "VALIDATION_FAILED",
+      "consumer_action": "fix-request",
+      "default_status": 422,
+      "retryable": false,
+      "slug": "validation"
+    },
+    "worker-lease": {
+      "code": "WORKER_LEASE_INVALID",
+      "consumer_action": "reclaim",
+      "default_status": 409,
+      "retryable": true,
+      "slug": "worker-lease"
+    }
+  },
+  "release_blockers": [],
+  "release_status": "STABLE",
+  "timestamps": {
+    "naive_values": "REJECTED",
+    "open_window": "OPEN only where explicitly declared by schema",
+    "timezone": "UTC",
+    "wire_format": "RFC3339"
+  }
+}

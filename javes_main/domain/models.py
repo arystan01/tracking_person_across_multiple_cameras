@@ -10,12 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from javes_contracts import (
     Anchors,
+    CaseLifecycle,
+    CaseSummary as CaseSummary,
+    CaseView as CaseView,
     ClipRecord,
     CreateCaseBody,
     LiveFeedUpdate,
     PerceptionProbeJob,
     ProbeResult,
     RenderedRouteBundle,
+    RouteMapView as RouteMapView,
     SearchState,
     StepResult,
 )
@@ -31,17 +35,6 @@ def _utc(value: datetime | None) -> datetime | None:
 
 class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
-
-
-class CaseLifecycle(str, Enum):
-    PREPARING = "PREPARING"
-    SEARCHING = "SEARCHING"
-    CLOSED = "CLOSED"
-    EXPORTING = "EXPORTING"
-    SAVED = "SAVED"
-    DELETE_REQUESTED = "DELETE_REQUESTED"
-    DELETED = "DELETED"
-    FAILED = "FAILED"
 
 
 class JobState(str, Enum):
@@ -69,25 +62,58 @@ class RoutingTriggerState(str, Enum):
     FAILED = "FAILED"
 
 
+class ReferenceImageUploadStatus(str, Enum):
+    READY = "READY"
+    CONSUMED = "CONSUMED"
+    EXPIRED = "EXPIRED"
+
+
+class ReferenceImageUploadRecord(DomainModel):
+    upload_id: str
+    case_id: str
+    operator_id: str
+    object_key: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0)
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+    status: ReferenceImageUploadStatus = ReferenceImageUploadStatus.READY
+    created_at: datetime
+    expires_at: datetime
+    consumed_at: datetime | None = None
+
+    @field_validator("created_at", "expires_at", "consumed_at", mode="after")
+    @classmethod
+    def _aware_upload_times(cls, value: datetime | None) -> datetime | None:
+        return _utc(value)
+
+
 class OutboxTopic(str, Enum):
     TARGET_GALLERY = "TARGET_GALLERY"
     PERCEPTION_CANCEL = "PERCEPTION_CANCEL"
     CLIP_CUT = "CLIP_CUT"
     CLIP_STATE = "CLIP_STATE"
     CLIP_EXPORT = "CLIP_EXPORT"
+    CLIP_PURGE = "CLIP_PURGE"
     RETENTION_REGISTER = "RETENTION_REGISTER"
     RETENTION_COMMAND = "RETENTION_COMMAND"
+    RETENTION_HOLD = "RETENTION_HOLD"
 
 
 class CaseDataKind(str, Enum):
     ROUTING_STATE = "ROUTING_STATE"
     ROUTING_RUN = "ROUTING_RUN"
+    ROUTING_INPUT = "ROUTING_INPUT"
     ROUTE_REVISION = "ROUTE_REVISION"
     PROBE_REQUEST = "PROBE_REQUEST"
     TRACKLET = "TRACKLET"
     CANDIDATE = "CANDIDATE"
     OPERATOR_DECISION = "OPERATOR_DECISION"
+    OPERATOR_DECISION_REVOCATION = "OPERATOR_DECISION_REVOCATION"
+    LEGAL_HOLD = "LEGAL_HOLD"
+    LEGAL_HOLD_RELEASE = "LEGAL_HOLD_RELEASE"
     ARTIFACT = "ARTIFACT"
+    ARTIFACT_INTENT = "ARTIFACT_INTENT"
 
 
 class CaseDataRecord(DomainModel):
@@ -188,6 +214,26 @@ class AuditEvent(DomainModel):
     @classmethod
     def _aware(cls, value: datetime) -> datetime:
         return _utc(value)  # type: ignore[return-value]
+
+
+class LegalHoldRecord(DomainModel):
+    hold_id: str
+    case_id: str
+    external_ticket_id: str
+    reason: str
+    set_by: str
+    set_at: datetime
+    active: bool = True
+    release_pending: bool = False
+    released_by: str | None = None
+    released_at: datetime | None = None
+    release_id: str | None = None
+    release_reason: str | None = None
+
+    @field_validator("set_at", "released_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return _utc(value)
 
 
 class JobRecord(DomainModel):
@@ -307,6 +353,9 @@ class CaseRecord(DomainModel):
     deleted_at: datetime | None = None
     next_heartbeat_at: datetime | None = None
     content_redacted: bool = False
+    replay_capability: str = "INCOMPLETE"
+    legal_holds: dict[str, LegalHoldRecord] = Field(default_factory=dict)
+    pending_retention_action: str | None = None
 
     @field_validator(
         "created_at",
@@ -320,53 +369,3 @@ class CaseRecord(DomainModel):
     @classmethod
     def _aware(cls, value: datetime | None) -> datetime | None:
         return _utc(value)
-
-
-class RouteMapView(DomainModel):
-    floor_id: str
-    mime_type: str
-    url: str
-    alt_text: str
-    width: int
-    height: int
-
-
-class CaseSummary(DomainModel):
-    case_id: str
-    target_id: str
-    lifecycle: CaseLifecycle
-    revision: int
-    route_revision: int
-    mode: str | None = None
-    site_id: str
-    site_version: str
-    created_at: datetime
-    updated_at: datetime
-
-    @field_validator("created_at", "updated_at", mode="after")
-    @classmethod
-    def _aware_summary_times(cls, value: datetime) -> datetime:
-        return _utc(value)  # type: ignore[return-value]
-
-
-class CaseView(DomainModel):
-    case_id: str
-    revision: int
-    route_revision: int
-    lifecycle: CaseLifecycle
-    mode: str | None = None
-    done: bool = False
-    stop_reason: str | None = None
-    best_hypothesis: dict[str, Any] | None = None
-    alternatives: list[dict[str, Any]] = Field(default_factory=list)
-    candidates: list[dict[str, Any]] = Field(default_factory=list)
-    estimate: dict[str, Any] | None = None
-    route_presentation: dict[str, Any] | None = None
-    rendered_route_maps: list[RouteMapView] = Field(default_factory=list)
-    clips: list[dict[str, Any]] = Field(default_factory=list)
-    export: dict[str, Any] | None = None
-    search_progress: dict[str, Any] = Field(default_factory=dict)
-    live: dict[str, Any] | None = None
-    watch: list[dict[str, Any]] = Field(default_factory=list)
-    unobserved_windows: list[dict[str, Any]] = Field(default_factory=list)
-    errors: list[dict[str, Any]] = Field(default_factory=list)

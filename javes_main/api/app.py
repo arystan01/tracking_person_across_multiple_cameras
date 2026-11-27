@@ -3,15 +3,41 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+import time
+from collections.abc import Callable, Iterable
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from javes_contracts import (
+    AuditExportManifest,
+    AuditExportRequest,
     CaseCommandBody,
+    CaseDetailView,
     CreateCaseBody,
+    CreateLegalHoldBody,
+    LegalHoldView,
     LiveFeedUpdate,
+    ProblemDetails,
+    ReferenceImageUploadResponse,
     ProbeResult,
+    RevokeDecisionBody,
+    ReleaseLegalHoldBody,
+    ServiceHealthResponse,
+    SiteCatalogCamera,
+    SiteCatalogEntry,
+    RotationStatusResponse,
+    DecisionRecordView,
     ReviewDecisionBody,
     WorkerClaimRequest,
     WorkerClaimResponse,
@@ -21,18 +47,24 @@ from javes_contracts import (
     WorkerTaskFailureRequest,
     WorkerTaskResultRequest,
 )
+from javes_contracts.conventions import classify_problem
 from javes_main.application import (
     Actor,
+    AuditExportService,
     AuthenticationError,
     AuthorizationError,
     AuthService,
     CaseManager,
     MetricsService,
+    ReplayEvidenceIncomplete,
+    ReferenceImageUploadService,
+    ReferenceUploadError,
     LeaseError,
     WorkerTaskService,
 )
 from javes_main.domain import CaseLifecycle, CaseSummary, CaseView
 from javes_main.persistence import RevisionConflict
+from javes_main.observability import redact
 from javes_main.scheduler import SchedulerRunner
 
 from .auth import (
@@ -48,11 +80,25 @@ from .auth import (
     require_same_actor,
     user_view,
 )
+from .middleware import install_boundary_middleware
+from javes_telemetry import (
+    current_runtime,
+    instrument_fastapi,
+    operation,
+    record_counter,
+    record_histogram,
+)
+from javes_security import RotationWindow
+from javes_main.application.reference_uploads import MAX_UPLOAD_BYTES
 
 
-async def _idempotency(value: str | None = Header(default=None, alias="idempotency-key")) -> str:
+async def _idempotency(
+    value: str | None = Header(default=None, alias="idempotency-key")
+) -> str:
     if not value or not value.strip():
-        raise HTTPException(status_code=400, detail="idempotency-key header is required")
+        raise HTTPException(
+            status_code=400, detail="idempotency-key header is required"
+        )
     value = value.strip()
     if len(value) > 200:
         raise HTTPException(status_code=400, detail="idempotency-key is too long")
@@ -65,21 +111,98 @@ def create_app(
     auth: AuthService,
     scheduler: SchedulerRunner | None = None,
     run_fake_jobs_inline: bool = False,
-    worker_tokens: dict[str, str] | None = None,
+    worker_tokens: dict[str, str | Iterable[str] | RotationWindow] | None = None,
     worker_lease_secret: str | None = None,
+    worker_lease_secret_previous: str | None = None,
+    worker_lease_secret_previous_valid_until=None,
+    require_https: bool = False,
+    trusted_proxies: Iterable[str] = (),
+    cors_origins: Iterable[str] = (),
+    allowed_site_versions: Iterable[tuple[str, str]] = (),
+    rotation_status: dict | Callable[[], dict] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="JAVES-AI Controls", version="1.0.0-alpha")
+
+    @app.middleware("http")
+    async def reference_upload_body_limit(request: Request, call_next):
+        if (
+            request.method == "POST"
+            and request.url.path.endswith("/reference-image")
+        ):
+            raw_length = request.headers.get("content-length")
+            if raw_length is not None:
+                try:
+                    request_bytes = int(raw_length)
+                except ValueError:
+                    request_bytes = -1
+                if request_bytes < 0 or request_bytes > MAX_UPLOAD_BYTES + 64 * 1024:
+                    return JSONResponse(
+                        status_code=413,
+                        media_type="application/problem+json",
+                        content={
+                            "type": "urn:javes:problem:reference-upload-invalid",
+                            "title": "Reference Image Upload Error",
+                            "status": 413,
+                            "detail": "reference upload request is too large",
+                            "code": "REFERENCE_UPLOAD_INVALID",
+                            "retryable": False,
+                        },
+                    )
+        return await call_next(request)
+
+    origins = tuple(cors_origins)
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PUT"],
+            allow_headers=[
+                "authorization",
+                "content-type",
+                "idempotency-key",
+                "x-request-id",
+                "traceparent",
+            ],
+            expose_headers=["x-request-id", "traceparent"],
+            max_age=600,
+        )
+    install_boundary_middleware(
+        app, require_https=require_https, trusted_proxies=trusted_proxies
+    )
     current_actor = BearerAuthenticator(auth)
     metrics = MetricsService(manager.repository, manager.clock)
     configured_worker_tokens = dict(worker_tokens or {})
+
+    def current_rotation_status() -> dict:
+        value = rotation_status() if callable(rotation_status) else rotation_status
+        return dict(value or {})
+
     task_service = WorkerTaskService(
         repository=manager.repository,
         manager=manager,
         clock=manager.clock,
         lease_secret=worker_lease_secret or "development-only-worker-lease-secret",
+        lease_secret_previous=worker_lease_secret_previous,
+        lease_secret_previous_valid_until=worker_lease_secret_previous_valid_until,
+    )
+    audit_exports = AuditExportService(
+        repository=manager.repository,
+        artifacts=manager.artifacts,
+        clock=manager.clock,
+        ids=manager.ids,
+        register_artifact=manager.register_audit_artifact,
+    )
+    reference_uploads = ReferenceImageUploadService(
+        repository=manager.repository,
+        artifacts=manager.artifacts,
+        clock=manager.clock,
+        ids=manager.ids,
     )
     if run_fake_jobs_inline and scheduler is None:
         raise ValueError("run_fake_jobs_inline requires a SchedulerRunner")
+
+    site_allowlist = tuple(dict.fromkeys(allowed_site_versions))
 
     def require_worker(
         component: str,
@@ -87,14 +210,26 @@ def create_app(
         *,
         allow_service_actor: bool = False,
     ) -> None:
-        component_token = configured_worker_tokens.get(component)
+        configured = configured_worker_tokens.get(component)
+        component_tokens = (
+            configured.accepted()
+            if isinstance(configured, RotationWindow)
+            else (
+                (configured,)
+                if isinstance(configured, str)
+                else tuple(configured or ())
+            )
+        )
         bearer_token = None
         if authorization and authorization.lower().startswith("bearer "):
             bearer_token = authorization[7:].strip()
         authenticated = (
-            component_token is not None
+            bool(component_tokens)
             and bearer_token is not None
-            and secrets.compare_digest(bearer_token, component_token)
+            and any(
+                secrets.compare_digest(bearer_token, token)
+                for token in component_tokens
+            )
         )
         if not authenticated and authorization and allow_service_actor:
             try:
@@ -105,11 +240,11 @@ def create_app(
             except (AuthenticationError, HTTPException):
                 authenticated = False
         if not authenticated:
-            raise HTTPException(status_code=401, detail="valid worker token is required")
+            raise HTTPException(
+                status_code=401, detail="valid worker token is required"
+            )
 
-    def iam_idempotency(
-        key: str, action: str, payload: dict, operation
-    ) -> dict:
+    def iam_idempotency(key: str, action: str, payload: dict, operation) -> dict:
         storage_key = f"iam:{action}:{key}"
         fingerprint = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -125,16 +260,21 @@ def create_app(
             auth.repository.remember_idempotency(storage_key, fingerprint, response)
             return response
 
-    def problem(status: int, title: str, detail: str, problem_type: str) -> JSONResponse:
+    def problem(
+        status: int, title: str, detail: str, problem_type: str
+    ) -> JSONResponse:
+        policy = classify_problem(problem_type, status)
         return JSONResponse(
             status_code=status,
             media_type="application/problem+json",
-            content={
-                "type": f"urn:javes:problem:{problem_type}",
-                "title": title,
-                "status": status,
-                "detail": detail,
-            },
+            content=ProblemDetails(
+                type=f"urn:javes:problem:{problem_type}",
+                title=title,
+                status=status,
+                detail=str(redact(detail)),
+                code=policy.code,
+                retryable=policy.retryable,
+            ).model_dump(mode="json", exclude_none=True),
         )
 
     @app.exception_handler(KeyError)
@@ -148,6 +288,31 @@ def create_app(
     @app.exception_handler(LeaseError)
     async def lease_error_handler(_, exc: LeaseError):
         return problem(409, "Invalid Worker Lease", str(exc), "worker-lease")
+
+    @app.exception_handler(ReplayEvidenceIncomplete)
+    async def replay_evidence_handler(_, exc: ReplayEvidenceIncomplete):
+        return problem(
+            409,
+            "Replay Evidence Incomplete",
+            str(exc),
+            "replay-evidence-incomplete",
+        )
+
+    @app.exception_handler(ReferenceUploadError)
+    async def reference_upload_error_handler(_, exc: ReferenceUploadError):
+        slug = exc.code.lower().replace("_", "-")
+        return JSONResponse(
+            status_code=exc.status,
+            media_type="application/problem+json",
+            content=ProblemDetails(
+                type=f"urn:javes:problem:{slug}",
+                title="Reference Image Upload Error",
+                status=exc.status,
+                detail=str(redact(str(exc))),
+                code=exc.code,
+                retryable=False,
+            ).model_dump(mode="json", exclude_none=True),
+        )
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_, exc: ValueError):
@@ -163,7 +328,12 @@ def create_app(
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_: Request, exc: HTTPException):
-        return problem(exc.status_code, "HTTP Error", str(exc.detail), "http")
+        problem_type = {
+            429: "rate-limit",
+            503: "service-unavailable",
+            504: "timeout",
+        }.get(exc.status_code, "http")
+        return problem(exc.status_code, "HTTP Error", str(exc.detail), problem_type)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_: Request, exc: RequestValidationError):
@@ -175,27 +345,113 @@ def create_app(
                 "title": "Validation Error",
                 "status": 422,
                 "detail": "request payload is invalid",
-                "errors": exc.errors(),
+                "code": "VALIDATION_FAILED",
+                "retryable": False,
+                "errors": [
+                    {
+                        "type": item.get("type"),
+                        "loc": item.get("loc"),
+                        "msg": item.get("msg"),
+                    }
+                    for item in exc.errors()
+                ],
             },
         )
 
-    @app.get("/health/live")
+    @app.get(
+        "/health/live",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def live() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/health/ready")
+    @app.get(
+        "/health/ready",
+        response_model=ServiceHealthResponse,
+        response_model_exclude_none=True,
+    )
     async def ready() -> dict[str, str]:
         try:
             manager.repository.list_cases()
             manager.repository.list_users()
         except Exception as exc:
-            raise HTTPException(status_code=503, detail="persistence is unavailable") from exc
-        return {"status": "ready"}
+            raise HTTPException(
+                status_code=503, detail="persistence is unavailable"
+            ) from exc
+        telemetry_ready, telemetry_status = current_runtime().readiness()
+        if not telemetry_ready:
+            raise HTTPException(status_code=503, detail="telemetry is unavailable")
+        stale_rotations = [
+            component
+            for component, status in current_rotation_status().items()
+            if status.get("previous_key_id") and not status.get("previous_accepted")
+        ]
+        if stale_rotations:
+            raise HTTPException(
+                status_code=503, detail="token rotation overlap expired"
+            )
+        return {"status": "ready", "telemetry": telemetry_status}
 
     @app.get("/internal/v1/metrics")
     async def operational_metrics(actor: Actor = Depends(current_actor)) -> dict:
         require_permission(actor, "audit.read")
         return metrics.snapshot()
+
+    @app.get(
+        "/internal/v1/rotation-status",
+        response_model=RotationStatusResponse,
+    )
+    async def service_rotation_status(
+        actor: Actor = Depends(current_actor),
+    ) -> dict:
+        require_permission(actor, "audit.read")
+        return current_rotation_status()
+
+    @app.post("/v1/audit/exports", response_model=AuditExportManifest, status_code=201)
+    async def create_audit_export(
+        body: AuditExportRequest,
+        actor: Actor = Depends(current_actor),
+    ) -> AuditExportManifest:
+        require_permission(actor, "audit.export")
+        with operation(
+            "audit.export", {"component": "main", "operation": "audit_export"}
+        ):
+            result = audit_exports.create(body, actor_id=actor.user_id)
+        record_counter(
+            "javes.audit.exports",
+            attributes={"component": "main", "outcome": "completed"},
+        )
+        return result
+
+    @app.get("/v1/audit/exports/{export_id}/events")
+    async def download_audit_events(
+        export_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> StreamingResponse:
+        require_permission(actor, "audit.export")
+        chunks, mime_type = audit_exports.iter_read(export_id, "events")
+
+        async def body():
+            for chunk in chunks:
+                yield chunk
+
+        return StreamingResponse(
+            body(),
+            media_type=mime_type,
+            headers={
+                "content-disposition": f'attachment; filename="{export_id}.ndjson"'
+            },
+        )
+
+    @app.get("/v1/audit/exports/{export_id}/manifest")
+    async def download_audit_manifest(
+        export_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> Response:
+        require_permission(actor, "audit.export")
+        data, mime_type = audit_exports.read(export_id, "manifest")
+        return Response(data, media_type=mime_type)
 
     @app.post("/v1/auth/login", response_model=LoginResponse)
     async def login(body: LoginRequest) -> LoginResponse:
@@ -340,6 +596,95 @@ def create_app(
             ),
         )
 
+    @app.post(
+        "/v1/cases/{case_id}/reference-image",
+        response_model=ReferenceImageUploadResponse,
+        status_code=201,
+    )
+    async def upload_reference_image(
+        case_id: str,
+        file: UploadFile = File(...),
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> ReferenceImageUploadResponse:
+        require_permission(actor, "case.create")
+        started = time.monotonic()
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
+        await file.close()
+        try:
+            result = reference_uploads.upload(
+                case_id=case_id,
+                operator_id=actor.user_id,
+                idempotency_key=idempotency_key,
+                data=data,
+                content_type=file.content_type,
+            )
+        except ReferenceUploadError as exc:
+            reference_uploads.record_rejection(case_id, actor.user_id, exc.code)
+            record_counter(
+                "javes.reference_uploads",
+                attributes={
+                    "component": "main",
+                    "operation": "upload",
+                    "outcome": "rejected",
+                    "error_code": exc.code,
+                },
+            )
+            raise
+        record_counter(
+            "javes.reference_uploads",
+            attributes={
+                "component": "main",
+                "operation": "upload",
+                "outcome": "accepted",
+            },
+        )
+        record_histogram(
+            "javes.reference_upload.size_bytes",
+            float(min(len(data), MAX_UPLOAD_BYTES + 1)),
+            attributes={"component": "main", "operation": "upload"},
+        )
+        record_histogram(
+            "javes.reference_upload.duration_s",
+            time.monotonic() - started,
+            attributes={"component": "main", "operation": "upload"},
+        )
+        return result
+
+    @app.get("/v1/sites", response_model=list[SiteCatalogEntry])
+    async def list_sites(
+        actor: Actor = Depends(current_actor),
+    ) -> list[SiteCatalogEntry]:
+        require_permission(actor, "case.create")
+        values: list[SiteCatalogEntry] = []
+        for site_id, site_version in site_allowlist:
+            graph = manager.sites.get_graph(site_id, site_version)
+            snapshot_method = getattr(manager.sites, "site_snapshot", None)
+            checksum = None
+            if callable(snapshot_method):
+                checksum = snapshot_method(site_id, site_version).checksum
+            cameras = [
+                SiteCatalogCamera(
+                    camera_id=camera.id,
+                    display_name=camera.id,
+                    floor_id=camera.floor,
+                    zone_id=camera.zone or None,
+                )
+                for camera in sorted(graph.cameras.values(), key=lambda item: item.id)
+            ]
+            values.append(
+                SiteCatalogEntry(
+                    site_id=site_id,
+                    site_version=site_version,
+                    display_name=site_id,
+                    timezone=graph.timezone,
+                    checksum=checksum,
+                    cameras=cameras,
+                    zones=sorted({item.zone for item in graph.cameras.values() if item.zone}),
+                )
+            )
+        return values
+
     @app.post("/v1/cases", response_model=CaseView, status_code=201)
     async def create_case(
         body: CreateCaseBody,
@@ -348,17 +693,43 @@ def create_app(
     ) -> CaseView:
         require_permission(actor, "case.create")
         require_same_actor(actor, body.operator_id)
-        view = manager.create_case(body, idempotency_key=idempotency_key)
+        view = manager.create_case(
+            body,
+            idempotency_key=idempotency_key,
+            reference_owner_id=actor.user_id,
+        )
+        record_counter(
+            "javes.reference_uploads",
+            attributes={
+                "component": "main",
+                "operation": "consume",
+                "outcome": "accepted",
+            },
+        )
         if run_fake_jobs_inline:
             assert scheduler is not None
             scheduler.run_case_once(body.case_id)
             view = manager.get_view(body.case_id)
         return view
 
-    @app.get("/v1/cases/{case_id}")
-    async def get_case(case_id: str, actor: Actor = Depends(current_actor)) -> dict:
+    @app.get("/v1/cases/{case_id}", response_model=CaseDetailView)
+    async def get_case(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> CaseDetailView:
         require_permission(actor, "case.read")
         return manager.get_case(case_id)
+
+    @app.get("/v1/cases/{case_id}/reference")
+    async def reference_image(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_reference_media(case_id)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
 
     @app.get("/v1/cases", response_model=list[CaseSummary])
     async def list_cases(
@@ -374,14 +745,61 @@ def create_app(
         return manager.get_view(case_id)
 
     @app.get("/v1/cases/{case_id}/events")
-    async def get_events(case_id: str, actor: Actor = Depends(current_actor)) -> list[dict]:
+    async def get_events(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> list[dict]:
         require_permission(actor, "case.events.read")
         return manager.get_events(case_id)
 
     @app.get("/v1/cases/{case_id}/clips")
-    async def get_clips(case_id: str, actor: Actor = Depends(current_actor)) -> list[dict]:
+    async def get_clips(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> list[dict]:
         require_permission(actor, "case.read")
         return manager.get_clips(case_id)
+
+    @app.get("/v1/cases/{case_id}/clips/{clip_id}")
+    async def clip_media(
+        case_id: str,
+        clip_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_clip_media(case_id, clip_id)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
+
+    @app.get("/v1/cases/{case_id}/export")
+    async def export_media(
+        case_id: str, actor: Actor = Depends(current_actor)
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_export_media(case_id)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
+
+    @app.get(
+        "/v1/cases/{case_id}/candidates/{candidate_id}/thumbnails/{index}"
+    )
+    async def candidate_thumbnail(
+        case_id: str,
+        candidate_id: str,
+        index: int,
+        actor: Actor = Depends(current_actor),
+    ) -> Response:
+        require_permission(actor, "case.read")
+        data, mime_type = manager.get_candidate_thumbnail(case_id, candidate_id, index)
+        return Response(
+            content=data,
+            media_type=mime_type,
+            headers={"cache-control": "private, no-store"},
+        )
 
     @app.get("/v1/cases/{case_id}/live")
     async def live_stream(
@@ -414,6 +832,130 @@ def create_app(
             scheduler.routing.drain()
             scheduler.outbox.drain()
             view = manager.get_view(case_id)
+        return view
+
+    @app.get(
+        "/v1/cases/{case_id}/decisions",
+        response_model=list[DecisionRecordView],
+    )
+    async def decision_history(
+        case_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> list[DecisionRecordView]:
+        require_permission(actor, "case.review")
+        return manager.list_decisions(case_id)
+
+    @app.post(
+        "/v1/cases/{case_id}/decisions/{decision_id}/revoke",
+        response_model=CaseView,
+    )
+    async def revoke_decision(
+        case_id: str,
+        decision_id: str,
+        body: RevokeDecisionBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> CaseView:
+        require_permission(actor, "case.review")
+        require_same_actor(actor, body.operator_id)
+        if body.decision_id != decision_id:
+            raise ValueError("path decision_id does not match request body")
+        with operation("decision.replay", {"component": "main", "operation": "revoke"}):
+            view = manager.revoke_decision(
+                case_id,
+                body,
+                idempotency_key=idempotency_key,
+            )
+        record_counter(
+            "javes.decision.replay",
+            attributes={"component": "main", "outcome": "accepted"},
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.routing.drain()
+            scheduler.outbox.drain()
+            view = manager.get_view(case_id)
+        return view
+
+    @app.get(
+        "/v1/cases/{case_id}/legal-holds",
+        response_model=list[LegalHoldView],
+    )
+    async def legal_holds(
+        case_id: str,
+        actor: Actor = Depends(current_actor),
+    ) -> list[LegalHoldView]:
+        require_permission(actor, "case.legal_hold.manage")
+        return manager.list_legal_holds(case_id)
+
+    @app.post(
+        "/v1/cases/{case_id}/legal-holds",
+        response_model=LegalHoldView,
+        status_code=201,
+    )
+    async def set_legal_hold(
+        case_id: str,
+        body: CreateLegalHoldBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> LegalHoldView:
+        require_permission(actor, "case.legal_hold.manage")
+        require_same_actor(actor, body.operator_id)
+        with operation("legal_hold.set", {"component": "main", "operation": "set"}):
+            view = manager.set_legal_hold(
+                case_id, body, idempotency_key=idempotency_key
+            )
+        record_counter(
+            "javes.legal_hold.operations",
+            attributes={"component": "main", "operation": "set", "outcome": "accepted"},
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.outbox.drain()
+            view = next(
+                item
+                for item in manager.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
+        return view
+
+    @app.post(
+        "/v1/cases/{case_id}/legal-holds/{hold_id}/release",
+        response_model=LegalHoldView,
+    )
+    async def release_legal_hold(
+        case_id: str,
+        hold_id: str,
+        body: ReleaseLegalHoldBody,
+        idempotency_key: str = Depends(_idempotency),
+        actor: Actor = Depends(current_actor),
+    ) -> LegalHoldView:
+        require_permission(actor, "case.legal_hold.manage")
+        require_same_actor(actor, body.operator_id)
+        if body.hold_id != hold_id:
+            raise ValueError("path hold_id does not match request body")
+        with operation(
+            "legal_hold.release", {"component": "main", "operation": "release"}
+        ):
+            view = manager.release_legal_hold(
+                case_id, body, idempotency_key=idempotency_key
+            )
+        record_counter(
+            "javes.legal_hold.operations",
+            attributes={
+                "component": "main",
+                "operation": "release",
+                "outcome": "accepted",
+            },
+        )
+        if run_fake_jobs_inline:
+            assert scheduler is not None
+            scheduler.outbox.drain()
+            view = next(
+                item
+                for item in manager.list_legal_holds(case_id)
+                if item.hold_id == body.hold_id
+            )
         return view
 
     def case_command(
@@ -572,4 +1114,5 @@ def create_app(
         require_worker(component, authorization)
         return task_service.fail(component, task_id, body)
 
+    instrument_fastapi(app)
     return app

@@ -1,0 +1,374 @@
+{
+  "$defs": {
+    "Anchors": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Confirm",
+          "type": "array"
+        },
+        "last_known_bbox_xywh": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Bbox Xywh"
+        },
+        "last_known_camera": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Camera"
+        },
+        "last_known_footpoint_px": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Footpoint Px"
+        },
+        "last_known_map_position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MapPosition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_known_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Time"
+        },
+        "last_known_zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Zone"
+        },
+        "operator_closed": {
+          "default": false,
+          "title": "Operator Closed",
+          "type": "boolean"
+        },
+        "reject": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reject",
+          "type": "array"
+        },
+        "replay_evidence_only": {
+          "default": false,
+          "title": "Replay Evidence Only",
+          "type": "boolean"
+        },
+        "review_only": {
+          "default": false,
+          "title": "Review Only",
+          "type": "boolean"
+        }
+      },
+      "title": "Anchors",
+      "type": "object"
+    },
+    "CaseInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "last_known_bbox_xywh": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Bbox Xywh"
+        },
+        "last_known_camera": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Camera"
+        },
+        "last_known_footpoint_px": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Footpoint Px"
+        },
+        "last_known_map_position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MapPosition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_known_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Time"
+        },
+        "last_known_zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Known Zone"
+        },
+        "profile": {
+          "default": "ADULT",
+          "enum": [
+            "ADULT",
+            "CHILD",
+            "ELDERLY"
+          ],
+          "title": "Profile",
+          "type": "string"
+        },
+        "start_time": {
+          "format": "date-time",
+          "title": "Start Time",
+          "type": "string"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        },
+        "window_end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window End"
+        },
+        "window_start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Start"
+        }
+      },
+      "required": [
+        "case_id",
+        "target_id",
+        "start_time"
+      ],
+      "title": "CaseInfo",
+      "type": "object"
+    },
+    "MapPosition": {
+      "additionalProperties": false,
+      "properties": {
+        "error_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Error M",
+          "type": "number"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "floor_id"
+      ],
+      "title": "MapPosition",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "anchors": {
+      "$ref": "#/$defs/Anchors"
+    },
+    "case": {
+      "$ref": "#/$defs/CaseInfo"
+    },
+    "contract_version": {
+      "const": "routing-init.v1",
+      "default": "routing-init.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "now": {
+      "format": "date-time",
+      "title": "Now",
+      "type": "string"
+    },
+    "params_version": {
+      "title": "Params Version",
+      "type": "string"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "site_version": {
+      "title": "Site Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "case",
+    "anchors",
+    "site_id",
+    "site_version",
+    "params_version",
+    "now"
+  ],
+  "title": "RoutingInitRequest",
+  "type": "object"
+}

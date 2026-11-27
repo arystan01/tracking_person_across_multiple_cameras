@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import math
 import os
 import shutil
+import time
 from collections import Counter
 from pathlib import Path
 from statistics import median
@@ -16,9 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from javes_contracts import Estimate, SiteGraph
 from javes_routing.core.ground import floor_scale, point_to_polyline_distance_m
+from javes_routing.core.site import validate_corridor_geometry
 
 
 ALL_NVIDIA_CAMERAS = tuple(f"Cam{index:03d}" for index in range(1, 13))
+EVALUATION_REPORT_SCHEMA_VERSION = "javes-real-cv-evaluation.v1"
 
 
 class EvalModel(BaseModel):
@@ -228,6 +232,8 @@ class ReachabilityMetric(EvalModel):
     negative_total: int
     probability_mass: float
     true_branch_rank: int | None = None
+    geometry_errors: list[str] = Field(default_factory=list)
+    early_arrival_errors: list[str] = Field(default_factory=list)
 
     @property
     def containment_ratio(self) -> float:
@@ -282,6 +288,74 @@ def checkpoint_in_reachable_area(
     return False
 
 
+def reachable_geometry_errors(
+    estimate: Estimate,
+    graph: SiteGraph,
+) -> list[str]:
+    """Return any emitted corridor that violates immutable floor geometry."""
+    floors = {
+        floor.id: floor
+        for floor in (graph.map.floors if graph.map is not None else [])
+    }
+    errors: list[str] = []
+    for segment in estimate.reachable_segments:
+        if len(segment.points) < 2:
+            errors.append(f"{segment.edge_id}: corridor has fewer than two points")
+            continue
+        if segment.floor_id is None or segment.floor_id not in floors:
+            errors.append(f"{segment.edge_id}: unknown floor {segment.floor_id!r}")
+            continue
+        try:
+            validate_corridor_geometry(
+                f"Reachable segment '{segment.edge_id}'",
+                segment.points,
+                segment.width_m,
+                floors[segment.floor_id],
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def early_arrival_errors(
+    checkpoints: list[OracleCheckpoint],
+    estimate: Estimate,
+    graph: SiteGraph,
+    *,
+    max_speed_mps: float,
+) -> list[str]:
+    """Reject corridors that reach a checkpoint faster than a straight-line bound."""
+    origin = estimate.reachable_origin
+    horizon_s = estimate.reachable_horizon_s
+    if origin is None or horizon_s is None or max_speed_mps <= 0.0:
+        return []
+    scale = floor_scale(graph, origin.floor_id)
+    if scale is None:
+        return []
+    errors: list[str] = []
+    for checkpoint in checkpoints:
+        if not checkpoint_in_reachable_area(checkpoint, estimate, graph):
+            continue
+        x, y, floor_id, checkpoint_error_m = checkpoint_map_position(
+            checkpoint, graph
+        )
+        if floor_id != origin.floor_id:
+            continue
+        lower_bound_m = max(
+            math.hypot(x - origin.x, y - origin.y) * scale
+            - origin.error_m
+            - checkpoint_error_m,
+            0.0,
+        )
+        minimum_s = lower_bound_m / max_speed_mps
+        if horizon_s + 1e-6 < minimum_s:
+            errors.append(
+                f"{checkpoint.camera_id}@{checkpoint.time_s:.3f}s appears after "
+                f"{horizon_s:.3f}s but requires at least {minimum_s:.3f}s"
+            )
+    return errors
+
+
 def _point_in_polygon(
     point: tuple[float, float], polygon: list[tuple[float, float]]
 ) -> bool:
@@ -306,6 +380,7 @@ def evaluate_reachability(
     negative: list[OracleCheckpoint],
     *,
     true_edge_ids: list[str] | None = None,
+    max_speed_mps: float = 2.0,
 ) -> ReachabilityMetric:
     mass = sum(item.probability for item in estimate.reachable_nodes)
     if estimate.reachable_nodes and not math.isclose(mass, 1.0, abs_tol=1e-6):
@@ -315,6 +390,13 @@ def evaluate_reachability(
     )
     negative_rejected = sum(
         not checkpoint_in_reachable_area(item, estimate, graph) for item in negative
+    )
+    geometry_errors = reachable_geometry_errors(estimate, graph)
+    timing_errors = early_arrival_errors(
+        positive,
+        estimate,
+        graph,
+        max_speed_mps=max_speed_mps,
     )
     rank = None
     if true_edge_ids:
@@ -335,6 +417,8 @@ def evaluate_reachability(
         negative_total=len(negative),
         probability_mass=mass,
         true_branch_rank=rank,
+        geometry_errors=geometry_errors,
+        early_arrival_errors=timing_errors,
     )
 
 
@@ -348,10 +432,23 @@ class ScenarioEvaluation(EvalModel):
     reachability: list[ReachabilityMetric] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     cache_hit: bool = False
+    cache_hits: int = Field(default=0, ge=0)
+    cache_misses: int = Field(default=0, ge=0)
+    duration_s: float = Field(default=0.0, ge=0.0)
 
 
 class EvaluationSummary(EvalModel):
+    schema_version: Literal["javes-real-cv-evaluation.v1"] = (
+        EVALUATION_REPORT_SCHEMA_VERSION
+    )
     scenarios: list[ScenarioEvaluation]
+    active_scenarios: int = Field(ge=0)
+    passed_scenarios: int = Field(ge=0)
+    failed_scenarios: int = Field(ge=0)
+    quarantined_scenarios: int = Field(default=0, ge=0)
+    extraction_cache_hits: int = Field(default=0, ge=0)
+    extraction_cache_misses: int = Field(default=0, ge=0)
+    duration_s: float = Field(default=0.0, ge=0.0)
     median_position_error_m: float
     p95_position_error_m: float
     false_identity_rate: float
@@ -360,7 +457,43 @@ class EvaluationSummary(EvalModel):
     passed: bool
 
 
-def aggregate_evaluation(results: list[ScenarioEvaluation]) -> EvaluationSummary:
+def business_result_document(summary: EvaluationSummary) -> dict:
+    """Return the deterministic result surface shared by cold and warm runs.
+
+    Cache counters, cache-hit flags and wall-clock durations are deliberately
+    excluded.  Everything that can change release acceptance remains present.
+    """
+
+    payload = summary.model_dump(mode="json")
+    for key in (
+        "extraction_cache_hits",
+        "extraction_cache_misses",
+        "duration_s",
+    ):
+        payload.pop(key, None)
+    for scenario in payload["scenarios"]:
+        for key in ("cache_hit", "cache_hits", "cache_misses", "duration_s"):
+            scenario.pop(key, None)
+    return payload
+
+
+def business_result_sha256(summary: EvaluationSummary) -> str:
+    encoded = json.dumps(
+        business_result_document(summary),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def aggregate_evaluation(
+    results: list[ScenarioEvaluation],
+    *,
+    quarantined_scenarios: int = 0,
+    extraction_cache_hits: int | None = None,
+    extraction_cache_misses: int | None = None,
+    duration_s: float | None = None,
+) -> EvaluationSummary:
     errors = sorted(
         error for result in results for error in result.positional_errors_m
     )
@@ -377,6 +510,10 @@ def aggregate_evaluation(results: list[ScenarioEvaluation]) -> EvaluationSummary
     containment = contained / checkpoints if checkpoints else 0.0
     top2_recall = top2 / len(ranked) if ranked else 0.0
     false_rate = false_count / association_count if association_count else 0.0
+    reachable_geometry_valid = all(
+        not metric.geometry_errors and not metric.early_arrival_errors
+        for metric in reachability
+    )
     passed = bool(results) and all(item.passed for item in results) and all(
         (
             median_error <= 0.75,
@@ -384,10 +521,31 @@ def aggregate_evaluation(results: list[ScenarioEvaluation]) -> EvaluationSummary
             false_rate <= 0.05,
             containment >= 0.90,
             top2_recall >= 0.90,
+            reachable_geometry_valid,
         )
     )
+    passed_scenarios = sum(item.passed for item in results)
     return EvaluationSummary(
         scenarios=results,
+        active_scenarios=len(results),
+        passed_scenarios=passed_scenarios,
+        failed_scenarios=len(results) - passed_scenarios,
+        quarantined_scenarios=quarantined_scenarios,
+        extraction_cache_hits=(
+            sum(item.cache_hits for item in results)
+            if extraction_cache_hits is None
+            else extraction_cache_hits
+        ),
+        extraction_cache_misses=(
+            sum(item.cache_misses for item in results)
+            if extraction_cache_misses is None
+            else extraction_cache_misses
+        ),
+        duration_s=(
+            sum(item.duration_s for item in results)
+            if duration_s is None
+            else duration_s
+        ),
         median_position_error_m=median_error,
         p95_position_error_m=p95_error,
         false_identity_rate=false_rate,
@@ -414,6 +572,12 @@ def write_evaluation_report(output: Path, summary: EvaluationSummary) -> None:
 <table><thead><tr><th>Scenario</th><th>Split</th><th>Result</th><th>Extraction</th><th>Failures</th></tr></thead><tbody>{rows}</tbody></table>
 <h2>Metrics</h2><pre>{html.escape(payload)}</pre></body></html>"""
     (output / "report.json").write_text(payload, encoding="utf-8")
+    business_payload = business_result_document(summary)
+    business_payload["sha256"] = business_result_sha256(summary)
+    (output / "business-results.json").write_text(
+        json.dumps(business_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     (output / "index.html").write_text(page, encoding="utf-8")
 
 
@@ -497,6 +661,8 @@ def run_real_cv_evaluation(
     """
     import cv2
 
+    evaluation_started = time.monotonic()
+
     from javes_contracts import (
         Anchors,
         ArtifactRef,
@@ -506,6 +672,7 @@ def run_real_cv_evaluation(
         ProbeStatus,
         TargetGalleryCommand,
     )
+    from javes_archive import NvidiaArchiveRegistry
     from javes_main.adapters.artifacts import InMemoryArtifactStore
     from javes_perception import CameraSource, PerceptionSettings, PerceptionWorker
     from javes_perception.core.extraction import FilesystemExtractionCache
@@ -523,15 +690,16 @@ def run_real_cv_evaluation(
     from tests.support.real_cv_e2e import ReportVideo, publish_inspectable_report
 
     fixture = repository_root / "data/nvidia_mtmc/mtmc_12cam"
+    archive_registry = NvidiaArchiveRegistry(fixture)
     video_paths = {
-        camera: fixture / "videos" / f"Warehouse_Synthetic_{camera}.mp4"
+        camera: fixture / archive_registry.manifest.cameras[camera].relative_path
         for camera in ALL_NVIDIA_CAMERAS
     }
     if not all(path.is_file() for path in video_paths.values()):
         raise AssertionError("NVIDIA 12-camera videos are incomplete")
     site_raw = canonical_site(repository_root)
     graph = parse_site(site_raw)
-    base = datetime(2026, 11, 12, 0, 0, tzinfo=timezone.utc)
+    base = archive_registry.manifest.timeline_origin
     cameras = {
         camera: CameraSource(path=str(path), start=base, archive_id=f"nvidia:{camera}")
         for camera, path in video_paths.items()
@@ -574,7 +742,9 @@ def run_real_cv_evaluation(
     for scenario in manifest.scenarios:
         if scenario.quarantined:
             continue
+        scenario_started = time.monotonic()
         before_hits = worker.extraction_cache_hits
+        before_misses = worker.extraction_cache_misses
         system = scenario.system_input
         case_id = f"eval-{scenario.id}"
         reference_bytes = _reference_jpeg(
@@ -797,6 +967,7 @@ def run_real_cv_evaluation(
                     matching,
                     matching_negative,
                     true_edge_ids=outcome.true_edge_ids,
+                    max_speed_mps=params.max_speed,
                 )
                 reachability_metrics.append(metric)
                 if metric.containment_ratio < 0.90:
@@ -811,6 +982,10 @@ def run_real_cv_evaluation(
                     failures.append(
                         f"negative checkpoint included at {outcome.checkpoint_times_s}"
                     )
+                if metric.geometry_errors:
+                    failures.extend(metric.geometry_errors)
+                if metric.early_arrival_errors:
+                    failures.extend(metric.early_arrival_errors)
         finite_errors = [item for item in errors if math.isfinite(item)]
         if len(finite_errors) != len(errors):
             failures.append("one or more oracle checkpoints were not associated")
@@ -897,8 +1072,17 @@ def run_real_cv_evaluation(
                 reachability=reachability_metrics,
                 failures=failures,
                 cache_hit=worker.extraction_cache_hits > before_hits,
+                cache_hits=worker.extraction_cache_hits - before_hits,
+                cache_misses=worker.extraction_cache_misses - before_misses,
+                duration_s=time.monotonic() - scenario_started,
             )
         )
-    summary = aggregate_evaluation(scenario_results)
+    summary = aggregate_evaluation(
+        scenario_results,
+        quarantined_scenarios=sum(item.quarantined for item in manifest.scenarios),
+        extraction_cache_hits=worker.extraction_cache_hits,
+        extraction_cache_misses=worker.extraction_cache_misses,
+        duration_s=time.monotonic() - evaluation_started,
+    )
     write_evaluation_report(output, summary)
     return summary

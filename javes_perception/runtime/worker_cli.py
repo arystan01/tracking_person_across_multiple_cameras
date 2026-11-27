@@ -1,22 +1,33 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
+
+from javes_telemetry import configure_telemetry, shutdown_telemetry
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the JAVES-AI Perception worker")
     parser.add_argument("--main-url", required=True)
-    parser.add_argument("--token", required=True)
+    parser.add_argument(
+        "--token", default=os.environ.get("JAVES_PERCEPTION_WORKER_TOKEN")
+    )
     parser.add_argument("--worker-id", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--artifact-root", required=True)
+    parser.add_argument("--archive-root", required=True)
     parser.add_argument("--state-db", required=True)
     parser.add_argument("--archive-url")
-    parser.add_argument("--archive-token")
+    parser.add_argument(
+        "--archive-token", default=os.environ.get("JAVES_ARCHIVE_SERVICE_TOKEN")
+    )
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    if not args.token:
+        parser.error("--token or JAVES_PERCEPTION_WORKER_TOKEN is required")
+    configure_telemetry("javes-perception-worker")
 
     from javes_main.adapters.artifacts import FileArtifactStore
     from javes_workers import HttpWorkerClient
@@ -38,23 +49,20 @@ def main() -> None:
             args.archive_url,
             args.archive_token,
             camera_ids=set(settings.cameras),
-            artifact_root=args.artifact_root,
+            archive_root=args.archive_root,
         )
-    worker = PerceptionWorker(
-        settings, artifacts, archive=archive, state_store=state
-    )
-    client = HttpWorkerClient(
-        args.main_url, "perception", args.token, args.worker_id
-    )
+    worker = PerceptionWorker(settings, artifacts, archive=archive, state_store=state)
+    client = HttpWorkerClient(args.main_url, "perception", args.token, args.worker_id)
     runner = PerceptionTaskRunner(worker, client, state)
     try:
         while True:
-            processed = runner.run_once()
+            runner.run_once()
             if args.once:
                 break
             time.sleep(args.poll_seconds)
     finally:
         state.close()
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":

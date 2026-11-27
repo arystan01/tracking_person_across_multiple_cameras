@@ -1,0 +1,154 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "description": "Stable storage/archive identity, never a short-lived playback URL.",
+      "properties": {
+        "archive_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archive Id"
+        },
+        "object_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Key"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uri"
+        }
+      },
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "ClipProcessingStatus": {
+      "enum": [
+        "PENDING",
+        "READY",
+        "FAILED",
+        "UNAVAILABLE"
+      ],
+      "title": "ClipProcessingStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifact_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "checksum": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checksum"
+    },
+    "contract_version": {
+      "const": "clip-export-result.v1",
+      "default": "clip-export-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "duration_s": {
+      "default": 0.0,
+      "minimum": 0.0,
+      "title": "Duration S",
+      "type": "number"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "export_request_id": {
+      "title": "Export Request Id",
+      "type": "string"
+    },
+    "missing_clip_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Clip Ids",
+      "type": "array"
+    },
+    "ordered_clip_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ordered Clip Ids",
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/ClipProcessingStatus"
+    }
+  },
+  "required": [
+    "export_request_id",
+    "case_id",
+    "status",
+    "ordered_clip_ids"
+  ],
+  "title": "ExportClipsResult",
+  "type": "object"
+}

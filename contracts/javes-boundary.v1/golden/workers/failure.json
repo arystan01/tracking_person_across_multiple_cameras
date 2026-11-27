@@ -1,0 +1,7 @@
+{
+  "contract_version": "worker-task-failure.v1",
+  "detail": null,
+  "error_code": "UPSTREAM_TIMEOUT",
+  "lease_token": "opaque-example",
+  "retryable": true
+}

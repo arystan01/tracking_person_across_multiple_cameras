@@ -1,0 +1,7 @@
+{
+  "accepted": true,
+  "contract_version": "worker-task-ack.v1",
+  "duplicate": true,
+  "task_id": "task-001",
+  "terminal": true
+}

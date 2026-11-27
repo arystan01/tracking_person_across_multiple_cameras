@@ -788,6 +788,7 @@ class Anchors(ContractModel):
     reject: list[str] = Field(default_factory=list, validation_alias=AliasChoices("reject", "reject_tracklet_ids"))
     operator_closed: bool = False
     review_only: bool = False
+    replay_evidence_only: bool = False
 
     @model_validator(mode="before")
     @classmethod

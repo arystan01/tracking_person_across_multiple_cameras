@@ -33,6 +33,7 @@ WorkerOperation = Literal[
     "CLIP_CUT",
     "CLIP_STATE",
     "CLIP_EXPORT",
+    "CLIP_PURGE",
     "RETENTION_REGISTER",
     "RETENTION_DELETE",
 ]
@@ -55,7 +56,10 @@ class ArtifactManifest(ContractModel):
     size_bytes: int = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: datetime
-    retention_class: Literal["ephemeral", "case_14d", "review_hold"] = "case_14d"
+    retention_class: Literal[
+        "ephemeral", "case_14d", "review_hold", "confirmed_evidence"
+    ] = "case_14d"
+    policy_revision: int = Field(default=1, ge=1)
     mime_type: str | None = None
 
     @field_validator("object_key")
@@ -81,6 +85,7 @@ class ArtifactManifest(ContractModel):
             "ephemeral": RetentionClass.EPHEMERAL,
             "case_14d": RetentionClass.CASE_RESULT,
             "review_hold": RetentionClass.REVIEW_HOLD,
+            "confirmed_evidence": RetentionClass.CONFIRMED_EVIDENCE,
         }[self.retention_class]
 
 

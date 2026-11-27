@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "SiteCatalogCamera": {
+      "additionalProperties": false,
+      "properties": {
+        "camera_id": {
+          "title": "Camera Id",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "floor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Floor Id"
+        },
+        "zone_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zone Id"
+        }
+      },
+      "required": [
+        "camera_id",
+        "display_name"
+      ],
+      "title": "SiteCatalogCamera",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "cameras": {
+      "items": {
+        "$ref": "#/$defs/SiteCatalogCamera"
+      },
+      "title": "Cameras",
+      "type": "array"
+    },
+    "checksum": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checksum"
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "site_version": {
+      "title": "Site Version",
+      "type": "string"
+    },
+    "timezone": {
+      "title": "Timezone",
+      "type": "string"
+    },
+    "zones": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Zones",
+      "type": "array"
+    }
+  },
+  "required": [
+    "site_id",
+    "site_version",
+    "display_name",
+    "timezone",
+    "cameras"
+  ],
+  "title": "SiteCatalogEntry",
+  "type": "object"
+}

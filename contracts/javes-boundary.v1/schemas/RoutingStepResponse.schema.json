@@ -1,0 +1,1775 @@
+{
+  "$defs": {
+    "Ambiguity": {
+      "additionalProperties": false,
+      "properties": {
+        "diverge_cameras": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Diverge Cameras",
+          "type": "array"
+        },
+        "diverge_edge_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Diverge Edge Ids",
+          "type": "array"
+        },
+        "hypothesis_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hypothesis Ids",
+          "type": "array"
+        },
+        "score_delta": {
+          "title": "Score Delta",
+          "type": "number"
+        }
+      },
+      "required": [
+        "hypothesis_ids",
+        "score_delta"
+      ],
+      "title": "Ambiguity",
+      "type": "object"
+    },
+    "Estimate": {
+      "additionalProperties": false,
+      "properties": {
+        "calculated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calculated At"
+        },
+        "distance_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RangeEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_observed_camera": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Observed Camera"
+        },
+        "last_observed_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Observed Time"
+        },
+        "probability_kind": {
+          "const": "RELATIVE",
+          "default": "RELATIVE",
+          "title": "Probability Kind",
+          "type": "string"
+        },
+        "reachable_as_of": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reachable As Of"
+        },
+        "reachable_horizon_s": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reachable Horizon S"
+        },
+        "reachable_method_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reachable Method Version"
+        },
+        "reachable_nodes": {
+          "items": {
+            "$ref": "#/$defs/ReachableNode"
+          },
+          "title": "Reachable Nodes",
+          "type": "array"
+        },
+        "reachable_origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MapPosition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reachable_segments": {
+          "items": {
+            "$ref": "#/$defs/ReachableSegment"
+          },
+          "title": "Reachable Segments",
+          "type": "array"
+        },
+        "speed_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RangeEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unobserved_windows": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Unobserved Windows",
+          "type": "array"
+        },
+        "valid_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid Until"
+        },
+        "zones": {
+          "items": {
+            "$ref": "#/$defs/ZoneEstimate"
+          },
+          "title": "Zones",
+          "type": "array"
+        },
+        "zones_operator_display": {
+          "const": "TECHNICAL_ONLY",
+          "default": "TECHNICAL_ONLY",
+          "title": "Zones Operator Display",
+          "type": "string"
+        }
+      },
+      "required": [
+        "zones"
+      ],
+      "title": "Estimate",
+      "type": "object"
+    },
+    "GroundPosition": {
+      "additionalProperties": false,
+      "description": "A person's position on an immutable floor map, never a camera marker.",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "error_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Error M",
+          "type": "number"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "source_camera_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Camera Ids",
+          "type": "array"
+        },
+        "source_tracklet_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Tracklet Ids",
+          "type": "array"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "timestamp",
+        "x",
+        "y",
+        "floor_id"
+      ],
+      "title": "GroundPosition",
+      "type": "object"
+    },
+    "Hypothesis": {
+      "additionalProperties": false,
+      "properties": {
+        "current_node": {
+          "title": "Current Node",
+          "type": "string"
+        },
+        "gate_margin_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gate Margin S"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "miss_count": {
+          "default": 0,
+          "title": "Miss Count",
+          "type": "integer"
+        },
+        "observed_gaps": {
+          "items": {
+            "$ref": "#/$defs/Transition"
+          },
+          "title": "Observed Gaps",
+          "type": "array"
+        },
+        "observed_segments": {
+          "items": {
+            "$ref": "#/$defs/ObservedSegment"
+          },
+          "title": "Observed Segments",
+          "type": "array"
+        },
+        "reject_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reject Reason"
+        },
+        "requires_confirmation": {
+          "default": false,
+          "title": "Requires Confirmation",
+          "type": "boolean"
+        },
+        "score": {
+          "default": 0.0,
+          "title": "Score",
+          "type": "number"
+        },
+        "status": {
+          "$ref": "#/$defs/HypothesisStatus"
+        },
+        "transitions": {
+          "items": {
+            "$ref": "#/$defs/Transition"
+          },
+          "title": "Transitions",
+          "type": "array"
+        },
+        "via_alternatives": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Via Alternatives",
+          "type": "array"
+        },
+        "visits": {
+          "items": {
+            "$ref": "#/$defs/Visit"
+          },
+          "title": "Visits",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "visits",
+        "current_node",
+        "status"
+      ],
+      "title": "Hypothesis",
+      "type": "object"
+    },
+    "HypothesisStatus": {
+      "enum": [
+        "ALIVE",
+        "DORMANT",
+        "ENDED"
+      ],
+      "title": "HypothesisStatus",
+      "type": "string"
+    },
+    "MapPosition": {
+      "additionalProperties": false,
+      "properties": {
+        "error_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Error M",
+          "type": "number"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "floor_id"
+      ],
+      "title": "MapPosition",
+      "type": "object"
+    },
+    "ObservedSegment": {
+      "additionalProperties": false,
+      "description": "One fused, time-ordered ground-plane observation of the person.",
+      "properties": {
+        "approximate": {
+          "default": false,
+          "title": "Approximate",
+          "type": "boolean"
+        },
+        "camera_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Camera Ids",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "$ref": "#/$defs/GroundPosition"
+          },
+          "title": "Points",
+          "type": "array"
+        },
+        "tracklet_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tracklet Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "points"
+      ],
+      "title": "ObservedSegment",
+      "type": "object"
+    },
+    "PositionState": {
+      "enum": [
+        "OBSERVED",
+        "LAST_SEEN",
+        "LOST",
+        "UNKNOWN"
+      ],
+      "title": "PositionState",
+      "type": "string"
+    },
+    "ProbeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "camera": {
+          "title": "Camera",
+          "type": "string"
+        },
+        "hypothesis_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hypothesis Ids",
+          "type": "array"
+        },
+        "priority": {
+          "default": 1.0,
+          "title": "Priority",
+          "type": "number"
+        },
+        "probe_id": {
+          "title": "Probe Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "ROUTE_EXPANSION",
+          "title": "Reason",
+          "type": "string"
+        },
+        "retry_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "retry_of": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Of"
+        },
+        "t_from": {
+          "format": "date-time",
+          "title": "T From",
+          "type": "string"
+        },
+        "t_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "T To"
+        }
+      },
+      "required": [
+        "probe_id",
+        "camera",
+        "t_from",
+        "t_to"
+      ],
+      "title": "ProbeRequest",
+      "type": "object"
+    },
+    "ProbeStatus": {
+      "enum": [
+        "DONE",
+        "FAILED",
+        "TIMEOUT",
+        "UNAVAILABLE"
+      ],
+      "title": "ProbeStatus",
+      "type": "string"
+    },
+    "ProbedWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "camera": {
+          "title": "Camera",
+          "type": "string"
+        },
+        "coverage_ratio": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Coverage Ratio",
+          "type": "number"
+        },
+        "found": {
+          "default": false,
+          "title": "Found",
+          "type": "boolean"
+        },
+        "probe_id": {
+          "title": "Probe Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ProbeStatus"
+        },
+        "t_from": {
+          "format": "date-time",
+          "title": "T From",
+          "type": "string"
+        },
+        "t_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "T To"
+        }
+      },
+      "required": [
+        "camera",
+        "t_from",
+        "t_to",
+        "probe_id",
+        "status"
+      ],
+      "title": "ProbedWindow",
+      "type": "object"
+    },
+    "ProjectedTrajectoryPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "calibration_error_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Calibration Error M",
+          "type": "number"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "timestamp",
+        "x",
+        "y",
+        "floor_id"
+      ],
+      "title": "ProjectedTrajectoryPoint",
+      "type": "object"
+    },
+    "RangeEstimate": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum": {
+          "minimum": 0.0,
+          "title": "Maximum",
+          "type": "number"
+        },
+        "minimum": {
+          "minimum": 0.0,
+          "title": "Minimum",
+          "type": "number"
+        },
+        "source": {
+          "enum": [
+            "OBSERVED",
+            "INFERRED",
+            "FALLBACK",
+            "MIXED"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "unit": {
+          "enum": [
+            "m",
+            "m/s"
+          ],
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minimum",
+        "maximum",
+        "unit",
+        "source"
+      ],
+      "title": "RangeEstimate",
+      "type": "object"
+    },
+    "ReachableNode": {
+      "additionalProperties": false,
+      "properties": {
+        "node_id": {
+          "title": "Node Id",
+          "type": "string"
+        },
+        "probability": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Probability",
+          "type": "number"
+        }
+      },
+      "required": [
+        "node_id",
+        "probability"
+      ],
+      "title": "ReachableNode",
+      "type": "object"
+    },
+    "ReachableSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "approximate": {
+          "default": false,
+          "title": "Approximate",
+          "type": "boolean"
+        },
+        "edge_id": {
+          "title": "Edge Id",
+          "type": "string"
+        },
+        "floor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Floor Id"
+        },
+        "points": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Points",
+          "type": "array"
+        },
+        "probability": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Probability",
+          "type": "number"
+        },
+        "progress": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Progress",
+          "type": "number"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "width_m": {
+          "default": 1.5,
+          "exclusiveMinimum": 0.0,
+          "title": "Width M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "edge_id",
+        "source",
+        "target",
+        "probability"
+      ],
+      "title": "ReachableSegment",
+      "type": "object"
+    },
+    "RejectedCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "appearance_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Appearance Score"
+        },
+        "camera_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Id"
+        },
+        "gate_margin_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gate Margin S"
+        },
+        "hypothesis_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hypothesis Id"
+        },
+        "reject_reason": {
+          "title": "Reject Reason",
+          "type": "string"
+        },
+        "tracklet_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tracklet Id"
+        }
+      },
+      "required": [
+        "reject_reason"
+      ],
+      "title": "RejectedCandidate",
+      "type": "object"
+    },
+    "RenderedFloorMap": {
+      "additionalProperties": false,
+      "properties": {
+        "alt_text": {
+          "title": "Alt Text",
+          "type": "string"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "mime_type": {
+          "const": "image/svg+xml",
+          "default": "image/svg+xml",
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "svg": {
+          "title": "Svg",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "floor_id",
+        "width",
+        "height",
+        "svg",
+        "alt_text"
+      ],
+      "title": "RenderedFloorMap",
+      "type": "object"
+    },
+    "RenderedRouteBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "best_hypothesis_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Best Hypothesis Id"
+        },
+        "maps": {
+          "items": {
+            "$ref": "#/$defs/RenderedFloorMap"
+          },
+          "title": "Maps",
+          "type": "array"
+        },
+        "presentation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutePresentation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "route_revision": {
+          "title": "Route Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "route_revision"
+      ],
+      "title": "RenderedRouteBundle",
+      "type": "object"
+    },
+    "RouteLayer": {
+      "enum": [
+        "OBSERVED",
+        "INFERRED",
+        "SEARCH_AREA",
+        "LAST_POSITION",
+        "CAMERAS"
+      ],
+      "title": "RouteLayer",
+      "type": "string"
+    },
+    "RoutePresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "last_confirmed_position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroundPosition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "position_state": {
+          "$ref": "#/$defs/PositionState",
+          "default": "UNKNOWN"
+        },
+        "search_area_as_of": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Search Area As Of"
+        },
+        "shown_layers": {
+          "items": {
+            "$ref": "#/$defs/RouteLayer"
+          },
+          "title": "Shown Layers",
+          "type": "array"
+        },
+        "source_camera_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Camera Ids",
+          "type": "array"
+        },
+        "visible_at_interval_end": {
+          "default": false,
+          "title": "Visible At Interval End",
+          "type": "boolean"
+        }
+      },
+      "title": "RoutePresentation",
+      "type": "object"
+    },
+    "RoutingWorkerResult": {
+      "additionalProperties": false,
+      "properties": {
+        "rendered_route": {
+          "$ref": "#/$defs/RenderedRouteBundle"
+        },
+        "step_result": {
+          "$ref": "#/$defs/StepResult"
+        }
+      },
+      "required": [
+        "step_result",
+        "rendered_route"
+      ],
+      "title": "RoutingWorkerResult",
+      "type": "object"
+    },
+    "SearchFrontier": {
+      "additionalProperties": false,
+      "description": "Durable progress through historical CCTV time.",
+      "properties": {
+        "last_observed_at": {
+          "format": "date-time",
+          "title": "Last Observed At",
+          "type": "string"
+        },
+        "reached_at": {
+          "format": "date-time",
+          "title": "Reached At",
+          "type": "string"
+        },
+        "reached_at_by_probe": {
+          "additionalProperties": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": "Reached At By Probe",
+          "type": "object"
+        },
+        "required_probe_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Probe Ids",
+          "type": "array"
+        },
+        "shell_from": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shell From"
+        },
+        "shell_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shell To"
+        }
+      },
+      "required": [
+        "last_observed_at",
+        "reached_at"
+      ],
+      "title": "SearchFrontier",
+      "type": "object"
+    },
+    "SearchMode": {
+      "enum": [
+        "CATCHING_UP",
+        "LIVE_TRACKING",
+        "WAITING",
+        "PAST_SUMMARY"
+      ],
+      "title": "SearchMode",
+      "type": "string"
+    },
+    "SearchState": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_started": {
+          "default": false,
+          "title": "Baseline Started",
+          "type": "boolean"
+        },
+        "calibration_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Version"
+        },
+        "camera_minutes_used": {
+          "default": 0.0,
+          "title": "Camera Minutes Used",
+          "type": "number"
+        },
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "confirmed_tracklet_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Confirmed Tracklet Ids",
+          "type": "array"
+        },
+        "done": {
+          "default": false,
+          "title": "Done",
+          "type": "boolean"
+        },
+        "hypotheses": {
+          "items": {
+            "$ref": "#/$defs/Hypothesis"
+          },
+          "title": "Hypotheses",
+          "type": "array"
+        },
+        "id_counter": {
+          "default": 0,
+          "title": "Id Counter",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/SearchMode",
+          "default": "CATCHING_UP"
+        },
+        "params_version": {
+          "default": "1",
+          "title": "Params Version",
+          "type": "string"
+        },
+        "pending_probes": {
+          "items": {
+            "$ref": "#/$defs/ProbeRequest"
+          },
+          "title": "Pending Probes",
+          "type": "array"
+        },
+        "pending_review_visits": {
+          "items": {
+            "$ref": "#/$defs/Visit"
+          },
+          "title": "Pending Review Visits",
+          "type": "array"
+        },
+        "probed_windows": {
+          "items": {
+            "$ref": "#/$defs/ProbedWindow"
+          },
+          "title": "Probed Windows",
+          "type": "array"
+        },
+        "processed_duration_s_by_probe": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Processed Duration S By Probe",
+          "type": "object"
+        },
+        "processed_result_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Processed Result Ids",
+          "type": "array"
+        },
+        "profile": {
+          "default": "ADULT",
+          "title": "Profile",
+          "type": "string"
+        },
+        "rejected_tracklet_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejected Tracklet Ids",
+          "type": "array"
+        },
+        "round_number": {
+          "default": 0,
+          "title": "Round Number",
+          "type": "integer"
+        },
+        "search_frontier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchFrontier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "site_version": {
+          "default": "1",
+          "title": "Site Version",
+          "type": "string"
+        },
+        "state_version": {
+          "default": 0,
+          "title": "State Version",
+          "type": "integer"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unobserved_windows": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Unobserved Windows",
+          "type": "array"
+        },
+        "window_end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window End"
+        },
+        "window_start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Start"
+        }
+      },
+      "required": [
+        "case_id"
+      ],
+      "title": "SearchState",
+      "type": "object"
+    },
+    "StepResult": {
+      "additionalProperties": false,
+      "properties": {
+        "ambiguities": {
+          "items": {
+            "$ref": "#/$defs/Ambiguity"
+          },
+          "title": "Ambiguities",
+          "type": "array"
+        },
+        "best": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hypothesis"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Best"
+        },
+        "done": {
+          "default": false,
+          "title": "Done",
+          "type": "boolean"
+        },
+        "estimate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Estimate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hypotheses": {
+          "items": {
+            "$ref": "#/$defs/Hypothesis"
+          },
+          "title": "Hypotheses",
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/$defs/SearchMode"
+        },
+        "probes": {
+          "items": {
+            "$ref": "#/$defs/ProbeRequest"
+          },
+          "title": "Probes",
+          "type": "array"
+        },
+        "rejected": {
+          "items": {
+            "$ref": "#/$defs/RejectedCandidate"
+          },
+          "title": "Rejected",
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/SearchState"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "state",
+        "probes",
+        "hypotheses",
+        "mode"
+      ],
+      "title": "StepResult",
+      "type": "object"
+    },
+    "StopReason": {
+      "enum": [
+        "ALL_ENDED",
+        "BUDGET_SPENT",
+        "MAX_GAP",
+        "OPERATOR_CLOSED"
+      ],
+      "title": "StopReason",
+      "type": "string"
+    },
+    "Transition": {
+      "additionalProperties": false,
+      "properties": {
+        "alternative_edge_paths": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Alternative Edge Paths",
+          "type": "array"
+        },
+        "edge_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Edge Ids",
+          "type": "array"
+        },
+        "flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "from_visit_id": {
+          "title": "From Visit Id",
+          "type": "string"
+        },
+        "geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransitionGeometry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "default": "EDGE",
+          "enum": [
+            "EDGE",
+            "BLIND",
+            "OUTSIDE",
+            "UNKNOWN",
+            "VERTICAL",
+            "GAP",
+            "OVERLAP"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "t_from": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T From"
+        },
+        "t_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T To"
+        },
+        "to_visit_id": {
+          "title": "To Visit Id",
+          "type": "string"
+        },
+        "via_nodes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Via Nodes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "from_visit_id",
+        "to_visit_id"
+      ],
+      "title": "Transition",
+      "type": "object"
+    },
+    "TransitionGeometry": {
+      "additionalProperties": false,
+      "description": "Pedestrian geometry between observed positions on one floor.",
+      "properties": {
+        "alternative_paths": {
+          "items": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "title": "Alternative Paths",
+          "type": "array"
+        },
+        "alternative_walk_edge_paths": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Alternative Walk Edge Paths",
+          "type": "array"
+        },
+        "approximate": {
+          "default": false,
+          "title": "Approximate",
+          "type": "boolean"
+        },
+        "distance_max_m": {
+          "minimum": 0.0,
+          "title": "Distance Max M",
+          "type": "number"
+        },
+        "distance_min_m": {
+          "minimum": 0.0,
+          "title": "Distance Min M",
+          "type": "number"
+        },
+        "end_offset_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "End Offset M",
+          "type": "number"
+        },
+        "floor_id": {
+          "title": "Floor Id",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 2,
+          "title": "Points",
+          "type": "array"
+        },
+        "source": {
+          "default": "WALK_GRAPH",
+          "enum": [
+            "WALK_GRAPH",
+            "MANUAL",
+            "ENDPOINT_INTERPOLATION"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "start_offset_m": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Start Offset M",
+          "type": "number"
+        },
+        "walk_edge_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Walk Edge Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "floor_id",
+        "points",
+        "distance_min_m",
+        "distance_max_m"
+      ],
+      "title": "TransitionGeometry",
+      "type": "object"
+    },
+    "Visit": {
+      "additionalProperties": false,
+      "properties": {
+        "camera": {
+          "title": "Camera",
+          "type": "string"
+        },
+        "clipped_in": {
+          "default": false,
+          "title": "Clipped In",
+          "type": "boolean"
+        },
+        "clipped_out": {
+          "default": false,
+          "title": "Clipped Out",
+          "type": "boolean"
+        },
+        "entry_edges": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entry Edges",
+          "type": "array"
+        },
+        "exit_edges": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Exit Edges",
+          "type": "array"
+        },
+        "flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "long_gap": {
+          "default": false,
+          "title": "Long Gap",
+          "type": "boolean"
+        },
+        "open": {
+          "default": false,
+          "title": "Open",
+          "type": "boolean"
+        },
+        "projected_trajectory": {
+          "items": {
+            "$ref": "#/$defs/ProjectedTrajectoryPoint"
+          },
+          "title": "Projected Trajectory",
+          "type": "array"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "source": {
+          "default": "PERCEPTION",
+          "enum": [
+            "PERCEPTION",
+            "LAST_KNOWN",
+            "MANUAL"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "t_in": {
+          "format": "date-time",
+          "title": "T In",
+          "type": "string"
+        },
+        "t_out": {
+          "format": "date-time",
+          "title": "T Out",
+          "type": "string"
+        },
+        "tracklet_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tracklet Ids",
+          "type": "array"
+        },
+        "trajectory_approximate": {
+          "default": true,
+          "title": "Trajectory Approximate",
+          "type": "boolean"
+        },
+        "zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zone"
+        }
+      },
+      "required": [
+        "id",
+        "camera",
+        "t_in",
+        "t_out",
+        "score"
+      ],
+      "title": "Visit",
+      "type": "object"
+    },
+    "ZoneEstimate": {
+      "additionalProperties": false,
+      "properties": {
+        "probability": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Probability",
+          "type": "number"
+        },
+        "zone": {
+          "title": "Zone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "zone",
+        "probability"
+      ],
+      "title": "ZoneEstimate",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": "routing-step-result.v1",
+      "default": "routing-step-result.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "params_checksum": {
+      "title": "Params Checksum",
+      "type": "string"
+    },
+    "result": {
+      "$ref": "#/$defs/RoutingWorkerResult"
+    },
+    "site_checksum": {
+      "title": "Site Checksum",
+      "type": "string"
+    }
+  },
+  "required": [
+    "result",
+    "site_checksum",
+    "params_checksum"
+  ],
+  "title": "RoutingStepResponse",
+  "type": "object"
+}

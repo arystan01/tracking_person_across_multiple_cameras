@@ -1,0 +1,11 @@
+{
+  "candidates": [],
+  "coverage_ratio": 1.0,
+  "error_code": null,
+  "n_tracklets_total": null,
+  "probe_id": "probe-002",
+  "processed_duration_s": 60.0,
+  "status": "DONE",
+  "stream_closed": false,
+  "tracklets": []
+}

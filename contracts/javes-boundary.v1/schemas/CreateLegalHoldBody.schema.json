@@ -1,0 +1,45 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_case_revision": {
+      "minimum": 0,
+      "title": "Expected Case Revision",
+      "type": "integer"
+    },
+    "external_ticket_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "External Ticket Id",
+      "type": "string"
+    },
+    "hold_id": {
+      "title": "Hold Id",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "operator_id": {
+      "title": "Operator Id",
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "hold_id",
+    "external_ticket_id",
+    "reason",
+    "operator_id",
+    "occurred_at",
+    "expected_case_revision"
+  ],
+  "title": "CreateLegalHoldBody",
+  "type": "object"
+}

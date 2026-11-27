@@ -23,6 +23,7 @@ class VideoWindow:
     archive_id: str
     source_uri: str | None = None
     content_sha256: str | None = None
+    source_offset_s: float = 0.0
 
 
 class LocalVideoArchive:

@@ -7,6 +7,8 @@ import hashlib
 from javes_contracts import (
     ArtifactRef,
     ClipLifecycleState,
+    ClipPurgeCommand,
+    ClipPurgeResult,
     ClipProcessingStatus,
     ClipRecord,
     ClipStateCommand,
@@ -28,6 +30,7 @@ class FakeClipWorker:
         self._cut_requests: dict[str, tuple[str, str]] = {}
         self._state_commands: dict[str, tuple[str, ClipRecord]] = {}
         self._exports: dict[str, tuple[str, ExportClipsResult]] = {}
+        self._purges: dict[str, tuple[str, ClipPurgeResult]] = {}
 
     def cut(self, command: CutClipCommand) -> ClipRecord:
         fingerprint = command.model_dump_json()
@@ -138,4 +141,23 @@ class FakeClipWorker:
                 duration_s=duration,
             )
         self._exports[command.export_request_id] = (fingerprint, result)
+        return result.model_copy(deep=True)
+
+    def purge(self, command: ClipPurgeCommand) -> ClipPurgeResult:
+        fingerprint = command.model_dump_json()
+        previous = self._purges.get(command.command_id)
+        if previous is not None:
+            if previous[0] != fingerprint:
+                raise ValueError("same purge command_id used with different payload")
+            return previous[1].model_copy(deep=True)
+        self.records = {
+            key: value
+            for key, value in self.records.items()
+            if value.case_id != command.case_id
+        }
+        result = ClipPurgeResult(
+            command_id=command.command_id,
+            case_id=command.case_id,
+        )
+        self._purges[command.command_id] = (fingerprint, result)
         return result.model_copy(deep=True)

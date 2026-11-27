@@ -5,9 +5,9 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, RootModel, field_validator, model_validator
 
 from .routing import ContractModel, MapPosition, ProbeRequest
 
@@ -36,6 +36,113 @@ class ArtifactRef(ContractModel):
 
     def identity(self) -> str:
         return self.archive_id or self.object_key or self.uri or ""
+
+
+class ProblemDetails(ContractModel):
+    """Stable RFC 9457-style error body shared by all HTTP services."""
+
+    type: str = Field(pattern=r"^urn:javes:problem:[a-z0-9-]+$")
+    title: str
+    status: int = Field(ge=400, le=599)
+    detail: str
+    code: str = Field(pattern=r"^[A-Z0-9_]+$")
+    retryable: bool = False
+    request_id: str | None = None
+    errors: list[dict[str, Any]] | None = None
+
+
+class ServiceHealthResponse(ContractModel):
+    """Common live/ready payload; service-specific readiness facts are additive."""
+
+    status: Literal["ok", "ready"]
+    telemetry: str | None = None
+    cameras: int | None = Field(default=None, ge=0)
+    manifest_checksum: str | None = None
+
+
+class RotationKeyStatus(ContractModel):
+    current_key_id: str
+    previous_key_id: str | None = None
+    previous_valid_until: datetime | None = None
+    previous_accepted: bool = False
+
+    @field_validator("previous_valid_until", mode="after")
+    @classmethod
+    def _aware_deadline(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+
+class RotationStatusResponse(RootModel[dict[str, RotationKeyStatus]]):
+    pass
+
+
+class AuditExportRequest(ContractModel):
+    export_id: str = Field(
+        min_length=1, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    )
+    from_time: datetime | None = None
+    to_time: datetime | None = None
+    case_ids: list[str] = Field(default_factory=list, max_length=100)
+    actor_ids: list[str] = Field(default_factory=list, max_length=100)
+    event_types: list[str] = Field(default_factory=list, max_length=100)
+    page_size: int = Field(default=500, ge=1, le=2000)
+
+    @field_validator("from_time", "to_time", mode="after")
+    @classmethod
+    def _aware_filter_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+    @model_validator(mode="after")
+    def _ordered_filter(self) -> AuditExportRequest:
+        if self.from_time and self.to_time and self.to_time < self.from_time:
+            raise ValueError("audit export to_time must not precede from_time")
+        return self
+
+
+class AuditExportManifest(ContractModel):
+    format: Literal["javes-audit-export.v1"] = "javes-audit-export.v1"
+    export_id: str
+    created_at: datetime
+    created_by: str
+    filters: dict[str, Any]
+    row_count: int = Field(ge=0)
+    first_event_id: str | None = None
+    last_event_id: str | None = None
+    schema_version: Literal["javes-audit-event.v1"] = "javes-audit-event.v1"
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    events_url: str
+    manifest_url: str
+
+    @field_validator("created_at", mode="after")
+    @classmethod
+    def _aware_created(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
+class ActorView(ContractModel):
+    user_id: str
+    username: str
+    role: Literal["ROOT", "ADMIN", "OPERATOR", "VIEWER", "SERVICE"]
+    permissions: list[str]
+    must_change_password: bool
+
+
+class LoginRequest(ContractModel):
+    username: str
+    password: str
+
+
+class LoginResponse(ContractModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: datetime
+    user: ActorView
+
+    @field_validator("expires_at", mode="after")
+    @classmethod
+    def _aware_expiry(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
 
 
 class VideoAvailability(str, Enum):
@@ -79,6 +186,11 @@ class VideoSegmentResult(ContractModel):
     covered_to: datetime | None = None
     coverage_ratio: float = Field(ge=0.0, le=1.0)
     source_ref: ArtifactRef | None = None
+    source_offset_s: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Offset of covered_from inside the immutable source object.",
+    )
     source_clock: Literal["UTC_CORRECTED"] = "UTC_CORRECTED"
     error_code: str | None = None
 
@@ -120,9 +232,11 @@ class TargetGalleryCommand(ContractModel):
     contract_version: Literal["target-gallery.v1"] = "target-gallery.v1"
     command_id: str
     case_id: str
-    source: Literal["reference", "confirmed_tracklet"]
+    source: Literal["reference", "confirmed_tracklet", "rebuild"]
     image_ref: ArtifactRef | None = None
     tracklet_id: str | None = None
+    tracklet_ids: list[str] = Field(default_factory=list)
+    base_gallery_ref: str | None = None
     model_version: str = "osnet_ain_x1_0_msmt17"
 
     @model_validator(mode="after")
@@ -131,6 +245,9 @@ class TargetGalleryCommand(ContractModel):
             raise ValueError("reference gallery command requires image_ref")
         if self.source == "confirmed_tracklet" and not self.tracklet_id:
             raise ValueError("confirmed_tracklet command requires tracklet_id")
+        if self.source == "rebuild" and self.image_ref is None:
+            raise ValueError("rebuild gallery command requires image_ref")
+        self.tracklet_ids = sorted(set(self.tracklet_ids))
         return self
 
 
@@ -220,6 +337,8 @@ class ClipRecord(ContractModel):
     @classmethod
     def _aware_times(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
 class ClipStateCommand(ContractModel):
     contract_version: Literal["clip-state-command.v1"] = "clip-state-command.v1"
     command_id: str
@@ -233,6 +352,7 @@ class ClipStateCommand(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
 
 class ExportClipsCommand(ContractModel):
     contract_version: Literal["clip-export.v1"] = "clip-export.v1"
@@ -263,6 +383,25 @@ class ExportClipsResult(ContractModel):
     error_code: str | None = None
 
 
+class ClipPurgeCommand(ContractModel):
+    contract_version: Literal["clip-purge.v1"] = "clip-purge.v1"
+    command_id: str
+    case_id: str
+    occurred_at: datetime
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
+class ClipPurgeResult(ContractModel):
+    contract_version: Literal["clip-purge-result.v1"] = "clip-purge-result.v1"
+    command_id: str
+    case_id: str
+    purged: bool = True
+
+
 class RetentionClass(str, Enum):
     EPHEMERAL = "EPHEMERAL"
     REVIEW_HOLD = "REVIEW_HOLD"
@@ -281,6 +420,7 @@ class RetentionResource(ContractModel):
     expires_at: datetime | None = None
     legal_hold: bool = False
     deleted: bool = False
+    revision: int = Field(default=1, ge=1)
 
     @field_validator("expires_at", mode="after")
     @classmethod
@@ -302,6 +442,27 @@ class RetentionCommand(ContractModel):
         return aware_utc(value)  # type: ignore[return-value]
 
 
+class RetentionDeletionReceipt(ContractModel):
+    """Path-free proof for one physical deletion attempt."""
+
+    contract_version: Literal["retention-deletion-receipt.v1"] = (
+        "retention-deletion-receipt.v1"
+    )
+    resource_id: str
+    backend_kind: str
+    locator_kind: str
+    locator_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    attempt: int = Field(ge=1)
+    status: Literal["DELETED", "ALREADY_MISSING", "FAILED"]
+    occurred_at: datetime
+    error_code: str | None = None
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_receipt_time(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
 class RetentionResult(ContractModel):
     contract_version: Literal["retention-result.v1"] = "retention-result.v1"
     command_id: str
@@ -309,7 +470,125 @@ class RetentionResult(ContractModel):
     action: Literal["CLOSE_CASE", "DELETE_CASE", "TTL_EXPIRED"]
     deleted_resource_ids: list[str] = Field(default_factory=list)
     preserved_resource_ids: list[str] = Field(default_factory=list)
+    held_resource_ids: list[str] = Field(default_factory=list)
     audit_tombstone_id: str
+    receipts: list[RetentionDeletionReceipt] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _terminal_deletion_proof(self) -> RetentionResult:
+        deleted = set(self.deleted_resource_ids)
+        receipt_ids = {item.resource_id for item in self.receipts}
+        if not receipt_ids <= deleted:
+            raise ValueError("retention receipt references a non-deleted resource")
+        terminal = {
+            item.resource_id
+            for item in self.receipts
+            if item.status in {"DELETED", "ALREADY_MISSING"}
+        }
+        if terminal != deleted:
+            raise ValueError(
+                "every deleted resource requires terminal physical deletion proof"
+            )
+        return self
+
+
+class RetentionHoldCommand(ContractModel):
+    contract_version: Literal["retention-hold-command.v1"] = "retention-hold-command.v1"
+    command_id: str
+    case_id: str
+    hold_id: str
+    action: Literal["SET", "RELEASE"]
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    actor_id: str
+    occurred_at: datetime
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class RetentionHoldResult(ContractModel):
+    contract_version: Literal["retention-hold-result.v1"] = "retention-hold-result.v1"
+    command_id: str
+    case_id: str
+    hold_id: str
+    action: Literal["SET", "RELEASE"]
+    active_hold_ids: list[str] = Field(default_factory=list)
+
+
+class CreateLegalHoldBody(ContractModel):
+    hold_id: str
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    operator_id: str
+    occurred_at: datetime
+    expected_case_revision: int = Field(ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class ReleaseLegalHoldBody(ContractModel):
+    release_id: str
+    hold_id: str
+    external_ticket_id: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+    operator_id: str
+    occurred_at: datetime
+    expected_case_revision: int = Field(ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("external_ticket_id", "reason", mode="after")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("legal-hold ticket and reason must not be blank")
+        return value
+
+
+class LegalHoldView(ContractModel):
+    hold_id: str
+    case_id: str
+    external_ticket_id: str
+    reason: str
+    set_by: str
+    set_at: datetime
+    active: bool = True
+    release_pending: bool = False
+    released_by: str | None = None
+    released_at: datetime | None = None
+    release_id: str | None = None
+    release_reason: str | None = None
+
+    @field_validator("set_at", "released_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
 
 
 class CaseWindow(ContractModel):
@@ -366,12 +645,54 @@ class CreateCaseBody(ContractModel):
     case_id: str
     operator_id: str
     target_id: str
-    reference_image_ref: ArtifactRef
+    reference_upload_id: str | None = Field(default=None, min_length=1, max_length=200)
+    reference_image_ref: ArtifactRef | None = None
     last_known: LastKnown
     window: CaseWindow
     profile: Literal["ADULT", "CHILD", "ELDERLY"] = "ADULT"
     site_id: str
     site_version: str
+
+    @model_validator(mode="after")
+    def _one_reference_source(self) -> CreateCaseBody:
+        if bool(self.reference_upload_id) == bool(self.reference_image_ref):
+            raise ValueError(
+                "exactly one of reference_upload_id or reference_image_ref is required"
+            )
+        return self
+
+
+class ReferenceImageUploadResponse(ContractModel):
+    upload_id: str
+    case_id: str
+    reference_image_ref: ArtifactRef
+    mime_type: Literal["image/jpeg"] = "image/jpeg"
+    size_bytes: int = Field(gt=0)
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+    expires_at: datetime
+
+    @field_validator("expires_at", mode="after")
+    @classmethod
+    def _aware_expiry(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
+class SiteCatalogCamera(ContractModel):
+    camera_id: str
+    display_name: str
+    floor_id: str | None = None
+    zone_id: str | None = None
+
+
+class SiteCatalogEntry(ContractModel):
+    site_id: str
+    site_version: str
+    display_name: str
+    timezone: str
+    checksum: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    cameras: list[SiteCatalogCamera]
+    zones: list[str] = Field(default_factory=list)
 
 
 class ReviewDecisionBody(ContractModel):
@@ -388,6 +709,48 @@ class ReviewDecisionBody(ContractModel):
         return aware_utc(value)  # type: ignore[return-value]
 
 
+class RevokeDecisionBody(ContractModel):
+    revocation_id: str
+    decision_id: str
+    operator_id: str
+    reason: str = Field(min_length=1, max_length=1000)
+    occurred_at: datetime
+    expected_case_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("occurred_at", mode="after")
+    @classmethod
+    def _aware_occurred(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def _non_blank_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("revocation reason must not be blank")
+        return value
+
+
+class DecisionRecordView(ContractModel):
+    decision_id: str
+    candidate_id: str
+    tracklet_id: str
+    decision: Literal["CONFIRM", "REJECT"]
+    operator_id: str
+    occurred_at: datetime
+    active: bool = True
+    revocation_id: str | None = None
+    revoked_by: str | None = None
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
+    resulting_route_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("occurred_at", "revoked_at", mode="after")
+    @classmethod
+    def _aware_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+
 class CaseCommandBody(ContractModel):
     command_id: str
     action: Literal["CLOSE", "EXPORT", "DELETE"]
@@ -398,3 +761,123 @@ class CaseCommandBody(ContractModel):
     @classmethod
     def _aware_occurred(cls, value: datetime) -> datetime:
         return aware_utc(value)  # type: ignore[return-value]
+
+
+class CaseLifecycle(str, Enum):
+    PREPARING = "PREPARING"
+    SEARCHING = "SEARCHING"
+    CLOSED = "CLOSED"
+    EXPORTING = "EXPORTING"
+    SAVED = "SAVED"
+    DELETE_REQUESTED = "DELETE_REQUESTED"
+    DELETED = "DELETED"
+    FAILED = "FAILED"
+
+
+class RouteMapView(ContractModel):
+    floor_id: str
+    mime_type: str
+    url: str
+    alt_text: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class CaseSummary(ContractModel):
+    case_id: str
+    target_id: str
+    lifecycle: CaseLifecycle
+    revision: int = Field(ge=0)
+    route_revision: int = Field(ge=0)
+    mode: str | None = None
+    site_id: str
+    site_version: str
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("created_at", "updated_at", mode="after")
+    @classmethod
+    def _aware_summary_times(cls, value: datetime) -> datetime:
+        return aware_utc(value)  # type: ignore[return-value]
+
+
+class CaseDetailView(ContractModel):
+    case_id: str
+    target_id: str
+    profile: Literal["ADULT", "CHILD", "ELDERLY"]
+    lifecycle: CaseLifecycle
+    revision: int = Field(ge=0)
+    route_revision: int = Field(ge=0)
+    site_id: str
+    site_version: str
+    params_version: str
+    last_known: LastKnown
+    window: CaseWindow
+    reference_preview_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+    retention_due_at: datetime | None = None
+
+    @field_validator(
+        "created_at", "updated_at", "closed_at", "retention_due_at", mode="after"
+    )
+    @classmethod
+    def _aware_detail_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+
+class CandidateView(ContractModel):
+    candidate_id: str
+    tracklet_id: str
+    camera_id: str | None = None
+    t_start: datetime | None = None
+    t_end: datetime | None = None
+    appearance_score: float | None = None
+    cosine: float | None = None
+    calibration_version: str | None = None
+    association_id: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    requires_confirmation: bool = False
+    decision_state: Literal["UNREVIEWED", "CONFIRMED", "REJECTED"] = "UNREVIEWED"
+    active_decision_id: str | None = None
+    clip_id: str | None = None
+    clip_status: str | None = None
+    clip_state: str | None = None
+    thumbnail_refs: list[str] = Field(default_factory=list)
+    bbox_first: tuple[float, float, float, float] | None = None
+    bbox_last: tuple[float, float, float, float] | None = None
+    review_state: str | None = None
+
+    @field_validator("t_start", "t_end", mode="after")
+    @classmethod
+    def _aware_candidate_times(cls, value: datetime | None) -> datetime | None:
+        return aware_utc(value)
+
+    def __getitem__(self, key: str) -> Any:
+        """Keep the existing in-process projection seam mapping-compatible."""
+
+        return getattr(self, key)
+
+
+class CaseView(ContractModel):
+    case_id: str
+    revision: int = Field(ge=0)
+    route_revision: int = Field(ge=0)
+    lifecycle: CaseLifecycle
+    mode: str | None = None
+    done: bool = False
+    stop_reason: str | None = None
+    best_hypothesis: dict[str, Any] | None = None
+    alternatives: list[dict[str, Any]] = Field(default_factory=list)
+    candidates: list[CandidateView] = Field(default_factory=list)
+    estimate: dict[str, Any] | None = None
+    route_presentation: dict[str, Any] | None = None
+    rendered_route_maps: list[RouteMapView] = Field(default_factory=list)
+    clips: list[dict[str, Any]] = Field(default_factory=list)
+    export: dict[str, Any] | None = None
+    search_progress: dict[str, Any] = Field(default_factory=dict)
+    live: dict[str, Any] | None = None
+    watch: list[dict[str, Any]] = Field(default_factory=list)
+    unobserved_windows: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)

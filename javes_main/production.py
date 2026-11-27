@@ -12,6 +12,7 @@ from .application import AuthService, CaseManager
 from .persistence.sqlalchemy import SqlAlchemyRepository
 from .scheduler import RoutingTriggerDispatcher
 from .settings import MainSettings
+from javes_security import RotationWindow
 
 
 @dataclass
@@ -37,7 +38,21 @@ def build_api_first_system(settings: MainSettings) -> ApiFirstSystem:
         raise ValueError(
             "API-first production configuration is incomplete: " + ", ".join(missing)
         )
-    repository = SqlAlchemyRepository.from_url(settings.database_url)
+    engine_options: dict = {"pool_pre_ping": True}
+    if settings.database_url.startswith(("postgresql://", "postgresql+")):
+        engine_options.update(
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout=settings.database_pool_timeout_s,
+            isolation_level="READ COMMITTED",
+            connect_args={
+                "options": (
+                    f"-c statement_timeout={settings.database_statement_timeout_ms} "
+                    "-c timezone=UTC"
+                )
+            },
+        )
+    repository = SqlAlchemyRepository.from_url(settings.database_url, **engine_options)
     artifacts = FileArtifactStore(settings.artifact_root)
     clock = SystemClock()
     ids = ContentIdGenerator()
@@ -74,9 +89,45 @@ def build_api_first_system(settings: MainSettings) -> ApiFirstSystem:
     )
 
 
-def worker_tokens(settings: MainSettings) -> dict[str, str]:
-    return {
-        "perception": settings.perception_worker_token.get_secret_value(),  # type: ignore[union-attr]
-        "clip": settings.clip_worker_token.get_secret_value(),  # type: ignore[union-attr]
-        "retention": settings.retention_worker_token.get_secret_value(),  # type: ignore[union-attr]
-    }
+def worker_tokens(
+    settings: MainSettings,
+) -> dict[str, RotationWindow | tuple[str, ...]]:
+    result: dict[str, RotationWindow | tuple[str, ...]] = {}
+    for component in ("perception", "clip", "retention"):
+        current = getattr(settings, f"{component}_worker_token")
+        previous = getattr(settings, f"{component}_worker_token_previous")
+        if current is None:
+            result[component] = ()
+            continue
+        deadline = getattr(settings, f"{component}_worker_token_previous_valid_until")
+        result[component] = RotationWindow(
+            current=current.get_secret_value(),
+            previous=previous.get_secret_value() if previous is not None else None,
+            previous_valid_until=deadline,
+        )
+    return result
+
+
+def rotation_status(settings: MainSettings) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for component in ("perception", "clip", "retention"):
+        current = getattr(settings, f"{component}_worker_token")
+        previous = getattr(settings, f"{component}_worker_token_previous")
+        deadline = getattr(settings, f"{component}_worker_token_previous_valid_until")
+        if current is not None:
+            result[f"{component}_worker"] = RotationWindow(
+                current=current.get_secret_value(),
+                previous=previous.get_secret_value() if previous is not None else None,
+                previous_valid_until=deadline,
+            ).status()
+    if settings.worker_lease_secret is not None:
+        result["worker_lease"] = RotationWindow(
+            current=settings.worker_lease_secret.get_secret_value(),
+            previous=(
+                settings.worker_lease_secret_previous.get_secret_value()
+                if settings.worker_lease_secret_previous is not None
+                else None
+            ),
+            previous_valid_until=settings.worker_lease_secret_previous_valid_until,
+        ).status()
+    return result

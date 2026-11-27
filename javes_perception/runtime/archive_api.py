@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -33,14 +34,14 @@ class HttpVideoArchive:
         token: str,
         *,
         camera_ids: set[str],
-        artifact_root: str | Path | None = None,
+        archive_root: str | Path | None = None,
         timeout_s: float = 30.0,
         client: httpx.Client | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.camera_ids = set(camera_ids)
-        self.artifact_root = (
-            Path(artifact_root).resolve() if artifact_root is not None else None
+        self.archive_root = (
+            Path(archive_root).resolve() if archive_root is not None else None
         )
         self._headers = {"authorization": f"Bearer {token}"}
         self._client = client or httpx.Client(timeout=timeout_s)
@@ -58,12 +59,12 @@ class HttpVideoArchive:
             if parsed.scheme in {"http", "https", "rtsp"}:
                 return result.source_ref.uri
             raise DecodeError("CCTV Archive returned an unsupported source URI")
-        if result.source_ref.object_key and self.artifact_root is not None:
-            path = (self.artifact_root / result.source_ref.object_key).resolve()
+        if result.source_ref.object_key and self.archive_root is not None:
+            path = (self.archive_root / result.source_ref.object_key).resolve()
             try:
-                path.relative_to(self.artifact_root)
+                path.relative_to(self.archive_root)
             except ValueError as exc:
-                raise DecodeError("CCTV Archive object_key escapes artifact root") from exc
+                raise DecodeError("CCTV Archive object_key escapes archive root") from exc
             return str(path)
         raise DecodeError("CCTV Archive source_ref is not decodable")
 
@@ -108,6 +109,7 @@ class HttpVideoArchive:
             content_sha256=(
                 result.source_ref.sha256 if result.source_ref else None
             ),
+            source_offset_s=result.source_offset_s,
         )
 
     def frames(self, window: VideoWindow, sample_fps: float):
@@ -122,13 +124,18 @@ class HttpVideoArchive:
             capture.release()
             raise DecodeError("CCTV Archive segment has no fps or frames")
         step = max(int(round(fps / sample_fps)), 1)
+        first = min(max(math.ceil(window.source_offset_s * fps), 0), count - 1)
+        duration_s = max((window.t_to - window.t_from).total_seconds(), 0.0)
+        last = min(first + int(duration_s * fps), count - 1)
         try:
-            for index in range(0, count, step):
+            for index in range(first, last + 1, step):
                 capture.set(cv2.CAP_PROP_POS_FRAMES, index)
                 ok, frame = capture.read()
                 if not ok:
                     raise DecodeError(f"CCTV Archive frame {index} failed")
-                observed_at = window.t_from + timedelta(seconds=index / fps)
+                observed_at = window.t_from + timedelta(
+                    seconds=index / fps - window.source_offset_s
+                )
                 if observed_at > window.t_to:
                     break
                 yield observed_at, frame

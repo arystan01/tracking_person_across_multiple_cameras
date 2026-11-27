@@ -1,0 +1,35 @@
+{
+  "anchors": {
+    "confirm": [],
+    "last_known_bbox_xywh": null,
+    "last_known_camera": "Cam001",
+    "last_known_footpoint_px": null,
+    "last_known_map_position": null,
+    "last_known_time": "2026-01-02T03:04:05Z",
+    "last_known_zone": null,
+    "operator_closed": false,
+    "reject": [],
+    "replay_evidence_only": false,
+    "review_only": false
+  },
+  "case": {
+    "case_id": "case-001",
+    "description": "",
+    "last_known_bbox_xywh": null,
+    "last_known_camera": null,
+    "last_known_footpoint_px": null,
+    "last_known_map_position": null,
+    "last_known_time": null,
+    "last_known_zone": null,
+    "profile": "ADULT",
+    "start_time": "2026-01-02T03:04:05Z",
+    "target_id": "target-001",
+    "window_end": "2026-01-02T03:05:05Z",
+    "window_start": "2026-01-02T03:04:05Z"
+  },
+  "contract_version": "routing-init.v1",
+  "now": "2026-01-02T03:04:05Z",
+  "params_version": "params-v1",
+  "site_id": "nvidia-12cam",
+  "site_version": "site-v1"
+}

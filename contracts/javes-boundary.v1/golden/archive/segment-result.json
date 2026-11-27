@@ -1,0 +1,20 @@
+{
+  "availability": "AVAILABLE",
+  "camera_id": "Cam001",
+  "contract_version": "video-archive-result.v1",
+  "coverage_ratio": 1.0,
+  "covered_from": "2026-01-02T03:04:05Z",
+  "covered_to": "2026-01-02T03:05:05Z",
+  "error_code": null,
+  "request_id": "archive-001",
+  "requested_from": "2026-01-02T03:04:05Z",
+  "requested_to": "2026-01-02T03:05:05Z",
+  "source_clock": "UTC_CORRECTED",
+  "source_offset_s": 0.0,
+  "source_ref": {
+    "archive_id": "nvidia:Cam001",
+    "object_key": null,
+    "sha256": null,
+    "uri": null
+  }
+}

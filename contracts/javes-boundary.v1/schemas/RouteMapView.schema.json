@@ -1,0 +1,41 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "alt_text": {
+      "title": "Alt Text",
+      "type": "string"
+    },
+    "floor_id": {
+      "title": "Floor Id",
+      "type": "string"
+    },
+    "height": {
+      "exclusiveMinimum": 0,
+      "title": "Height",
+      "type": "integer"
+    },
+    "mime_type": {
+      "title": "Mime Type",
+      "type": "string"
+    },
+    "url": {
+      "title": "Url",
+      "type": "string"
+    },
+    "width": {
+      "exclusiveMinimum": 0,
+      "title": "Width",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "floor_id",
+    "mime_type",
+    "url",
+    "alt_text",
+    "width",
+    "height"
+  ],
+  "title": "RouteMapView",
+  "type": "object"
+}

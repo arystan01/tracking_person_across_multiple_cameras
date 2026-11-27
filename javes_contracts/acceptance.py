@@ -150,7 +150,11 @@ def check_clip_state_result(
     _require(result.status == ClipProcessingStatus.READY, "clip state result must stay READY")
     _require(result.state == expected, "clip lifecycle state does not match command")
     if previous is not None:
-        _require(result.revision > previous.revision, "clip revision must increase")
+        already_applied = previous.state == expected and result == previous
+        _require(
+            already_applied or result.revision > previous.revision,
+            "clip revision must increase unless the state is already reached",
+        )
 
 
 def check_export_result(
@@ -183,6 +187,12 @@ def check_retention_result(
     _require(len(preserved) == len(set(preserved)), "duplicate preserved resource id")
     _require(not set(deleted) & set(preserved), "resource is both deleted and preserved")
     _require(bool(result.audit_tombstone_id), "retention result requires audit tombstone")
+    terminal = {
+        item.resource_id
+        for item in result.receipts
+        if item.status in {"DELETED", "ALREADY_MISSING"}
+    }
+    _require(terminal == set(deleted), "deleted resource lacks terminal receipt")
 
 
 def check_video_segment_result(

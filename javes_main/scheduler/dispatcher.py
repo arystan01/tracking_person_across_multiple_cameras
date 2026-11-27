@@ -7,16 +7,19 @@ from datetime import timedelta
 from typing import Any
 
 from javes_contracts import (
+    ClipPurgeCommand,
     ClipStateCommand,
     CutClipCommand,
     ExportClipsCommand,
     PerceptionProbeJob,
     RetentionCommand,
+    RetentionHoldCommand,
     RetentionResource,
     TargetGalleryCommand,
 )
 from javes_main.application import CaseManager
 from javes_main.domain import OutboxRecord, OutboxState, OutboxTopic
+from javes_main.observability import redact
 from javes_main.ports import CaseRepository, ClipPort, Clock, PerceptionPort, RetentionPort
 
 
@@ -98,7 +101,7 @@ class OutboxDispatcher:
                     continue
                 current.lease_owner = None
                 current.lease_expires_at = None
-                current.last_error = f"{type(exc).__name__}: {exc}"
+                current.last_error = str(redact(f"{type(exc).__name__}: {exc}"))
                 current.updated_at = self.clock.now()
                 if current.attempt >= current.max_attempts:
                     current.state = OutboxState.FAILED
@@ -201,6 +204,10 @@ class OutboxDispatcher:
             return self.clip.export(
                 ExportClipsCommand.model_validate(message.payload["command"])
             )
+        if topic == OutboxTopic.CLIP_PURGE:
+            return self.clip.purge(
+                ClipPurgeCommand.model_validate(message.payload["command"])
+            )
         if topic == OutboxTopic.RETENTION_REGISTER:
             self.retention.register(
                 RetentionResource.model_validate(message.payload["resource"])
@@ -209,5 +216,9 @@ class OutboxDispatcher:
         if topic == OutboxTopic.RETENTION_COMMAND:
             return self.retention.process(
                 RetentionCommand.model_validate(message.payload["command"])
+            )
+        if topic == OutboxTopic.RETENTION_HOLD:
+            return self.retention.apply_hold(
+                RetentionHoldCommand.model_validate(message.payload["command"])
             )
         raise ValueError(f"unsupported outbox topic {message.topic!r}")

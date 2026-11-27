@@ -1,0 +1,5 @@
+{
+  "contract_version": "worker-heartbeat.v1",
+  "extend_seconds": 30,
+  "lease_token": "opaque-example"
+}

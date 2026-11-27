@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 import httpx
 import pytest
+from PIL import Image
 
 from javes_contracts import (
     ArtifactRef,
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
+    CreateLegalHoldBody,
     LastKnown,
     LiveFeedUpdate,
     ReviewDecisionBody,
+    RevokeDecisionBody,
+    ReleaseLegalHoldBody,
 )
 from javes_main.adapters import (
     FileArtifactStore,
@@ -22,7 +27,7 @@ from javes_main.adapters import (
 )
 from javes_main.adapters.system import FixedClock
 from javes_main.api import create_app
-from javes_main.domain import JobState
+from javes_main.domain import JobState, ROLE_PERMISSIONS, UserRole
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
 from javes_routing.core.params import RoutingParams
@@ -87,6 +92,53 @@ def make_system():
     )
 
 
+@pytest.mark.anyio
+async def test_production_http_boundary_tls_rotation_cors_and_trace_headers():
+    system = make_system()
+    app = create_app(
+        system.manager,
+        auth=system.auth,
+        worker_tokens={"perception": ("current-token", "previous-token")},
+        worker_lease_secret="lease-secret-for-test",
+        require_https=True,
+        cors_origins=("https://dashboard.example",),
+    )
+    transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 443))
+    async with httpx.AsyncClient(transport=transport, base_url="http://main.test") as client:
+        rejected = await client.get("/health/ready")
+        assert rejected.status_code == 426
+        assert rejected.json()["code"] == "HTTPS_REQUIRED"
+    async with httpx.AsyncClient(transport=transport, base_url="https://main.test") as client:
+        for token in ("current-token", "previous-token"):
+            claimed = await client.post(
+                "/internal/v1/workers/perception/tasks/claim",
+                headers={"authorization": f"Bearer {token}", "x-request-id": "request-001"},
+                json={"worker_id": "worker-001", "limit": 1, "lease_seconds": 30},
+            )
+            assert claimed.status_code == 200
+            assert claimed.headers["x-request-id"] == "request-001"
+            assert claimed.headers["content-security-policy"].startswith("default-src 'none'")
+            assert claimed.headers["traceparent"].startswith("00-")
+        denied = await client.post(
+            "/internal/v1/workers/perception/tasks/claim",
+            headers={"authorization": "Bearer retired-token"},
+            json={"worker_id": "worker-001"},
+        )
+        assert denied.status_code == 401
+        invalid = await client.post(
+            "/v1/auth/login",
+            json={"username": "operator", "password": {"token": "must-not-leak"}},
+        )
+        assert invalid.status_code == 422
+        assert "must-not-leak" not in invalid.text
+        preflight = await client.options(
+            "/v1/cases",
+            headers={
+                "origin": "https://dashboard.example",
+                "access-control-request-method": "POST",
+            },
+        )
+        assert preflight.headers["access-control-allow-origin"] == "https://dashboard.example"
 def body(operator_id: str = "operator-1") -> CreateCaseBody:
     return CreateCaseBody(
         case_id="api-case",
@@ -107,12 +159,121 @@ def headers(key: str, token: str) -> dict[str, str]:
     }
 
 
+def reference_jpeg() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (32, 64), (120, 30, 40)).save(output, format="JPEG")
+    return output.getvalue()
+
+
+async def create_case_http(
+    client: httpx.AsyncClient,
+    request: CreateCaseBody,
+    token: str,
+    key: str,
+) -> httpx.Response:
+    uploaded = await client.post(
+        f"/v1/cases/{request.case_id}/reference-image",
+        headers=headers(f"{key}-reference", token),
+        files={"file": ("reference.jpg", reference_jpeg(), "image/jpeg")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    request = request.model_copy(
+        update={
+            "reference_image_ref": ArtifactRef.model_validate(
+                uploaded.json()["reference_image_ref"]
+            )
+        }
+    )
+    return await client.post(
+        "/v1/cases",
+        json=request.model_dump(mode="json"),
+        headers=headers(key, token),
+    )
+
+
 async def login(client: httpx.AsyncClient, username: str, password: str) -> str:
     response = await client.post(
         "/v1/auth/login", json={"username": username, "password": password}
     )
     assert response.status_code == 200, response.text
     return response.json()["access_token"]
+
+
+@pytest.mark.anyio
+async def test_dashboard_catalog_case_detail_reference_and_candidate_state():
+    system = make_system()
+    app = create_app(
+        system.manager,
+        auth=system.auth,
+        scheduler=system.scheduler,
+        run_fake_jobs_inline=True,
+        allowed_site_versions=(("api-site", "v1"),),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = await login(client, "root", "root-password-for-tests")
+        catalog = await client.get(
+            "/v1/sites", headers={"authorization": f"Bearer {token}"}
+        )
+        assert catalog.status_code == 200
+        assert catalog.json()[0]["site_version"] == "v1"
+        assert [item["camera_id"] for item in catalog.json()[0]["cameras"]] == [
+            "A",
+            "B",
+        ]
+
+        uploaded = await client.post(
+            "/v1/cases/api-case/reference-image",
+            headers=headers("dashboard-upload", token),
+            files={"file": ("reference.jpg", reference_jpeg(), "image/jpeg")},
+        )
+        request = body(system.root_user.user_id).model_copy(
+            update={
+                "reference_upload_id": uploaded.json()["upload_id"],
+                "reference_image_ref": None,
+            }
+        )
+        created = await client.post(
+            "/v1/cases",
+            headers=headers("dashboard-create", token),
+            json=request.model_dump(mode="json"),
+        )
+        assert created.status_code == 201, created.text
+        detail = await client.get(
+            "/v1/cases/api-case",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        assert detail.status_code == 200
+        assert detail.json()["target_id"] == "target-1"
+        assert detail.json()["reference_preview_url"].endswith("/reference")
+        reference = await client.get(
+            detail.json()["reference_preview_url"],
+            headers={"authorization": f"Bearer {token}"},
+        )
+        assert reference.status_code == 200
+        assert reference.headers["content-type"].startswith("image/jpeg")
+
+        candidate = created.json()["candidates"][0]
+        assert candidate["decision_state"] == "UNREVIEWED"
+        decision = ReviewDecisionBody(
+            decision_id="dashboard-confirm",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id=system.root_user.user_id,
+            occurred_at=BASE + timedelta(seconds=70),
+        )
+        confirmed = await client.post(
+            "/v1/cases/api-case/decisions",
+            headers=headers("dashboard-confirm", token),
+            json=decision.model_dump(mode="json"),
+        )
+        assert confirmed.status_code == 200
+        confirmed_candidate = confirmed.json()["candidates"][0]
+        assert confirmed_candidate["decision_state"] == "CONFIRMED"
+        assert confirmed_candidate["active_decision_id"] == "dashboard-confirm"
+        assert confirmed_candidate["clip_state"] == "CONFIRMED"
 
 
 @pytest.mark.anyio
@@ -160,10 +321,8 @@ async def test_controls_http_fake_end_to_end():
         assert changed.status_code == 204
         operator_token = await login(client, "operator", "operator-password-2")
 
-        created = await client.post(
-            "/v1/cases",
-            json=body(operator_id).model_dump(mode="json"),
-            headers=headers("create-1", operator_token),
+        created = await create_case_http(
+            client, body(operator_id), operator_token, "create-1"
         )
         assert created.status_code == 201, created.text
         view = created.json()
@@ -193,10 +352,8 @@ async def test_controls_http_fake_end_to_end():
         assert case_events.status_code == 200
         assert any(item["event_type"] == "CASE_CREATED" for item in case_events.json())
 
-        replay = await client.post(
-            "/v1/cases",
-            json=body(operator_id).model_dump(mode="json"),
-            headers=headers("create-1", operator_token),
+        replay = await create_case_http(
+            client, body(operator_id), operator_token, "create-1"
         )
         assert replay.status_code == 201
         assert replay.json()["revision"] == view["revision"]
@@ -273,6 +430,11 @@ async def test_controls_http_fake_end_to_end():
         assert metrics.json()["camera_seconds_processed"] > 0
         assert metrics.json()["job_completion_latency"]["count"] >= 1
         assert metrics.json()["routing_trigger_latency"]["count"] >= 1
+        assert metrics.json()["routing_trigger_latency"]["p95_s"] >= 0
+        assert set(metrics.json()["queue_depth"]) == {"jobs", "outbox", "routing"}
+        assert set(metrics.json()["terminal_failures"]) == {"jobs", "outbox", "routing"}
+        assert metrics.json()["expired_leases"] >= 0
+        assert metrics.json()["deletion_failures"] >= 0
 
         delete = CaseCommandBody(
             command_id="delete-1",
@@ -296,6 +458,154 @@ async def test_controls_http_fake_end_to_end():
         )
         assert deleted.status_code == 200, deleted.text
         assert deleted.json()["lifecycle"] == "DELETED"
+
+
+@pytest.mark.anyio
+async def test_controls_decision_history_and_revoke_api():
+    system = make_system()
+    transport = httpx.ASGITransport(
+        app=create_app(
+            system.manager,
+            auth=system.auth,
+            scheduler=system.scheduler,
+            run_fake_jobs_inline=True,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        root_token = await login(client, "root", "root-password-for-tests")
+        me = await client.get(
+            "/v1/auth/me",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        root_id = me.json()["user_id"]
+        created = await create_case_http(
+            client, body(root_id), root_token, "revoke-api-create"
+        )
+        assert created.status_code == 201, created.text
+        candidate = created.json()["candidates"][0]
+        decision = ReviewDecisionBody(
+            decision_id="api-revoke-decision",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id=root_id,
+            occurred_at=BASE + timedelta(seconds=70),
+        )
+        confirmed = await client.post(
+            "/v1/cases/api-case/decisions",
+            json=decision.model_dump(mode="json"),
+            headers=headers("api-revoke-decision", root_token),
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        history = await client.get(
+            "/v1/cases/api-case/decisions",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        assert history.status_code == 200
+        assert history.json()[0]["active"] is True
+
+        revoke = RevokeDecisionBody(
+            revocation_id="api-revocation",
+            decision_id=decision.decision_id,
+            operator_id=root_id,
+            reason="wrong person selected",
+            occurred_at=BASE + timedelta(seconds=75),
+            expected_case_revision=confirmed.json()["revision"],
+        )
+        revoked = await client.post(
+            f"/v1/cases/api-case/decisions/{decision.decision_id}/revoke",
+            json=revoke.model_dump(mode="json"),
+            headers=headers("api-revocation", root_token),
+        )
+        assert revoked.status_code == 200, revoked.text
+        history = await client.get(
+            "/v1/cases/api-case/decisions",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        assert history.json()[0]["active"] is False
+        assert history.json()[0]["revocation_id"] == "api-revocation"
+
+        duplicate = await client.post(
+            f"/v1/cases/api-case/decisions/{decision.decision_id}/revoke",
+            json=revoke.model_dump(mode="json"),
+            headers=headers("api-revocation", root_token),
+        )
+        assert duplicate.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_controls_legal_hold_is_root_only_ticketed_and_idempotent():
+    assert "case.legal_hold.manage" not in ROLE_PERMISSIONS[UserRole.ADMIN]
+    assert "case.legal_hold.manage" not in ROLE_PERMISSIONS[UserRole.OPERATOR]
+    system = make_system()
+    transport = httpx.ASGITransport(
+        app=create_app(
+            system.manager,
+            auth=system.auth,
+            scheduler=system.scheduler,
+            run_fake_jobs_inline=True,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        root_token = await login(client, "root", "root-password-for-tests")
+        me = await client.get(
+            "/v1/auth/me", headers={"authorization": f"Bearer {root_token}"}
+        )
+        root_id = me.json()["user_id"]
+        created = await create_case_http(
+            client, body(root_id), root_token, "legal-api-create"
+        )
+        assert created.status_code == 201
+        hold = CreateLegalHoldBody(
+            hold_id="api-hold",
+            external_ticket_id="LEGAL-9001",
+            reason="court preservation request",
+            operator_id=root_id,
+            occurred_at=BASE + timedelta(seconds=70),
+            expected_case_revision=created.json()["revision"],
+        )
+        held = await client.post(
+            "/v1/cases/api-case/legal-holds",
+            json=hold.model_dump(mode="json"),
+            headers=headers("api-hold", root_token),
+        )
+        assert held.status_code == 201, held.text
+        assert held.json()["active"] is True
+        assert held.json()["external_ticket_id"] == "LEGAL-9001"
+        listed = await client.get(
+            "/v1/cases/api-case/legal-holds",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        assert listed.status_code == 200
+        assert [item["hold_id"] for item in listed.json()] == ["api-hold"]
+
+        current = await client.get(
+            "/v1/cases/api-case/view",
+            headers={"authorization": f"Bearer {root_token}"},
+        )
+        release = ReleaseLegalHoldBody(
+            release_id="api-hold-release",
+            hold_id="api-hold",
+            external_ticket_id="LEGAL-9001",
+            reason="court preservation request closed",
+            operator_id=root_id,
+            occurred_at=BASE + timedelta(seconds=80),
+            expected_case_revision=current.json()["revision"],
+        )
+        released = await client.post(
+            "/v1/cases/api-case/legal-holds/api-hold/release",
+            json=release.model_dump(mode="json"),
+            headers=headers("api-hold-release", root_token),
+        )
+        assert released.status_code == 200, released.text
+        assert released.json()["active"] is False
+        assert released.json()["release_pending"] is False
+        duplicate = await client.post(
+            "/v1/cases/api-case/legal-holds/api-hold/release",
+            json=release.model_dump(mode="json"),
+            headers=headers("api-hold-release", root_token),
+        )
+        assert duplicate.status_code == 200
 
 
 @pytest.mark.anyio
@@ -340,10 +650,8 @@ async def test_controls_allows_authorised_review_after_close_without_restarting_
 
         operator_id, operator_token = await create_user("reviewer", "OPERATOR")
         viewer_id, viewer_token = await create_user("observer", "VIEWER")
-        created = await client.post(
-            "/v1/cases",
-            json=body(operator_id).model_dump(mode="json"),
-            headers=headers("closed-review-create", operator_token),
+        created = await create_case_http(
+            client, body(operator_id), operator_token, "closed-review-create"
         )
         assert created.status_code == 201, created.text
         candidate = created.json()["candidates"][0]
@@ -445,10 +753,11 @@ async def test_worker_result_endpoint_requires_token_and_is_idempotent():
         service_token = await login(
             client, "perception-service", "service-password-123"
         )
-        response = await client.post(
-            "/v1/cases",
-            json=body(system.root_user.user_id).model_dump(mode="json"),
-            headers=headers("create-worker", root_token),
+        response = await create_case_http(
+            client,
+            body(system.root_user.user_id),
+            root_token,
+            "create-worker",
         )
         assert response.status_code == 201
         system.outbox_dispatcher.drain()
@@ -490,10 +799,11 @@ async def test_live_feed_metadata_is_worker_only_and_stream_is_case_authorised()
     )
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         root_token = await login(client, "root", "root-password-for-tests")
-        created = await client.post(
-            "/v1/cases",
-            json=body(system.root_user.user_id).model_dump(mode="json"),
-            headers=headers("live-create", root_token),
+        created = await create_case_http(
+            client,
+            body(system.root_user.user_id),
+            root_token,
+            "live-create",
         )
         assert created.status_code == 201
         system.outbox_dispatcher.drain()
@@ -583,10 +893,8 @@ async def test_controls_http_with_sql_survives_application_restart(tmp_path):
         base_url="http://test",
     ) as client:
         token = await login(client, "root", "root-password-123")
-        created = await client.post(
-            "/v1/cases",
-            json=body(root.user_id).model_dump(mode="json"),
-            headers=headers("sql-create", token),
+        created = await create_case_http(
+            client, body(root.user_id), token, "sql-create"
         )
         assert created.status_code == 201, created.text
         expected = created.json()

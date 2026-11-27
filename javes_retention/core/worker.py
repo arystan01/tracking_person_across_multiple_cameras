@@ -4,17 +4,31 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Callable
 
-from javes_contracts import RetentionCommand, RetentionResource, RetentionResult
+from javes_contracts import (
+    RetentionCommand,
+    RetentionDeletionReceipt,
+    RetentionHoldCommand,
+    RetentionHoldResult,
+    RetentionResource,
+    RetentionResult,
+)
 
 from .policy import RetentionPolicy
 from ..runtime.repository import SQLiteRetentionRepository, StoredResource
-from ..runtime.storage import DeletionPending, DeletionRouter
+from ..runtime.storage import (
+    DeletionPending,
+    DeletionReceipt,
+    DeletionRouter,
+    StorageLocator,
+    artifact_locators,
+)
 
 
 def _system_now() -> datetime:
@@ -29,6 +43,11 @@ def _canonical(value: object) -> str:
 
 def _fingerprint(value: object) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+
+
+def _error_code(exc: BaseException) -> str:
+    name = type(exc).__name__
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
 
 
 def _tombstone(command: RetentionCommand) -> str:
@@ -84,6 +103,21 @@ class RetentionWorker:
             return True
         return first.artifact_ref == second.artifact_ref
 
+    def _effective_resource(self, resource: RetentionResource) -> RetentionResource:
+        if resource.legal_hold or not self.repository.active_hold_ids(resource.case_id):
+            return resource
+        return resource.model_copy(update={"legal_hold": True})
+
+    def apply_hold(self, command: RetentionHoldCommand) -> RetentionHoldResult:
+        """Apply a case-wide hold command without mutating resource identity."""
+
+        with self._lock, self.repository.command_lock():
+            return self.repository.apply_hold_command(
+                command,
+                _fingerprint(command),
+                now=self._now(),
+            ).model_copy(deep=True)
+
     def register(self, resource: RetentionResource) -> None:
         """Upsert inventory and immediately enforce any existing tombstone."""
 
@@ -93,7 +127,7 @@ class RetentionWorker:
                 "it cannot be registered as a Retention-owned artifact"
             )
 
-        with self._lock:
+        with self._lock, self.repository.command_lock():
             now = self._now()
             incoming = resource.model_copy(deep=True, update={"deleted": False})
             with self.repository.transaction():
@@ -105,30 +139,30 @@ class RetentionWorker:
                         raise ValueError(
                             "resource_id cannot be re-registered with another artifact location"
                         )
-                    if not self.policy.allows_class_transition(
-                        previous.resource.retention_class,
-                        incoming.retention_class,
-                    ):
-                        # An older at-least-once registration arrived after a
-                        # terminal lifecycle update. Keep the newer policy
-                        # state; retrying the stale message is unnecessary.
-                        return
-                    # Allow metadata-only registration to be enriched once a stable
-                    # artifact reference becomes known.
-                    if incoming.artifact_ref is None:
-                        incoming = incoming.model_copy(
-                            update={"artifact_ref": previous.resource.artifact_ref}
+                    if previous.resource.legal_hold and not incoming.legal_hold:
+                        raise ValueError(
+                            "legal hold release requires an authority workflow"
                         )
+                    if incoming.revision < previous.resource.revision:
+                        return
+                    if incoming.revision == previous.resource.revision:
+                        if previous.state == "DELETED":
+                            return
+                        if incoming != previous.resource:
+                            raise ValueError(
+                                "same retention resource revision has different payload"
+                            )
+                        return
                 marker = self.repository.get_case_marker(incoming.case_id)
                 must_delete = self.policy.should_delete_after_case_marker(
-                    incoming,
+                    self._effective_resource(incoming),
                     closed=marker.closed_at is not None,
                     deleted_or_expired=(
                         marker.deleted_at is not None
                         or marker.ttl_expired_at is not None
                     ),
                 )
-                if previous is not None and previous.state == "DELETED" and not must_delete:
+                if previous is not None and previous.state == "DELETED":
                     # A later legal-hold/class update cannot restore bytes that
                     # were already erased.
                     self.repository.save_resource(
@@ -158,8 +192,88 @@ class RetentionWorker:
                     self._redact_deleted_resource(incoming.resource_id, proof)
                 except Exception as exc:
                     raise RetentionDeletionError(
-                        f"late resource {incoming.resource_id!r} cleanup failed: {exc}"
+                        f"late resource {incoming.resource_id!r} cleanup failed: "
+                        f"{_error_code(exc)}"
                     ) from exc
+
+    @staticmethod
+    def _locator_hash(locator: StorageLocator) -> str:
+        value = f"{locator.kind}\x1f{locator.value}".encode("utf-8")
+        return "sha256:" + hashlib.sha256(value).hexdigest()
+
+    def _receipt_proof(
+        self,
+        resource_id: str,
+        attempt: int,
+        receipts: list[DeletionReceipt],
+        *,
+        occurred_at: datetime,
+        failed: bool = False,
+        error_code: str | None = None,
+    ) -> list[dict[str, object]]:
+        result: list[dict[str, object]] = []
+        for receipt in receipts:
+            status = (
+                "FAILED"
+                if failed or not receipt.final
+                else "ALREADY_MISSING"
+                if receipt.already_absent
+                else "DELETED"
+            )
+            result.append(
+                RetentionDeletionReceipt(
+                    resource_id=resource_id,
+                    backend_kind=receipt.backend,
+                    locator_kind=receipt.locator.kind,
+                    locator_hash=self._locator_hash(receipt.locator),
+                    attempt=attempt,
+                    status=status,
+                    occurred_at=occurred_at,
+                    error_code=error_code if status == "FAILED" else None,
+                ).model_dump(mode="json")
+            )
+        return result
+
+    def _failure_proof(
+        self,
+        stored: StoredResource,
+        attempt: int,
+        exc: Exception,
+    ) -> list[dict[str, object]]:
+        error_code = _error_code(exc)
+        if isinstance(exc, DeletionPending):
+            receipts = [exc.receipt]
+        else:
+            try:
+                locators = artifact_locators(stored.resource.artifact_ref)
+            except Exception:
+                locators = []
+            if not locators:
+                locators = [
+                    StorageLocator("metadata", stored.resource.resource_id)
+                ]
+            receipts = [
+                DeletionReceipt(
+                    locator=locator,
+                    deleted=False,
+                    already_absent=False,
+                    final=False,
+                    backend=getattr(
+                        self.deletion_router.backends.get(locator.kind),
+                        "name",
+                        locator.kind,
+                    ),
+                )
+                for locator in locators
+            ]
+        return self._receipt_proof(
+            stored.resource.resource_id,
+            attempt,
+            receipts,
+            occurred_at=self._now(),
+            failed=True,
+            error_code=error_code,
+        )
 
     def _delete_resource(self, resource_id: str) -> list[dict[str, object]]:
         stored = self.repository.get_resource(resource_id)
@@ -177,18 +291,28 @@ class RetentionWorker:
         )
         try:
             receipts = self.deletion_router.delete(stored.resource)
-            proof = [receipt.to_dict() for receipt in receipts]
+            proof = [
+                *stored.proof,
+                *self._receipt_proof(
+                    resource_id,
+                    attempt,
+                    receipts,
+                    occurred_at=self._now(),
+                ),
+            ]
         except Exception as exc:
-            failure_proof = stored.proof
-            if isinstance(exc, DeletionPending):
-                failure_proof = [exc.receipt.to_dict()]
+            failure_proof = [
+                *stored.proof,
+                *self._failure_proof(stored, attempt, exc),
+            ]
+            error_code = _error_code(exc)
             self.repository.save_resource(
                 stored.resource,
                 state="DELETE_FAILED",
                 now=self._now(),
                 registered_at=stored.registered_at,
                 attempt=attempt,
-                last_error=f"{type(exc).__name__}: {exc}",
+                last_error=error_code,
                 proof=failure_proof,
             )
             raise
@@ -216,7 +340,7 @@ class RetentionWorker:
                     "value": "sha256:"
                     + hashlib.sha256(locator_value.encode("utf-8")).hexdigest(),
                 }
-            value["detail"] = None
+            value.pop("detail", None)
             sanitized.append(value)
         return sanitized
 
@@ -258,7 +382,7 @@ class RetentionWorker:
     def process(self, command: RetentionCommand) -> RetentionResult:
         """Apply one idempotent command and return final deletion proof."""
 
-        with self._lock:
+        with self._lock, self.repository.command_lock():
             fingerprint = _fingerprint(command)
             previous = self.repository.get_command(command.command_id)
             if previous is not None:
@@ -279,7 +403,9 @@ class RetentionWorker:
                 for item in self.repository.list_resources(command.case_id):
                     if item.state == "DELETED":
                         continue
-                    candidate = item.resource.model_copy(update={"deleted": False})
+                    candidate = self._effective_resource(
+                        item.resource.model_copy(update={"deleted": False})
+                    )
                     if self.policy.should_delete(candidate, command):
                         targets.append(candidate.resource_id)
                     else:
@@ -325,7 +451,7 @@ class RetentionWorker:
                         proof=proof,
                     )
                 except Exception as exc:
-                    error = f"{type(exc).__name__}: {exc}"
+                    error = _error_code(exc)
                     self.repository.update_command_item(
                         command.command_id,
                         item.resource_id,
@@ -337,7 +463,7 @@ class RetentionWorker:
                     )
                     raise RetentionDeletionError(
                         f"retention command {command.command_id!r} failed on "
-                        f"resource {item.resource_id!r}: {exc}"
+                        f"resource {item.resource_id!r}: {error}"
                     ) from exc
 
             items = self.repository.list_command_items(command.command_id)
@@ -360,16 +486,36 @@ class RetentionWorker:
                 for item in items
                 if item.disposition == "PRESERVE"
             )
+            held = sorted(
+                resource_id
+                for resource_id in preserved
+                if (
+                    (stored := self.repository.get_resource(resource_id)) is not None
+                    and stored.resource.retention_class
+                    not in self.policy.always_preserve_classes
+                    and self._effective_resource(stored.resource).legal_hold
+                )
+            )
+            self._redact_completed_deletions(command.command_id)
+            items = self.repository.list_command_items(command.command_id)
+            receipts = [
+                RetentionDeletionReceipt.model_validate(receipt)
+                for item in items
+                if item.disposition == "DELETE"
+                for receipt in item.proof
+                if receipt.get("contract_version")
+                == "retention-deletion-receipt.v1"
+            ]
             result = RetentionResult(
                 command_id=command.command_id,
                 case_id=command.case_id,
                 action=command.action,
                 deleted_resource_ids=deleted,
                 preserved_resource_ids=preserved,
+                held_resource_ids=held,
                 audit_tombstone_id=_tombstone(command),
+                receipts=receipts,
             )
-            self._redact_completed_deletions(command.command_id)
-            items = self.repository.list_command_items(command.command_id)
             proof_payload = [
                 {
                     "resource_id": item.resource_id,
@@ -406,7 +552,14 @@ class RetentionWorker:
         return {
             "policy_version": self.policy.version,
             "resources_by_state": dict(sorted(states.items())),
-            "legal_holds": sum(item.resource.legal_hold for item in resources),
+            "legal_holds": sum(
+                self._effective_resource(item.resource).legal_hold
+                for item in resources
+            ),
+            "active_case_holds": sum(
+                len(self.repository.active_hold_ids(case_id))
+                for case_id in {item.resource.case_id for item in resources}
+            ),
             "failed_deletions": len(failures),
             "oldest_failure_age_s": (
                 max((now - min(item.updated_at for item in failures)).total_seconds(), 0.0)
@@ -435,7 +588,7 @@ class RetentionWorker:
             if (
                 item.state != "DELETED"
                 and (marker.deleted_at is not None or marker.ttl_expired_at is not None)
-                and not value.legal_hold
+                and not self._effective_resource(value).legal_hold
                 and value.retention_class not in self.policy.always_preserve_classes
                 and value.expires_at is not None
                 and value.expires_at <= cutoff

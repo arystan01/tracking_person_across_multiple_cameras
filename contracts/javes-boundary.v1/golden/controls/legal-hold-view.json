@@ -1,0 +1,14 @@
+{
+  "active": true,
+  "case_id": "case-001",
+  "external_ticket_id": "LEGAL-2026-001",
+  "hold_id": "hold-001",
+  "reason": "Preservation request",
+  "release_id": null,
+  "release_pending": false,
+  "release_reason": null,
+  "released_at": null,
+  "released_by": null,
+  "set_at": "2026-01-02T03:05:05Z",
+  "set_by": "root-001"
+}

@@ -7,8 +7,10 @@ from datetime import timedelta
 
 from javes_main.application import CaseManager
 from javes_main.domain import RoutingTriggerState
-from javes_main.persistence import RevisionConflict
+from javes_main.observability import redact
 from javes_main.ports import CaseRepository, Clock
+from javes_main.persistence import RevisionConflict
+from javes_telemetry import operation, record_counter
 
 
 @dataclass(frozen=True)
@@ -46,40 +48,69 @@ class RoutingTriggerDispatcher:
         )
         completed = retried = failed = 0
         for trigger in triggers:
-            try:
-                self.manager.process_routing_trigger(trigger)
-                with self.repository.transaction():
+            with operation(
+                "scheduler.routing_tick", {"component": "main", "operation": "routing"}
+            ):
+                try:
+                    self.manager.process_routing_trigger(trigger)
+                    with self.repository.transaction():
+                        try:
+                            current = self.repository.get_routing_trigger(
+                                trigger.trigger_id
+                            )
+                        except KeyError:
+                            # A concurrent successful case deletion purges all
+                            # remaining Routing work; that is a completed outcome.
+                            completed += 1
+                            continue
+                        current.state = RoutingTriggerState.DONE
+                        current.lease_owner = None
+                        current.lease_expires_at = None
+                        current.last_error = None
+                        current.updated_at = self.clock.now()
+                        self.repository.save_routing_trigger(current)
+                    completed += 1
+                    record_counter(
+                        "javes.routing.dispatch",
+                        attributes={"component": "main", "outcome": "completed"},
+                    )
+                except Exception as exc:
                     try:
-                        current = self.repository.get_routing_trigger(trigger.trigger_id)
+                        current = self.repository.get_routing_trigger(
+                            trigger.trigger_id
+                        )
                     except KeyError:
-                        # A concurrent successful case deletion purges all
-                        # remaining Routing work; that is a completed outcome.
                         completed += 1
                         continue
-                    current.state = RoutingTriggerState.DONE
                     current.lease_owner = None
                     current.lease_expires_at = None
-                    current.last_error = None
+                    current.last_error = str(redact(f"{type(exc).__name__}: {exc}"))
                     current.updated_at = self.clock.now()
+                    # Concurrent worker callbacks legitimately advance the
+                    # case while Routing runs. Recompute from the new revision;
+                    # contention must not exhaust the transport failure budget.
+                    if isinstance(exc, RevisionConflict):
+                        current.attempt = max(0, current.attempt - 1)
+                        current.state = RoutingTriggerState.PENDING
+                        retried += 1
+                    elif current.attempt >= current.max_attempts:
+                        current.state = RoutingTriggerState.FAILED
+                        failed += 1
+                    else:
+                        current.state = RoutingTriggerState.PENDING
+                        retried += 1
                     self.repository.save_routing_trigger(current)
-                completed += 1
-            except Exception as exc:
-                try:
-                    current = self.repository.get_routing_trigger(trigger.trigger_id)
-                except KeyError:
-                    completed += 1
-                    continue
-                current.lease_owner = None
-                current.lease_expires_at = None
-                current.last_error = f"{type(exc).__name__}: {exc}"
-                current.updated_at = self.clock.now()
-                if current.attempt >= current.max_attempts:
-                    current.state = RoutingTriggerState.FAILED
-                    failed += 1
-                else:
-                    current.state = RoutingTriggerState.PENDING
-                    retried += 1
-                self.repository.save_routing_trigger(current)
+                    record_counter(
+                        "javes.routing.dispatch",
+                        attributes={
+                            "component": "main",
+                            "outcome": (
+                                "failed"
+                                if current.state == RoutingTriggerState.FAILED
+                                else "retry"
+                            ),
+                        },
+                    )
         return RoutingDispatchReport(
             claimed=len(triggers),
             completed=completed,

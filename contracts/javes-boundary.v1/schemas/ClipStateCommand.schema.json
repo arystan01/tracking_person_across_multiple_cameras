@@ -1,0 +1,58 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "HOLD",
+        "CONFIRM",
+        "RELEASE"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "clip_id": {
+      "title": "Clip Id",
+      "type": "string"
+    },
+    "command_id": {
+      "title": "Command Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "clip-state-command.v1",
+      "default": "clip-state-command.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "operator_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Operator Id"
+    }
+  },
+  "required": [
+    "command_id",
+    "case_id",
+    "clip_id",
+    "action",
+    "occurred_at"
+  ],
+  "title": "ClipStateCommand",
+  "type": "object"
+}

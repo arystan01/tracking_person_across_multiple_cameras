@@ -1,0 +1,128 @@
+{
+  "$defs": {
+    "ProbeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "camera": {
+          "title": "Camera",
+          "type": "string"
+        },
+        "hypothesis_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hypothesis Ids",
+          "type": "array"
+        },
+        "priority": {
+          "default": 1.0,
+          "title": "Priority",
+          "type": "number"
+        },
+        "probe_id": {
+          "title": "Probe Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "ROUTE_EXPANSION",
+          "title": "Reason",
+          "type": "string"
+        },
+        "retry_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "retry_of": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Of"
+        },
+        "t_from": {
+          "format": "date-time",
+          "title": "T From",
+          "type": "string"
+        },
+        "t_to": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "T To"
+        }
+      },
+      "required": [
+        "probe_id",
+        "camera",
+        "t_from",
+        "t_to"
+      ],
+      "title": "ProbeRequest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "perception-job.v1",
+      "default": "perception-job.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "deadline": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Deadline"
+    },
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "kind": {
+      "const": "PROBE",
+      "default": "PROBE",
+      "title": "Kind",
+      "type": "string"
+    },
+    "probe": {
+      "$ref": "#/$defs/ProbeRequest"
+    },
+    "target_gallery_ref": {
+      "title": "Target Gallery Ref",
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id",
+    "case_id",
+    "target_gallery_ref",
+    "probe"
+  ],
+  "title": "PerceptionProbeJob",
+  "type": "object"
+}

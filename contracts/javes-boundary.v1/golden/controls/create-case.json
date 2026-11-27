@@ -1,0 +1,22 @@
+{
+  "case_id": "case-001",
+  "last_known": {
+    "bbox_xywh": null,
+    "camera_id": "Cam001",
+    "footpoint_px": null,
+    "map_position": null,
+    "time": "2026-01-02T03:04:05Z",
+    "zone_id": null
+  },
+  "operator_id": "user-001",
+  "profile": "ADULT",
+  "reference_image_ref": null,
+  "reference_upload_id": "reference-upload-001",
+  "site_id": "nvidia-12cam",
+  "site_version": "site-v1",
+  "target_id": "target-001",
+  "window": {
+    "end": "2026-01-02T03:05:05Z",
+    "start": "2026-01-02T03:04:05Z"
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "CaseLifecycle": {
+      "enum": [
+        "PREPARING",
+        "SEARCHING",
+        "CLOSED",
+        "EXPORTING",
+        "SAVED",
+        "DELETE_REQUESTED",
+        "DELETED",
+        "FAILED"
+      ],
+      "title": "CaseLifecycle",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/CaseLifecycle"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mode"
+    },
+    "revision": {
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "route_revision": {
+      "minimum": 0,
+      "title": "Route Revision",
+      "type": "integer"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "site_version": {
+      "title": "Site Version",
+      "type": "string"
+    },
+    "target_id": {
+      "title": "Target Id",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "case_id",
+    "target_id",
+    "lifecycle",
+    "revision",
+    "route_revision",
+    "site_id",
+    "site_version",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "CaseSummary",
+  "type": "object"
+}

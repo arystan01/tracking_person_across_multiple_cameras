@@ -1,0 +1,15 @@
+{
+  "access_token": "example-token-not-a-secret",
+  "expires_at": "2026-01-02T03:05:05Z",
+  "token_type": "bearer",
+  "user": {
+    "must_change_password": false,
+    "permissions": [
+      "case.read",
+      "case.review"
+    ],
+    "role": "OPERATOR",
+    "user_id": "user-001",
+    "username": "operator"
+  }
+}

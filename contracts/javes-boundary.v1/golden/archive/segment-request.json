@@ -1,0 +1,7 @@
+{
+  "camera_id": "Cam001",
+  "contract_version": "video-archive-request.v1",
+  "request_id": "archive-001",
+  "t_from": "2026-01-02T03:04:05Z",
+  "t_to": "2026-01-02T03:05:05Z"
+}

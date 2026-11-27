@@ -6,8 +6,6 @@ import sys
 import tomllib
 from pathlib import Path
 
-import setuptools
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,11 +17,7 @@ def imported_modules(package: Path) -> set[str]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 modules.update(alias.name for alias in node.names)
-            elif (
-                isinstance(node, ast.ImportFrom)
-                and node.module
-                and node.level == 0
-            ):
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                 modules.add(node.module)
     return modules
 
@@ -49,6 +43,7 @@ def test_core_import_boundaries() -> None:
         in {"fastapi", "httpx", "sqlalchemy", "sqlite3", "pathlib", "requests"}
         for name in routing
     )
+    assert not any(name.startswith("javes_telemetry") for name in routing)
 
     perception = imported_modules(ROOT / "javes_perception" / "core")
     assert not any(
@@ -58,12 +53,14 @@ def test_core_import_boundaries() -> None:
         or name.startswith("javes_workers.")
         for name in perception
     )
+    assert not any(name.startswith("javes_telemetry") for name in perception)
 
     retention = imported_modules(ROOT / "javes_retention" / "core")
     assert not any(
         name.split(".")[0] in {"fastapi", "httpx", "requests", "javes_workers"}
         for name in retention
     )
+    assert not any(name.startswith("javes_telemetry") for name in retention)
 
 
 def test_contracts_depend_only_on_pydantic_and_standard_library() -> None:
@@ -85,10 +82,18 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         "javes-routing-bench": "javes_routing.service.bench:main",
         "javes-perception-worker": "javes_perception.runtime.worker_cli:main",
         "javes-retention-worker": "javes_retention.runtime.worker_cli:main",
+        "javes-clip-worker": "javes_clip.worker_cli:main",
+        "javes-nvidia-archive-api": "javes_archive.cli:api_main",
+        "javes-nvidia-archive-inspect": "javes_archive.cli:inspect_main",
+        "javes-site-config-publish": "javes_site_config.publisher_cli:main",
+        "javes-contract-bundle": "javes_contracts.bundle:main",
+        "javes-main-backup": "javes_main.persistence.backup:main",
+        "javes-main-dlq": "javes_main.application.dlq_cli:main",
+        "javes-routing-calibrate": "javes_routing.service.timing_calibration:main",
+        "javes-routing-shadow": "javes_routing.service.shadow_benchmark:main",
+        "javes-nvidia-acceptance": "javes_release.cli:main",
     }
-    configuration = tomllib.loads(
-        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     scripts = configuration["project"]["scripts"]
     for command, target in targets.items():
         assert scripts[command] == target
@@ -97,8 +102,11 @@ def test_preserved_console_entrypoints_are_importable() -> None:
         assert callable(getattr(module, attribute))
 
 
-def test_setuptools_discovers_new_packages_only() -> None:
-    packages = set(setuptools.find_packages(where=ROOT))
+def test_package_tree_contains_new_packages_only() -> None:
+    packages = {
+        ".".join(path.parent.relative_to(ROOT).parts)
+        for path in ROOT.rglob("__init__.py")
+    }
     assert {
         "javes_routing.core",
         "javes_routing.service",
@@ -106,6 +114,10 @@ def test_setuptools_discovers_new_packages_only() -> None:
         "javes_perception.runtime",
         "javes_retention.core",
         "javes_retention.runtime",
+        "javes_clip",
+        "javes_archive",
+        "javes_release",
+        "javes_telemetry",
     } <= packages
     assert "routing" not in packages
     assert "javes_routing_api" not in packages

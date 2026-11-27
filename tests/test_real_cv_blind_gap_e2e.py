@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import shutil
 import xml.etree.ElementTree as ET
@@ -14,7 +13,6 @@ import pytest
 from tests.support.real_cv_e2e import (
     ReportVideo,
     SyncASGIClient,
-    clip_video_window,
     nvidia_pixel_to_map_homographies,
     project_pixel,
     publish_inspectable_report,
@@ -229,7 +227,6 @@ def _candidate_table(result) -> list[tuple]:
 def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
     require_real_cv()
 
-    from fastapi import Body, FastAPI, Header, HTTPException
     from javes_contracts import (
         ArtifactRef,
         CaseWindow,
@@ -239,10 +236,8 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
         PerceptionProbeJob,
         ProbeRequest,
         ReviewDecisionBody,
-        VideoAvailability,
-        VideoSegmentRequest,
-        VideoSegmentResult,
     )
+    from javes_archive import NvidiaArchiveRegistry, create_nvidia_archive_app
     from javes_main.adapters.artifacts import FileArtifactStore
     from javes_main.adapters.http_routing import HttpRoutingAdapter
     from javes_main.adapters.remote_only import RemoteWorkerOnlyPort
@@ -273,9 +268,10 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
     run_root.mkdir(parents=True)
     site_root = _write_site_registry(run_root, repository_root)
     artifact_store = FileArtifactStore(run_root / "artifact-store")
-    base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=2)
+    archive_registry = NvidiaArchiveRegistry(fixture)
+    base = archive_registry.manifest.timeline_origin
     videos = {
-        camera: fixture / "videos" / f"Warehouse_Synthetic_{camera}.mp4"
+        camera: fixture / archive_registry.manifest.cameras[camera].relative_path
         for camera in CAMERAS
     }
     assert all(path.is_file() for path in videos.values())
@@ -284,63 +280,10 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
     assert 80 <= last_known_xy[0] <= 120
     assert 870 <= last_known_xy[1] <= 920
 
-    archive_api = FastAPI(title="read-only NVIDIA 12-camera CCTV fixture")
-    archive_clip_cache: dict[str, Path] = {}
-
-    @archive_api.post("/v1/video-segments", response_model=VideoSegmentResult)
-    async def video_segment(
-        raw_body: dict = Body(...),
-        authorization: str | None = Header(default=None),
-    ) -> VideoSegmentResult:
-        if authorization != "Bearer archive-secret":
-            raise HTTPException(status_code=401)
-        body = VideoSegmentRequest.model_validate(raw_body)
-        if body.camera_id not in videos or not isinstance(body.t_to, datetime):
-            return VideoSegmentResult(
-                request_id=body.request_id,
-                camera_id=body.camera_id,
-                availability=VideoAvailability.UNAVAILABLE,
-                requested_from=body.t_from,
-                requested_to=body.t_to,
-                coverage_ratio=0.0,
-            )
-        requested_start = max((body.t_from - base).total_seconds(), 0.0)
-        requested_duration = max((body.t_to - body.t_from).total_seconds(), 0.0)
-        available_duration = max(min(requested_duration, 20.0 - requested_start), 0.0)
-        if available_duration <= 0:
-            return VideoSegmentResult(
-                request_id=body.request_id,
-                camera_id=body.camera_id,
-                availability=VideoAvailability.UNAVAILABLE,
-                requested_from=body.t_from,
-                requested_to=body.t_to,
-                coverage_ratio=0.0,
-            )
-        clip_key = hashlib.sha256(
-            f"{body.camera_id}\x1f{requested_start:.6f}\x1f{available_duration:.6f}".encode()
-        ).hexdigest()[:20]
-        clip_path = archive_clip_cache.get(clip_key)
-        if clip_path is None:
-            clip_path = run_root / "archive-clips" / f"{clip_key}.mp4"
-            clip_video_window(
-                videos[body.camera_id],
-                clip_path,
-                start_s=requested_start,
-                duration_s=available_duration,
-            )
-            archive_clip_cache[clip_key] = clip_path
-        coverage_ratio = available_duration / requested_duration
-        return VideoSegmentResult(
-            request_id=body.request_id,
-            camera_id=body.camera_id,
-            availability=VideoAvailability.AVAILABLE,
-            requested_from=body.t_from,
-            requested_to=body.t_to,
-            covered_from=body.t_from,
-            covered_to=body.t_from + timedelta(seconds=available_duration),
-            coverage_ratio=coverage_ratio,
-            source_ref=ArtifactRef(uri=clip_path.resolve().as_uri()),
-        )
+    archive_api = create_nvidia_archive_app(
+        archive_registry,
+        service_token="archive-secret",
+    )
 
     site_registry = FilesystemSiteConfigRegistry(site_root)
     site_http = SyncASGIClient(
@@ -406,10 +349,20 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
     access_token = login.json()["access_token"]
 
     case_id = "real-cv-blind-gap"
-    reference_key = f"cases/{case_id}/reference.jpg"
     reference_bytes = _reference_jpeg(videos["Cam009"])
-    artifact_store.put(reference_key, reference_bytes, "image/jpeg")
     (run_root / "reference.jpg").write_bytes(reference_bytes)
+    uploaded = main_http.post(
+        f"/v1/cases/{case_id}/reference-image",
+        headers={
+            "authorization": f"Bearer {access_token}",
+            "idempotency-key": "blind-gap-reference-upload",
+        },
+        files={"file": ("reference.jpg", reference_bytes, "image/jpeg")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    reference_ref = ArtifactRef.model_validate(
+        uploaded.json()["reference_image_ref"]
+    )
     created = main_http.post(
         "/v1/cases",
         headers={
@@ -420,7 +373,7 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
             case_id=case_id,
             operator_id=root_user.user_id,
             target_id="pink-overall-worker",
-            reference_image_ref=ArtifactRef(object_key=reference_key),
+            reference_image_ref=reference_ref,
             last_known=LastKnown(
                 camera_id="Cam009",
                 time=base + timedelta(seconds=2),
@@ -442,6 +395,7 @@ def test_real_cv_blind_gap_reaches_max_gap_with_search_area() -> None:
         "http://archive",
         "archive-secret",
         camera_ids=set(videos),
+        archive_root=fixture,
         client=archive_http,
     )
     settings = PerceptionSettings(

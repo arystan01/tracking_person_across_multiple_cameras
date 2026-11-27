@@ -7,24 +7,31 @@ from threading import Barrier
 import pytest
 
 from javes_contracts import (
+    Anchors,
     ArtifactRef,
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
+    CreateLegalHoldBody,
+    CutClipCommand,
     LastKnown,
     ProbeRequest,
     ProbeResult,
     ProbeStatus,
     ReviewDecisionBody,
+    RevokeDecisionBody,
+    ReleaseLegalHoldBody,
 )
 from javes_main.application import MetricsService
+from javes_main.application import ReplayEvidenceIncomplete
+from javes_main.application import audit_case_replay_ledger
 from javes_main.adapters import (
     FileArtifactStore,
     InMemoryLiveFeedStore,
     InMemorySiteConfig,
 )
 from javes_main.adapters.system import FixedClock
-from javes_main.domain import CaseLifecycle, JobState, ProbeResultRecord
+from javes_main.domain import CaseLifecycle, JobState, OutboxTopic, ProbeResultRecord
 from javes_main.persistence import RevisionConflict
 from javes_main.persistence.sqlalchemy import SqlAlchemyRepository
 from javes_contracts import CameraDef, EdgeDef, MapDef, MapFloor, SiteGraph
@@ -349,7 +356,7 @@ def test_review_hold_is_retained_until_case_ttl():
     retention_resource_id = next(
         resource_id
         for resource_id, resource in app.retention_worker.resources.items()
-        if resource.kind == "HOLD_CLIP"
+        if resource.kind == "CLIP"
         and resource.artifact_ref is not None
         and clip_id in resource.artifact_ref.identity()
     )
@@ -402,7 +409,9 @@ def test_closed_case_review_recalculates_history_without_restarting_search(decis
         for item in app.repository.list_outbox(case_id="case-1")
         if item.topic == "TARGET_GALLERY"
     ]
-    assert app.manager.get_view("case-1").candidates
+    closed_view = app.manager.get_view("case-1")
+    assert closed_view.candidates
+    assert any(clip["state"] == "HOLD" for clip in closed_view.clips)
 
     body = ReviewDecisionBody(
         decision_id=f"closed-{decision}",
@@ -505,6 +514,450 @@ def test_closed_case_discards_probes_returned_by_routing_defence_in_depth(
     assert [item.job_id for item in app.repository.list_jobs("case-1")] == jobs_before
 
 
+@pytest.mark.parametrize("beam", [1, 5])
+@pytest.mark.parametrize("closed", [False, True])
+def test_review_rebuilds_confirmed_prefix_after_rejecting_later_false_hit(beam, closed):
+    app = build_in_memory_system(
+        graph=graph(), params=RoutingParams(B=beam, cands_per_probe=1),
+        now=BASE + timedelta(seconds=60),
+        observations=[
+            FakeObservation(
+                observation_id="good", camera_id="B", appearance_score=0.6,
+                t_start=BASE + timedelta(seconds=20),
+                t_end=BASE + timedelta(seconds=25),
+                clip_ref=ArtifactRef(archive_id="archive-B"),
+            ),
+            FakeObservation(
+                observation_id="false", camera_id="B", appearance_score=0.99,
+                t_start=BASE + timedelta(seconds=40),
+                t_end=BASE + timedelta(seconds=45),
+                clip_ref=ArtifactRef(archive_id="archive-B"),
+            ),
+        ],
+    )
+    app.manager.create_case(create_body(), idempotency_key="prefix-create")
+    app.scheduler.run_case_once("case-1")
+    candidates = sorted(app.manager.get_view("case-1").candidates, key=lambda c: c["t_start"])
+    good, false = candidates
+    if closed:
+        app.manager.command("case-1", CaseCommandBody(
+            command_id="prefix-close", action="CLOSE", operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=65),
+        ), idempotency_key="prefix-close")
+        app.routing_dispatcher.drain()
+    before = app.repository.get("case-1")
+    jobs_before = [job.job_id for job in app.repository.list_jobs("case-1")]
+    for candidate, decision in [(good, "CONFIRM"), (false, "REJECT")]:
+        body = ReviewDecisionBody(
+            decision_id=f"prefix-{decision}", candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"], decision=decision,
+            operator_id="operator-1", occurred_at=BASE + timedelta(seconds=70),
+        )
+        app.manager.decide("case-1", body, idempotency_key=body.decision_id)
+        app.routing_dispatcher.drain()
+        app.outbox_dispatcher.drain()
+    view = app.manager.get_view("case-1")
+    assert view.best_hypothesis is not None
+    route_ids = {t for visit in view.best_hypothesis["visits"] for t in visit["tracklet_ids"]}
+    assert good["tracklet_id"] in route_ids
+    assert false["tracklet_id"] not in route_ids
+    assert any(c["tracklet_id"] == good["tracklet_id"] and c["state"] == "CONFIRMED" for c in view.clips)
+    assert all(d.resulting_route_revision is not None for d in app.manager.list_decisions("case-1"))
+    assert audit_case_replay_ledger(app.repository, app.repository.get("case-1"))["complete"]
+    reviewed = app.repository.get("case-1")
+    assert reviewed.routing_state.state_version == view.route_revision
+    if not closed:
+        app.manager.heartbeat("case-1")
+        app.routing_dispatcher.drain()
+        resumed = app.manager.get_view("case-1")
+        assert resumed.route_revision > view.route_revision
+        assert not [t for t in app.repository.list_routing_triggers(case_id="case-1") if t.state.value == "FAILED"]
+    if closed:
+        after = app.repository.get("case-1")
+        assert after.lifecycle == CaseLifecycle.CLOSED
+        assert (after.closed_at, after.retention_due_at) == (before.closed_at, before.retention_due_at)
+        assert after.latest_route.step_result.probes == []
+        assert [job.job_id for job in app.repository.list_jobs("case-1")] == jobs_before
+        app.manager.command("case-1", CaseCommandBody(
+            command_id="prefix-export", action="EXPORT", operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ), idempotency_key="prefix-export")
+        app.outbox_dispatcher.drain()
+        exported = app.manager.get_view("case-1")
+        assert exported.export["status"] == "READY"
+        assert len(exported.export["ordered_clip_ids"]) == 1
+
+
+def test_export_waits_for_decision_recalculation():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="pending-export-create")
+    app.scheduler.run_case_once("case-1")
+    candidate = app.manager.get_view("case-1").candidates[0]
+    app.manager.command("case-1", CaseCommandBody(
+        command_id="pending-export-close", action="CLOSE", operator_id="operator-1",
+        occurred_at=BASE + timedelta(seconds=70),
+    ), idempotency_key="pending-export-close")
+    app.routing_dispatcher.drain()
+    app.manager.decide("case-1", ReviewDecisionBody(
+        decision_id="pending-confirm", candidate_id=candidate["candidate_id"],
+        tracklet_id=candidate["tracklet_id"], decision="CONFIRM", operator_id="operator-1",
+        occurred_at=BASE + timedelta(seconds=80),
+    ), idempotency_key="pending-confirm")
+    with pytest.raises(ValueError, match="recalculation must complete"):
+        app.manager.command("case-1", CaseCommandBody(
+            command_id="pending-export", action="EXPORT", operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=81),
+        ), idempotency_key="pending-export")
+    assert app.repository.get("case-1").lifecycle == CaseLifecycle.CLOSED
+
+
+def test_stale_gallery_rebuild_does_not_resurrect_revoked_sources():
+    from javes_contracts import TargetGalleryCommand, TargetGalleryResult
+    from javes_main.domain import OutboxRecord
+
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="stale-gallery-create")
+    app.scheduler.run_case_once("case-1")
+    case = app.repository.get("case-1")
+    command = TargetGalleryCommand(
+        command_id="stale-gallery", case_id="case-1", source="rebuild",
+        image_ref=case.request.reference_image_ref, tracklet_ids=["revoked"],
+    )
+    message = OutboxRecord(
+        message_id="stale", case_id="case-1", topic="TARGET_GALLERY", dedupe_key="stale",
+        payload={"command": command.model_dump(mode="json")},
+        created_at=BASE, updated_at=BASE, available_at=BASE,
+    )
+    result = TargetGalleryResult(
+        command_id=command.command_id, case_id="case-1", source_count=2,
+        gallery_ref="revoked-gallery", model_version=command.model_version,
+    )
+    app.manager.apply_outbox_result(message, result.model_dump(mode="json"))
+    assert app.repository.get("case-1").gallery_ref == case.gallery_ref
+
+
+@pytest.mark.parametrize("decision", ["CONFIRM", "REJECT"])
+def test_decision_revoke_replays_immutable_evidence_and_allows_new_decision(decision):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key=f"revoke-{decision}-create")
+    app.scheduler.run_case_once("case-1")
+    view = app.manager.get_view("case-1")
+    candidate = view.candidates[0]
+    original = ReviewDecisionBody(
+        decision_id=f"original-{decision}",
+        candidate_id=candidate["candidate_id"],
+        tracklet_id=candidate["tracklet_id"],
+        decision=decision,
+        operator_id="operator-1",
+        occurred_at=BASE + timedelta(seconds=70),
+    )
+    app.manager.decide(
+        "case-1", original, idempotency_key=f"original-{decision}"
+    )
+    app.routing_dispatcher.drain()
+    app.outbox_dispatcher.drain()
+    route_before = app.manager.get_view("case-1").route_revision
+
+    revocation = RevokeDecisionBody(
+        revocation_id=f"revoke-{decision}",
+        decision_id=original.decision_id,
+        operator_id="operator-1",
+        reason="operator corrected the review",
+        occurred_at=BASE + timedelta(seconds=75),
+        expected_case_revision=app.repository.get("case-1").revision,
+    )
+    app.manager.revoke_decision(
+        "case-1", revocation, idempotency_key=f"revoke-{decision}"
+    )
+    app.routing_dispatcher.drain()
+    app.outbox_dispatcher.drain()
+
+    replayed = app.manager.get_view("case-1")
+    assert replayed.route_revision > route_before
+    history = app.manager.list_decisions("case-1")
+    assert len(history) == 1
+    assert history[0].active is False
+    assert history[0].revocation_id == revocation.revocation_id
+    assert history[0].revocation_reason == revocation.reason
+    assert any(
+        item["event_type"] == "ROUTING_REPLAYED"
+        for item in app.manager.get_events("case-1")
+    )
+    replay_runs = [
+        item
+        for item in app.repository.list_case_data(
+            "case-1", kinds={"ROUTING_RUN"}
+        )
+        if item.payload.get("trigger_type") == "DECISION_REVOKE"
+    ]
+    assert len(replay_runs) == 1
+
+    opposite = "REJECT" if decision == "CONFIRM" else "CONFIRM"
+    app.manager.decide(
+        "case-1",
+        ReviewDecisionBody(
+            decision_id=f"replacement-{opposite}",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision=opposite,
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ),
+        idempotency_key=f"replacement-{opposite}",
+    )
+    assert [item.active for item in app.manager.list_decisions("case-1")] == [
+        False,
+        True,
+    ]
+
+
+def test_closed_decision_revoke_preserves_terminal_state_and_has_no_new_jobs():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="closed-revoke-create")
+    app.scheduler.run_case_once("case-1")
+    candidate = app.manager.get_view("case-1").candidates[0]
+    app.manager.decide(
+        "case-1",
+        ReviewDecisionBody(
+            decision_id="closed-confirm",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="CONFIRM",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=65),
+        ),
+        idempotency_key="closed-confirm",
+    )
+    app.routing_dispatcher.drain()
+    app.outbox_dispatcher.drain()
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="close-before-revoke",
+            action="CLOSE",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="close-before-revoke",
+    )
+    app.routing_dispatcher.drain()
+    before = app.repository.get("case-1")
+    closed_at = before.closed_at
+    retention_due_at = before.retention_due_at
+    job_ids = [item.job_id for item in app.repository.list_jobs("case-1")]
+    gallery_messages = [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == OutboxTopic.TARGET_GALLERY.value
+    ]
+
+    app.manager.revoke_decision(
+        "case-1",
+        RevokeDecisionBody(
+            revocation_id="closed-revoke",
+            decision_id="closed-confirm",
+            operator_id="operator-1",
+            reason="closed-case correction",
+            occurred_at=BASE + timedelta(seconds=80),
+            expected_case_revision=before.revision,
+        ),
+        idempotency_key="closed-revoke",
+    )
+    app.routing_dispatcher.drain()
+    after = app.repository.get("case-1")
+    assert after.lifecycle == CaseLifecycle.CLOSED
+    assert after.closed_at == closed_at
+    assert after.retention_due_at == retention_due_at
+    assert after.next_heartbeat_at is None
+    assert after.live_feed is None
+    assert after.latest_route is not None
+    assert after.latest_route.step_result.mode.value == "PAST_SUMMARY"
+    assert after.latest_route.step_result.probes == []
+    assert [item.job_id for item in app.repository.list_jobs("case-1")] == job_ids
+    assert [
+        item.message_id
+        for item in app.repository.list_outbox(case_id="case-1")
+        if item.topic == OutboxTopic.TARGET_GALLERY.value
+    ] == gallery_messages
+
+
+def test_decision_revoke_fails_closed_without_complete_replay_ledger():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="legacy-revoke-create")
+    app.scheduler.run_case_once("case-1")
+    candidate = app.manager.get_view("case-1").candidates[0]
+    app.manager.decide(
+        "case-1",
+        ReviewDecisionBody(
+            decision_id="legacy-decision",
+            candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"],
+            decision="REJECT",
+            operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="legacy-decision",
+    )
+    case = app.repository.get("case-1")
+    expected = case.revision
+    case.replay_capability = "INCOMPLETE"
+    app.repository.save(case, expected)
+    revision = app.repository.get("case-1").revision
+    with pytest.raises(ReplayEvidenceIncomplete, match="replay_evidence_incomplete"):
+        app.manager.revoke_decision(
+            "case-1",
+            RevokeDecisionBody(
+                revocation_id="unsafe-revoke",
+                decision_id="legacy-decision",
+                operator_id="operator-1",
+                reason="must not guess",
+                occurred_at=BASE + timedelta(seconds=75),
+                expected_case_revision=revision,
+            ),
+            idempotency_key="unsafe-revoke",
+        )
+    assert app.repository.get("case-1").revision == revision
+    assert app.manager.list_decisions("case-1")[0].active is True
+
+
+def test_legacy_replay_ledger_backfill_requires_complete_persisted_triggers():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="ledger-backfill-create")
+    app.scheduler.run_case_once("case-1")
+    for key in list(app.repository._case_data):
+        if key[0] == "case-1" and key[1] == "ROUTING_INPUT":
+            del app.repository._case_data[key]
+    case = app.repository.get("case-1")
+    expected = case.revision
+    case.replay_capability = "INCOMPLETE"
+    app.repository.save(case, expected)
+
+    dry_run = audit_case_replay_ledger(
+        app.repository, app.repository.get("case-1"), migrate=False
+    )
+    assert dry_run["complete"] is True
+    assert dry_run["backfillable"] == dry_run["routing_runs"] > 0
+    assert dry_run["migrated"] == 0
+
+    migrated = audit_case_replay_ledger(
+        app.repository, app.repository.get("case-1"), migrate=True
+    )
+    assert migrated["migrated"] == migrated["routing_runs"]
+    assert app.repository.get("case-1").replay_capability == "COMPLETE"
+
+
+def test_case_delete_waits_for_all_legal_holds_and_resumes_after_last_release():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="legal-hold-create")
+    app.scheduler.run_case_once("case-1")
+    for index in (1, 2):
+        revision = app.repository.get("case-1").revision
+        app.manager.set_legal_hold(
+            "case-1",
+            CreateLegalHoldBody(
+                hold_id=f"hold-{index}",
+                external_ticket_id=f"LEGAL-{index}",
+                reason="preserve evidence for investigation",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=70 + index),
+                expected_case_revision=revision,
+            ),
+            idempotency_key=f"hold-{index}",
+        )
+        app.outbox_dispatcher.drain()
+    assert app.retention_worker.active_holds["case-1"] == {"hold-1", "hold-2"}
+
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="delete-under-hold",
+            action="DELETE",
+            operator_id="root-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ),
+        idempotency_key="delete-under-hold",
+    )
+    app.outbox_dispatcher.drain()
+    blocked = app.repository.get("case-1")
+    assert blocked.lifecycle == CaseLifecycle.DELETE_REQUESTED
+    assert blocked.content_redacted is False
+    assert blocked.pending_retention_action == "DELETE_CASE"
+    assert not any(
+        item.topic == OutboxTopic.RETENTION_COMMAND.value
+        and item.payload.get("command", {}).get("action") == "DELETE_CASE"
+        for item in app.repository.list_outbox(case_id="case-1")
+    )
+    assert any(
+        event["event_type"] == "CASE_DELETE_BLOCKED_BY_LEGAL_HOLD"
+        for event in app.manager.get_events("case-1")
+    )
+
+    for index in (1, 2):
+        current = app.repository.get("case-1")
+        app.manager.release_legal_hold(
+            "case-1",
+            ReleaseLegalHoldBody(
+                release_id=f"release-{index}",
+                hold_id=f"hold-{index}",
+                external_ticket_id=f"LEGAL-{index}",
+                reason="legal approved release",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=90 + index),
+                expected_case_revision=current.revision,
+            ),
+            idempotency_key=f"release-{index}",
+        )
+        app.outbox_dispatcher.drain()
+        if index == 1:
+            assert app.repository.get("case-1").lifecycle == CaseLifecycle.DELETE_REQUESTED
+
+    deleted = app.repository.get("case-1")
+    assert deleted.lifecycle == CaseLifecycle.DELETED
+    assert deleted.content_redacted is True
+    holds = app.manager.list_legal_holds("case-1")
+    assert [item.active for item in holds] == [False, False]
+    assert all(not item.release_pending for item in holds)
+    events = app.manager.get_events("case-1")
+    assert sum(item["event_type"] == "LEGAL_HOLD_SET" for item in events) == 2
+    assert sum(item["event_type"] == "LEGAL_HOLD_RELEASED" for item in events) == 2
+
+
+def test_legal_hold_cannot_race_an_existing_delete_request():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="delete-race-create")
+    app.manager.command(
+        "case-1",
+        CaseCommandBody(
+            command_id="delete-before-hold",
+            action="DELETE",
+            operator_id="root-1",
+            occurred_at=BASE + timedelta(seconds=70),
+        ),
+        idempotency_key="delete-before-hold",
+    )
+    revision = app.repository.get("case-1").revision
+
+    with pytest.raises(ValueError, match="after deletion was requested"):
+        app.manager.set_legal_hold(
+            "case-1",
+            CreateLegalHoldBody(
+                hold_id="too-late-hold",
+                external_ticket_id="LEGAL-LATE",
+                reason="request arrived after destructive workflow started",
+                operator_id="root-1",
+                occurred_at=BASE + timedelta(seconds=71),
+                expected_case_revision=revision,
+            ),
+            idempotency_key="too-late-hold",
+        )
+
+    assert any(
+        event["event_type"] == "LEGAL_HOLD_SET_DENIED"
+        and event["payload"]["reason"] == "deletion_requested"
+        for event in app.manager.get_events("case-1")
+    )
+
+
 def test_repository_optimistic_revision_check():
     app = system()
     app.manager.create_case(create_body(), idempotency_key="create-1")
@@ -513,6 +966,114 @@ def test_repository_optimistic_revision_check():
     app.repository.save(current, current.revision)
     with pytest.raises(RevisionConflict):
         app.repository.save(stale, stale.revision)
+
+
+def test_stale_routing_cas_does_not_publish_immutable_svg(monkeypatch):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="stale-svg-create")
+    app.outbox_dispatcher.drain()
+    app.routing_dispatcher.drain()
+    old_revision = app.manager.get_view("case-1").route_revision
+    old_keys = app.artifacts.keys()
+    original_save = app.repository.save
+
+    def concurrent_callback(case, expected_revision):
+        current = app.repository.get("case-1")
+        original_save(current, current.revision)
+        return original_save(case, expected_revision)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app.repository, "save", concurrent_callback)
+        with pytest.raises(RevisionConflict):
+            app.manager._routing_tick("case-1", probe_results=[], anchors=Anchors())
+
+    assert app.artifacts.keys() == old_keys
+    assert app.manager.get_view("case-1").route_revision == old_revision
+    # A recomputation at a later time can produce different SVG bytes. It must
+    # still be able to publish the unoccupied revision after a callback race.
+    app.clock.set(app.clock.now() + timedelta(seconds=1))
+    app.manager._routing_tick("case-1", probe_results=[], anchors=Anchors())
+    view = app.manager.get_view("case-1")
+    assert view.route_revision > old_revision
+    assert app.manager.get_route_svg("case-1", view.route_revision, "1F")
+
+
+def test_routing_cas_conflict_does_not_exhaust_delivery_budget(monkeypatch):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="routing-contention")
+    app.outbox_dispatcher.drain()
+    trigger = app.repository.list_routing_triggers()[0]
+    trigger.max_attempts = 1
+    app.repository.save_routing_trigger(trigger)
+
+    def stale_result(_trigger):
+        raise RevisionConflict("concurrent Clip callback advanced the case")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app.manager, "process_routing_trigger", stale_result)
+        report = app.routing_dispatcher.run_once(limit=1)
+    assert report.retried == 1
+    assert report.failed == 0
+    pending = app.repository.get_routing_trigger(trigger.trigger_id)
+    assert pending.state.value == "PENDING"
+    assert pending.attempt == 0
+    assert app.routing_dispatcher.run_once(limit=1).completed == 1
+
+
+@pytest.mark.parametrize(
+    "window_start_s,window_end_s,expected_from_s,expected_to_s,before_s,after_s",
+    [(0, 35, 18, 32, 2, 2), (19, 31, 19, 31, 1, 1)],
+)
+def test_new_clip_uses_two_second_context_bounded_by_case_window(
+    window_start_s, window_end_s, expected_from_s, expected_to_s, before_s, after_s
+):
+    app = system()
+    body = create_body().model_copy(update={
+        "window": CaseWindow(
+            start=BASE + timedelta(seconds=window_start_s),
+            end=BASE + timedelta(seconds=window_end_s),
+        )
+    })
+    app.manager.create_case(body, idempotency_key="two-second-context")
+    app.outbox_dispatcher.drain()
+    app.routing_dispatcher.drain()
+    app.manager.run_pending_jobs("case-1")
+    app.routing_dispatcher.drain()
+    commands = [
+        CutClipCommand.model_validate(item.payload["command"])
+        for item in app.repository.list_outbox()
+        if item.topic == OutboxTopic.CLIP_CUT.value
+    ]
+    assert len(commands) == 1
+    command = commands[0]
+    assert command.t_from == BASE + timedelta(seconds=expected_from_s)
+    assert command.t_to == BASE + timedelta(seconds=expected_to_s)
+    assert command.padding_before_s == before_s
+    assert command.padding_after_s == after_s
+
+
+def test_clip_padding_is_bounded_by_recorded_case_window():
+    app = system()
+    app.manager.clip_padding_s = 30
+    body = create_body().model_copy(update={
+        "window": CaseWindow(start=BASE, end=BASE + timedelta(seconds=35))
+    })
+    app.manager.create_case(body, idempotency_key="bounded-clip")
+    app.outbox_dispatcher.drain()
+    app.routing_dispatcher.drain()
+    app.manager.run_pending_jobs("case-1")
+    app.routing_dispatcher.drain()
+    commands = [
+        CutClipCommand.model_validate(item.payload["command"])
+        for item in app.repository.list_outbox()
+        if item.topic == OutboxTopic.CLIP_CUT.value
+    ]
+    assert len(commands) == 1
+    command = commands[0]
+    assert command.t_from == BASE
+    assert command.t_to == BASE + timedelta(seconds=35)
+    assert command.padding_before_s == 20
+    assert command.padding_after_s == 5
 
 
 def test_case_keeps_pinned_routing_params_after_site_config_advances():

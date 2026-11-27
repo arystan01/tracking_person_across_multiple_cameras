@@ -1,0 +1,35 @@
+{
+  "assets": [],
+  "checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+  "contract_version": "site-config.v1",
+  "graph": {
+    "blind_nodes": [],
+    "cameras": {
+      "Cam001": {
+        "appearance_floor": null,
+        "available_from": null,
+        "busy": false,
+        "calibration": null,
+        "clock_offset_s": 0.0,
+        "coverage_polygon": [],
+        "floor": null,
+        "id": "Cam001",
+        "map_xy": null,
+        "overlap_camera_ids": [],
+        "p_det": null,
+        "regions": [],
+        "zone": ""
+      }
+    },
+    "edges": [],
+    "map": null,
+    "max_gap_s": 2400.0,
+    "outside": null,
+    "site": "nvidia-12cam",
+    "timezone": "UTC",
+    "version": "site-v1",
+    "walk_graph": null
+  },
+  "site_id": "nvidia-12cam",
+  "version": "site-v1"
+}

@@ -1,0 +1,45 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "camera_id": {
+      "title": "Camera Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "video-archive-request.v1",
+      "default": "video-archive-request.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "t_from": {
+      "format": "date-time",
+      "title": "T From",
+      "type": "string"
+    },
+    "t_to": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "const": "OPEN",
+          "type": "string"
+        }
+      ],
+      "title": "T To"
+    }
+  },
+  "required": [
+    "request_id",
+    "camera_id",
+    "t_from",
+    "t_to"
+  ],
+  "title": "VideoSegmentRequest",
+  "type": "object"
+}

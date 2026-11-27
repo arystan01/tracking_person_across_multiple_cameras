@@ -1,0 +1,28 @@
+{
+  "case_id": "case-001",
+  "closed_at": null,
+  "created_at": "2026-01-02T03:04:05Z",
+  "last_known": {
+    "bbox_xywh": null,
+    "camera_id": "Cam001",
+    "footpoint_px": null,
+    "map_position": null,
+    "time": "2026-01-02T03:04:05Z",
+    "zone_id": null
+  },
+  "lifecycle": "SEARCHING",
+  "params_version": "nvidia-eval-params-v1",
+  "profile": "ADULT",
+  "reference_preview_url": "/v1/cases/case-001/reference",
+  "retention_due_at": null,
+  "revision": 3,
+  "route_revision": 1,
+  "site_id": "nvidia-mtmc-12cam",
+  "site_version": "nvidia-12cam-v1",
+  "target_id": "target-001",
+  "updated_at": "2026-01-02T03:05:05Z",
+  "window": {
+    "end": "2026-01-02T03:05:05Z",
+    "start": "2026-01-02T03:04:05Z"
+  }
+}

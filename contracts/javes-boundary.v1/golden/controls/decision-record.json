@@ -1,0 +1,14 @@
+{
+  "active": false,
+  "candidate_id": "candidate-001",
+  "decision": "CONFIRM",
+  "decision_id": "decision-001",
+  "occurred_at": "2026-01-02T03:05:05Z",
+  "operator_id": "user-001",
+  "resulting_route_revision": null,
+  "revocation_id": "revoke-001",
+  "revocation_reason": "Incorrect candidate",
+  "revoked_at": "2026-01-02T03:05:05Z",
+  "revoked_by": "user-001",
+  "tracklet_id": "tracklet-001"
+}

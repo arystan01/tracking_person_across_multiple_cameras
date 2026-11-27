@@ -1,0 +1,24 @@
+{
+  "alternatives": [],
+  "best_hypothesis": null,
+  "candidates": [],
+  "case_id": "case-001",
+  "clips": [],
+  "done": false,
+  "errors": [],
+  "estimate": null,
+  "export": null,
+  "lifecycle": "SEARCHING",
+  "live": null,
+  "mode": "CATCHING_UP",
+  "rendered_route_maps": [],
+  "revision": 3,
+  "route_presentation": null,
+  "route_revision": 1,
+  "search_progress": {
+    "camera_minutes_used": 1.0
+  },
+  "stop_reason": null,
+  "unobserved_windows": [],
+  "watch": []
+}

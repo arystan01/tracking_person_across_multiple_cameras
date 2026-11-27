@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "checksum": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Checksum",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "routing-params.v1",
+      "default": "routing-params.v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "params": {
+      "additionalProperties": true,
+      "title": "Params",
+      "type": "object"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "checksum",
+    "params"
+  ],
+  "title": "RoutingParamsResponse",
+  "type": "object"
+}

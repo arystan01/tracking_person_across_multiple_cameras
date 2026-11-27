@@ -14,6 +14,7 @@ from javes_contracts import (
     WorkerTaskResultRequest,
 )
 from javes_workers import HttpWorkerClient
+from javes_telemetry import operation, record_counter
 
 from .state import PerceptionStateStore
 from ..core.worker import PerceptionWorker
@@ -45,9 +46,7 @@ class PerceptionTaskRunner:
         self._active: dict[str, WorkerTaskEnvelope] = {}
         self._artifact_created_at: dict[str, datetime] = {}
 
-    def _manifest(
-        self, object_key: str, kind: str, now: datetime
-    ) -> ArtifactManifest:
+    def _manifest(self, object_key: str, kind: str, now: datetime) -> ArtifactManifest:
         data, mime_type = self.worker.artifacts.get(object_key)
         created_at = self._artifact_created_at.setdefault(object_key, now)
         return ArtifactManifest(
@@ -77,15 +76,21 @@ class PerceptionTaskRunner:
         self, task: WorkerTaskEnvelope, now: datetime, *, cancelled: bool = False
     ) -> WorkerTaskResultRequest:
         if task.operation == "GALLERY_BUILD":
-            result = self.worker.update_gallery(
-                TargetGalleryCommand.model_validate(task.payload)
-            )
+            command = TargetGalleryCommand.model_validate(task.payload)
+            result = self.worker.update_gallery(command)
             manifests = [self._manifest(result.gallery_ref, "gallery", now)]
-            for index in range(result.source_count):
-                source_key = (
-                    f"cases/{result.case_id}/perception/gallery/sources/{index:04d}.npz"
-                )
-                manifests.append(self._manifest(source_key, "gallery", now))
+            # A base-gallery confirm writes only its new complete matrix.
+            # source_count counts vectors, not newly created source files.
+            if command.source != "confirmed_tracklet" or not command.base_gallery_ref:
+                for index in range(result.source_count):
+                    prefix = f"cases/{result.case_id}/perception/gallery/sources/"
+                    manifests.append(self._manifest(
+                        f"{prefix}{command.command_id}/{index:04d}.npz", "gallery", now
+                    ))
+                    if command.source != "rebuild":
+                        manifests.append(self._manifest(
+                            f"{prefix}{index:04d}.npz", "gallery", now
+                        ))
             return WorkerTaskResultRequest(
                 lease_token=task.lease_token,
                 result=result.model_dump(mode="json"),
@@ -133,15 +138,20 @@ class PerceptionTaskRunner:
             )
         )
 
-    def _process_task(
-        self, task: WorkerTaskEnvelope, *, lease_seconds: int
-    ) -> None:
+    def _process_task(self, task: WorkerTaskEnvelope, *, lease_seconds: int) -> None:
         fingerprint = _task_fingerprint(task)
         previous = self.state.task_result(task.task_id)
         try:
-            heartbeat = self.client.heartbeat(
-                task, extend_seconds=lease_seconds
+            span_context = operation(
+                "worker.process",
+                {
+                    "component": "perception",
+                    "operation": task.operation,
+                    "task.state": "leased",
+                },
             )
+            span_context.__enter__()
+            heartbeat = self.client.heartbeat(task, extend_seconds=lease_seconds)
             if heartbeat.lease_token is not None:
                 task = task.model_copy(
                     update={
@@ -170,10 +180,16 @@ class PerceptionTaskRunner:
                     task,
                     datetime.now(timezone.utc),
                 )
-                self.state.save_task_result(
-                    task.task_id, fingerprint, delivery
-                )
+                self.state.save_task_result(task.task_id, fingerprint, delivery)
             self.client.complete(task, delivery)
+            record_counter(
+                "javes.worker.tasks",
+                attributes={
+                    "component": "perception",
+                    "operation": task.operation,
+                    "outcome": "completed",
+                },
+            )
             open_continues = (
                 task.operation == "PROBE"
                 and PerceptionProbeJob.model_validate(task.payload).probe.t_to is None
@@ -187,6 +203,14 @@ class PerceptionTaskRunner:
             else:
                 self._active.pop(task.task_id, None)
         except Exception as exc:
+            record_counter(
+                "javes.worker.tasks",
+                attributes={
+                    "component": "perception",
+                    "operation": task.operation,
+                    "outcome": "failed",
+                },
+            )
             self._active.pop(task.task_id, None)
             try:
                 self.client.fail(
@@ -197,6 +221,9 @@ class PerceptionTaskRunner:
                 )
             except Exception:
                 pass
+        finally:
+            if "span_context" in locals():
+                span_context.__exit__(None, None, None)
 
     def run_once(self, *, limit: int = 1, lease_seconds: int = 600) -> int:
         tasks = list(self._active.values())
