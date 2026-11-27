@@ -306,3 +306,164 @@ async def test_real_bff_controls_upload_id_case_creation_flow(tmp_path: Path):
         assert view.status_code == 200
         assert view.json()["case_id"] == "dashboard-e2e"
     await controls.aclose()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectError])
+async def test_bff_retries_interrupted_get_before_returning_a_response(tmp_path, error_type):
+    attempts = []
+
+    def handler(request):
+        if request.url.path.endswith("/events"):
+            attempts.append(request)
+            if len(attempts) == 1:
+                raise error_type("private transport diagnostic", request=request)
+            return httpx.Response(200, json=[{"event_type": "CASE_CLOSED"}])
+        return _controls_handler(request)
+
+    async with httpx.AsyncClient(base_url="http://controls.test", transport=httpx.MockTransport(handler)) as controls:
+        settings = _settings(tmp_path).model_copy(update={"controls_retry_backoff_s": 0})
+        app = create_dashboard_app(settings, controls_client=controls)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://dashboard.test") as client:
+            await client.post("/dashboard-api/session/login", json={"username": "operator", "password": "pw"})
+            result = await client.get("/dashboard-api/controls/v1/cases/case-1/events")
+            assert result.status_code == 200
+            assert result.json() == [{"event_type": "CASE_CLOSED"}]
+            assert len(attempts) == 2
+            assert attempts[0] is not attempts[1]
+            assert all(item.headers["authorization"] == "Bearer controls-secret-token" for item in attempts)
+            assert "controls-secret-token" not in result.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error_type,status,code", [
+    (httpx.ReadError, 503, "CONTROLS_UNAVAILABLE"),
+    (httpx.ReadTimeout, 504, "CONTROLS_TIMEOUT"),
+])
+async def test_bff_get_retry_exhaustion_is_bounded_redacted_problem(tmp_path, error_type, status, code):
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        if request.url.path.endswith("/events"):
+            attempts += 1
+            raise error_type("/private/case-secret token=controls-secret-token", request=request)
+        return _controls_handler(request)
+
+    async with httpx.AsyncClient(base_url="http://controls.test", transport=httpx.MockTransport(handler)) as controls:
+        app = create_dashboard_app(_settings(tmp_path).model_copy(update={"controls_retry_backoff_s": 0}), controls_client=controls)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://dashboard.test") as client:
+            await client.post("/dashboard-api/session/login", json={"username": "operator", "password": "pw"})
+            result = await client.get("/dashboard-api/controls/v1/cases/case-1/events")
+            assert attempts == 3
+            assert result.status_code == status
+            assert result.headers["content-type"].startswith("application/problem+json")
+            assert result.headers["cache-control"] == "private, no-store"
+            assert result.headers["x-content-type-options"] == "nosniff"
+            assert result.json()["code"] == code
+            assert result.json()["retryable"] is True
+            assert "/private" not in result.text and "secret" not in result.text
+            assert "set-cookie" not in result.headers  # A transport failure is not a logout.
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/v1/cases/case-1/commands/close"),
+    ("POST", "/v1/cases/case-1/decisions"),
+    ("PUT", "/v1/admin/users/user-1/role"),
+])
+async def test_bff_never_automatically_retries_a_mutation(tmp_path, method, path):
+    attempts = []
+
+    def handler(request):
+        if request.url.path == path:
+            attempts.append(request)
+            raise httpx.ReadError("reply lost after commit", request=request)
+        return _controls_handler(request)
+
+    async with httpx.AsyncClient(base_url="http://controls.test", transport=httpx.MockTransport(handler)) as controls:
+        app = create_dashboard_app(_settings(tmp_path), controls_client=controls)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://dashboard.test") as client:
+            login = await client.post("/dashboard-api/session/login", json={"username": "operator", "password": "pw"})
+            result = await client.request(method, "/dashboard-api/controls" + path, json={"command_id": "same-command"},
+                headers={"x-javes-csrf": login.json()["csrf_token"], "idempotency-key": "same-action"})
+            assert len(attempts) == 1
+            assert attempts[0].headers["idempotency-key"] == "same-action"
+            assert result.status_code == 503
+            assert "action may have completed" in result.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_bff_get_retries_share_one_total_timeout_budget(tmp_path):
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        if request.url.path.endswith("/events"):
+            attempts += 1
+            raise httpx.ReadError("connection lost", request=request)
+        return _controls_handler(request)
+
+    async with httpx.AsyncClient(base_url="http://controls.test", transport=httpx.MockTransport(handler)) as controls:
+        settings = _settings(tmp_path).model_copy(update={"controls_timeout_s": 0.03, "controls_retry_backoff_s": 0.2})
+        app = create_dashboard_app(settings, controls_client=controls)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://dashboard.test") as client:
+            await client.post("/dashboard-api/session/login", json={"username": "operator", "password": "pw"})
+            result = await client.get("/dashboard-api/controls/v1/cases/case-1/events")
+            assert result.status_code == 504
+            assert result.json()["code"] == "CONTROLS_TIMEOUT"
+            assert attempts == 1  # The deadline expires during backoff, not after N full budgets.
+
+
+@pytest.mark.anyio
+async def test_bff_retries_media_only_before_stream_headers(tmp_path):
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        if request.url.path.endswith(".svg"):
+            attempts += 1
+            if attempts == 1:
+                raise httpx.RemoteProtocolError("stale connection", request=request)
+            return httpx.Response(200, content=b"<svg/>", headers={"content-type": "image/svg+xml"})
+        return _controls_handler(request)
+
+    async with httpx.AsyncClient(base_url="http://controls.test", transport=httpx.MockTransport(handler)) as controls:
+        app = create_dashboard_app(_settings(tmp_path).model_copy(update={"controls_retry_backoff_s": 0}), controls_client=controls)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://dashboard.test") as client:
+            await client.post("/dashboard-api/session/login", json={"username": "operator", "password": "pw"})
+            result = await client.get("/dashboard-api/controls/v1/cases/case-1/routes/1/1F.svg")
+            assert attempts == 2
+            assert result.status_code == 200 and result.content == b"<svg/>"
+
+
+def test_dashboard_transport_retry_settings_from_env(monkeypatch):
+    monkeypatch.setenv("JAVES_DASHBOARD_CONTROLS_URL", "http://controls.test")
+    monkeypatch.setenv("JAVES_DASHBOARD_SESSION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("JAVES_DASHBOARD_CONTROLS_GET_RETRIES", "1")
+    monkeypatch.setenv("JAVES_DASHBOARD_CONTROLS_RETRY_BACKOFF_S", "0.2")
+    settings = DashboardSettings.from_env()
+    assert settings.controls_get_retries == 1
+    assert settings.controls_retry_backoff_s == 0.2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [401, 403, 500])
+async def test_bff_does_not_retry_http_auth_or_application_failures(tmp_path, status):
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        if request.url.path.endswith("/events"):
+            attempts += 1
+            return httpx.Response(status, json={"detail": "Request denied"})
+        return _controls_handler(request)
+
+    async with httpx.AsyncClient(base_url="http://controls.test", transport=httpx.MockTransport(handler)) as controls:
+        app = create_dashboard_app(_settings(tmp_path), controls_client=controls)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://dashboard.test") as client:
+            await client.post("/dashboard-api/session/login", json={"username": "operator", "password": "pw"})
+            result = await client.get("/dashboard-api/controls/v1/cases/case-1/events")
+            assert attempts == 1
+            assert result.status_code == status
+            assert ("set-cookie" in result.headers) is (status == 401)

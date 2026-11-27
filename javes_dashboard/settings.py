@@ -15,6 +15,8 @@ class DashboardSettings(BaseModel):
     environment: str = "development"
     static_root: Path = Path("frontend/dist")
     controls_timeout_s: float = Field(default=35.0, gt=0.0, le=300.0)
+    controls_get_retries: int = Field(default=2, ge=0, le=3)
+    controls_retry_backoff_s: float = Field(default=0.1, ge=0.0, le=1.0)
     require_https: bool = False
 
     @property
@@ -39,6 +41,12 @@ class DashboardSettings(BaseModel):
             ),
             controls_timeout_s=float(
                 os.environ.get(f"{prefix}CONTROLS_TIMEOUT_S", "35")
+            ),
+            controls_get_retries=int(
+                os.environ.get(f"{prefix}CONTROLS_GET_RETRIES", "2")
+            ),
+            controls_retry_backoff_s=float(
+                os.environ.get(f"{prefix}CONTROLS_RETRY_BACKOFF_S", "0.1")
             ),
             require_https=os.environ.get(f"{prefix}REQUIRE_HTTPS", "false").lower()
             in {"1", "true", "yes"},

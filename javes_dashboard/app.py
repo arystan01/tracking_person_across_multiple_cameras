@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import mimetypes
 import re
@@ -126,6 +127,29 @@ def create_dashboard_app(
     app = FastAPI(title="JAVES-AI Dashboard", version="1.0.0", lifespan=lifespan)
     cookie_name = "__Host-javes_session" if settings.production_cookie else "javes_session"
 
+    @app.exception_handler(httpx.RequestError)
+    async def controls_transport_error(request: Request, exc: httpx.RequestError) -> Response:
+        timed_out = isinstance(exc, httpx.TimeoutException)
+        record_counter(
+            "javes.dashboard.proxy.failures",
+            attributes={
+                "component": "dashboard", "operation": "transport",
+                "outcome": "timeout" if timed_out else "connection_error",
+            },
+        )
+        detail = (
+            "Controls did not respond in time. Please retry."
+            if timed_out else "Connection to Controls was interrupted. Please retry."
+        )
+        if request.method not in {"GET", "HEAD"}:
+            detail += " The action may have completed; retry the same action without changing its data."
+        response = _problem(
+            504 if timed_out else 503, detail,
+            "CONTROLS_TIMEOUT" if timed_out else "CONTROLS_UNAVAILABLE",
+        )
+        response.headers["cache-control"] = "private, no-store"
+        return response
+
     def set_cookie(response: Response, session: DashboardSession) -> None:
         max_age = max(int((session.expires_at - datetime.now(session.expires_at.tzinfo)).total_seconds()), 0)
         response.set_cookie(
@@ -173,8 +197,26 @@ def create_dashboard_app(
         outbound = dict(headers or {})
         if session is not None:
             outbound["authorization"] = f"Bearer {session.access_token}"
-        request = client.build_request(method, path, content=content, headers=outbound)
-        return await client.send(request, stream=stream)
+        retries = settings.controls_get_retries if method == "GET" else 0
+        try:
+            # One total budget, not a fresh timeout for each retry. Only replay
+            # a safe read before returning headers/bytes to the browser.
+            async with asyncio.timeout(settings.controls_timeout_s):
+                for attempt in range(retries + 1):
+                    request = client.build_request(method, path, content=content, headers=outbound)
+                    try:
+                        return await client.send(request, stream=stream)
+                    except httpx.TransportError:
+                        if attempt == retries:
+                            raise
+                        record_counter(
+                            "javes.dashboard.proxy.retries",
+                            attributes={"component": "dashboard", "operation": "get"},
+                        )
+                        await asyncio.sleep(settings.controls_retry_backoff_s * 2 ** attempt)
+        except TimeoutError as exc:
+            raise httpx.ReadTimeout("Controls request budget exhausted") from exc
+        raise AssertionError("Controls retry loop did not return")
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
