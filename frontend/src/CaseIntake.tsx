@@ -6,8 +6,8 @@ const formatted = new Intl.DateTimeFormat('en-CA', {
   hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
 })
 
-function defaultKnown() {
-  const parts = Object.fromEntries(formatted.formatToParts(Date.now() - 15 * 60_000).map(({ type, value }) => [type, value]))
+function localTime(timestamp: number) {
+  const parts = Object.fromEntries(formatted.formatToParts(timestamp).map(({ type, value }) => [type, value]))
   return { date: [parts.year, parts.month, parts.day].join('-'), time: parts.hour + ':' + parts.minute }
 }
 
@@ -28,7 +28,7 @@ function ReferencePreview({ src, rotation, crop }: Photo) {
 
 type Photo = { src: string; rotation: number; crop: number[] }
 
-type IntakeFields = { title: string; camera: string; notes: string; known: string; photo?: Photo }
+type IntakeFields = { title: string; camera: string; notes: string; known: string; end: string; photo?: Photo }
 
 function drawPhoto(target: HTMLCanvasElement, image: HTMLImageElement, { rotation, crop }: Photo, maxSize: number) {
   const sideways = rotation % 180 !== 0
@@ -71,7 +71,8 @@ export function CaseIntake({ locations, submit }: {
   const [fileError, setFileError] = useState('')
   const [rotation, setRotation] = useState(0)
   const [crop, setCrop] = useState([0, 0, 100, 100])
-  const [known] = useState(defaultKnown)
+  const [known] = useState(() => localTime(Date.now() - 15 * 60_000))
+  const [end] = useState(() => localTime(Date.now()))
   const [busy, setBusy] = useState(false)
   const [reading, setReading] = useState(false)
   const [error, setError] = useState('')
@@ -118,15 +119,20 @@ export function CaseIntake({ locations, submit }: {
     }
     const fields = new FormData(event.currentTarget)
     const value = (name: string) => String(fields.get(name) ?? '')
-    const knownTime = value('date') + 'T' + value('time') + ':00+09:00'
+    const knownTime = value('date') + 'T' + value('time') + '+09:00'
     if (!(Date.parse(knownTime) < Date.now())) {
       setError('Enter a last-known time in the past (KST).')
+      return
+    }
+    const endTime = value('end_date') + 'T' + value('end_time') + '+09:00'
+    if (!(Date.parse(endTime) > Date.parse(knownTime)) || Date.parse(endTime) > Date.now()) {
+      setError('Search end must be after the last-known time and no later than now (KST).')
       return
     }
     setBusy(true)
     try {
       await submit({
-        title: value('title'), camera: value('camera'), notes: value('notes'), known: knownTime,
+        title: value('title'), camera: value('camera'), notes: value('notes'), known: knownTime, end: endTime,
         photo: { src, rotation, crop },
       })
     } catch (failure) {
@@ -163,9 +169,13 @@ export function CaseIntake({ locations, submit }: {
       <label>Last-known camera or zone<select name="camera" required disabled={busy}>{Object.entries(locations).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
       <div className="field-row">
         <label>Last-known date<input type="date" name="date" defaultValue={known.date} required disabled={busy}/></label>
-        <label>Last-known time<input type="time" name="time" defaultValue={known.time} required disabled={busy}/></label>
+        <label>Last-known time<input type="time" step="1" name="time" defaultValue={known.time} required disabled={busy}/></label>
       </div>
-      <p className="muted">Asia/Seoul. If the time is approximate, enter an earlier estimate.</p>
+      <div className="field-row">
+        <label>Search end date<input type="date" name="end_date" defaultValue={end.date} required disabled={busy}/></label>
+        <label>Search end time<input type="time" step="1" name="end_time" defaultValue={end.time} required disabled={busy}/></label>
+      </div>
+      <p className="muted">All times are Asia/Seoul (KST). For recorded footage, choose an end within the available recording.</p>
       {error && <p className="notice error" role="alert">{error}</p>}
       {!Object.keys(locations).length && <p className="notice error" role="alert">Configure site cameras or zones to create a connected case.</p>}
       </div>

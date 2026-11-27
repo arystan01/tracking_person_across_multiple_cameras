@@ -161,6 +161,8 @@
 .case-video { margin-top:10px }
 .case-video video { margin-top:8px }
 .case-video-download { display:inline-block; margin-top:6px; color:var(--accent) }
+.merged-video-panel { padding:0 12px 12px }
+.merged-video-panel > .muted { margin:0 0 10px }
 .candidate-thumbnail { display:block; max-width:100%; max-height:220px; margin:0 auto 12px; border-radius:8px }
 .candidate-gap { align-items:start; margin-top:12px; color:#ffe1a3; background:#302a20; border:1px solid #665233 }
 .candidate-gap svg { flex:none; margin-top:2px }

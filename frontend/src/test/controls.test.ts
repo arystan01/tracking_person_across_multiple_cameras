@@ -31,6 +31,27 @@ afterEach(() => { server.resetHandlers(); decisionRequests = []; failFirst = fal
 afterAll(() => server.close())
 
 describe('Controls browser client', () => {
+  it('preserves the safe BFF transport problem instead of a generic 500 message', async () => {
+    server.use(http.get('*/dashboard-api/controls/v1/cases/case-1/events', () => HttpResponse.json({
+      detail: 'Connection to Controls was interrupted. Please retry.', code: 'CONTROLS_UNAVAILABLE', retryable: true,
+    }, { status: 503 })))
+    await expect(new Controls().events('case-1')).rejects.toMatchObject({
+      status: 503, code: 'CONTROLS_UNAVAILABLE', retryable: true,
+      message: 'Connection to Controls was interrupted. Please retry.',
+    })
+  })
+
+  it('accepts nullable failure details and open unobserved windows from Controls', async () => {
+    server.use(http.get('*/dashboard-api/controls/v1/cases/case-1/view', () => HttpResponse.json({
+      ...caseView,
+      errors: [{ source: 'job', state: 'UNAVAILABLE', error: null }],
+      unobserved_windows: [{ camera_id: 'Cam001', t_from: '2026-01-01T00:00:00Z', t_to: null, reason: 'UNAVAILABLE' }],
+    })))
+    const view = await new Controls().view('case-1')
+    expect(view.errors[0].error).toBeNull()
+    expect(view.unobserved_windows[0].t_to).toBeNull()
+  })
+
   it('keeps bearer authentication out of browser requests', async () => {
     const session = await new Controls().login('operator', 'secret')
     expect(session.csrf_token).toBe('csrf-1')

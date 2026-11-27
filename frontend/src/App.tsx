@@ -74,7 +74,7 @@ function NewCase({ close, client, sites, created }: {
         <option value="ADULT">Adult</option><option value="CHILD">Child</option><option value="ELDERLY">Elderly</option>
       </select></label>
     </div>
-    <CaseIntake locations={locations} submit={async ({ camera, known, photo }) => {
+    <CaseIntake locations={locations} submit={async ({ camera, known, end, photo }) => {
       if (!photo || !site) return
       setBusy(true)
       try {
@@ -88,7 +88,7 @@ function NewCase({ close, client, sites, created }: {
           case_id: caseId, target_id: targetId, site_id: site.site_id, site_version: site.site_version,
           reference_upload_id,
           last_known: camera.startsWith('zone:') ? { zone_id: camera.slice(5), time: start } : { camera_id: camera, time: start },
-          window: { start, end: new Date().toISOString() }, profile,
+          window: { start, end: new Date(end).toISOString() }, profile,
         }))
       } finally {
         setBusy(false)
@@ -338,22 +338,26 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
               </select>}
             </div>
           </div>
-          <SearchStages key={active.case_id} mode={active.mode} lifecycle={active.lifecycle} done={active.done}/>
+          <SearchStages key={active.case_id} mode={active.mode} lifecycle={active.lifecycle} done={active.done} processingStatus={active.search_progress.processing_status}/>
           <div className="case-strip">
             <div><span className="strip-icon lime"><Radio size={17}/></span><span><small>Search mode</small><strong>{label(active.mode ?? active.lifecycle)}</strong></span></div>
             <div><span className="strip-icon purple"><Crosshair size={17}/></span><span><small>Pending review</small><strong>{active.candidates.filter(pendingReview).length} candidates</strong></span></div>
             <div><span className="strip-icon amber"><Bell size={17}/></span><span><small>Coverage gaps</small><strong>{active.unobserved_windows.length} reported</strong></span></div>
           </div>
           <div className="operations">
-            <Workspace key={active.case_id} view={active} client={client} cycle={cycle}/>
+            <Workspace key={active.case_id} view={active} client={client} cycle={cycle}
+              busy={busy} requestExport={actions.includes('EXPORT') ? () => openDialog('EXPORT') : undefined}/>
             <ReviewQueue key={active.case_id} items={active.candidates} onPick={(candidate) => { setPicked(candidate.candidate_id); setActionError('') }}/>
           </div>
           <CaseProgress view={active}/>
-          <CaseGovernance client={client} view={active} canReview={canReview}
+          <CaseGovernance key={active.case_id} client={client} view={active} canReview={canReview} refreshKey={refresh}
             canLegalHold={allowed(user, 'case.legal_hold.manage')} onView={acceptView}
             refresh={() => setRefresh((value) => value + 1)}/>
-          {(confirmedClips.length > 0 || active.export?.status) && <section className="panel case-export" aria-labelledby="case-export-heading">
+          {(confirmedClips.length > 0 || active.export?.status || active.lifecycle === 'CLOSED') && <section className="panel case-export" aria-labelledby="case-export-heading">
             <h2 id="case-export-heading">Case recordings</h2>
+            {!active.export?.status && <p className="muted">Merged video is generated on request from confirmed clips in route order. Closing a search does not generate an export.</p>}
+            {!confirmedClips.length && <p className="muted">No confirmed clips yet. Confirm the correct candidates and wait for clip processing and route recalculation.</p>}
+            {actions.includes('EXPORT') && <button className="secondary" disabled={busy || !confirmedClips.length} onClick={() => openDialog('EXPORT')}>Generate merged video</button>}
             {confirmedClips.map((clip) => {
               const title = [clip.camera_id ?? 'Confirmed clip', clip.t_start && time(clip.t_start) + ' KST'].filter(Boolean).join(' · ')
               return clip.status === 'READY' && clip.url
@@ -378,7 +382,9 @@ function ConnectedWorkspace({ user, client, signOut, expiresAt }: { user: Sessio
       }}/>}
     {dialog === 'help' && <Modal title="Workspace help" close={() => openDialog(undefined)}><p className="muted">Open a case to review sightings, its route and available recordings. Your JAVES-AI account controls which actions you can take.</p></Modal>}
     {dialog && dialog in commandLabels && <Modal title={commandLabels[dialog as Command]} close={() => openDialog(undefined)}>
-      <p className="muted">Apply this action to {active?.case_id}?</p>{actionError && <p className="notice error" role="alert">{actionError}</p>}
+      <p className="muted">Apply this action to {active?.case_id}?</p>
+      {dialog === 'EXPORT' && <p className="notice">This assembles confirmed clips in route order and finalizes the case as Saved. Candidate decisions can no longer be changed after export. Complete your review first.</p>}
+      {actionError && <p className="notice error" role="alert">{actionError}</p>}
       <div className="dialog-actions"><button className="secondary" onClick={() => openDialog(undefined)}>Cancel</button><button className="primary" disabled={busy} onClick={() => void command(dialog as Command)}>Confirm</button></div>
     </Modal>}
     {pickedCandidate && <CandidateDialog candidate={pickedCandidate} client={client}

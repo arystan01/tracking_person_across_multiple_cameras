@@ -103,8 +103,8 @@ nav button[aria-current] { background:#283723; color:var(--accent); border-color
 .map-controls label,.map-controls > span,.zoom { display:flex; align-items:center; gap:7px }
 .map-controls select { color:var(--bright); background:#283228; border:1px solid #475547; border-radius:5px; padding:4px 6px }
 .zoom .icon-button { width:28px; height:28px }
-.map-viewport { max-height:480px; overflow:auto; border:1px solid var(--line); border-top:0; border-radius:0 0 8px 8px }
-.map-image canvas,.map-image img { width:100%; height:auto; display:block }
+.map-viewport { height:clamp(220px,55dvh,480px); overflow:auto; border:1px solid var(--line); border-top:0; border-radius:0 0 8px 8px; background:#101612 }
+.map-image img { width:100%; height:100%; object-fit:contain; display:block }
 .review .panel-head { border-bottom:1px solid var(--line) }
 .queue-filters { display:flex; gap:7px; padding:9px 10px }
 .queue-filters button span { font-size:.72rem; padding:0 4px; border-radius:4px; background:#394538; color:#d6e5d0 }

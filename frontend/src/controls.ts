@@ -49,12 +49,12 @@ export type CaseView = {
   candidates: Candidate[]; rendered_route_maps: RouteMap[]
   live?: { camera_id: string; observed_at?: string; stream_url?: string | null; expires_at?: string | null } | null
   watch: { camera_id: string }[]
-  search_progress: { jobs_total?: number; jobs_by_state?: Record<string, number>; processed_camera_seconds?: number }
-  errors: { message?: string; error?: string; code?: string; camera_id?: string }[]
-  unobserved_windows: { camera_id?: string; t_from?: string; t_to?: string; reason?: string }[]
+  search_progress: { jobs_total?: number; jobs_by_state?: Record<string, number>; processed_camera_seconds?: number; processing_status?: string; processing_message?: string; active_video_jobs?: number; routing_failures?: number }
+  errors: { message?: string | null; error?: string | null; code?: string | null; camera_id?: string | null }[]
+  unobserved_windows: { camera_id?: string | null; t_from?: string | null; t_to?: string | null; reason?: string | null }[]
   best_hypothesis?: RouteHypothesis | null; alternatives?: RouteHypothesis[]
   estimate?: { last_observed_camera?: string | null; last_observed_time?: string | null; valid_until?: string | null } | null
-  route_presentation?: { shown_layers?: string[]; search_area_as_of?: string | null } | null
+  route_presentation?: { position_state?: 'OBSERVED' | 'LAST_SEEN' | 'LOST' | 'UNKNOWN'; shown_layers?: string[]; search_area_as_of?: string | null } | null
   clips?: Clip[]
   export?: { export_request_id?: string | null; status?: string; url?: string | null; error_code?: string | null } | null
 }
@@ -98,9 +98,9 @@ const caseViewSchema = z.object({
   }).passthrough()).default([]),
   live: z.object({ camera_id: z.string(), observed_at: z.string().optional(), stream_url: z.string().nullish(), expires_at: z.string().nullish() }).passthrough().nullish(),
   watch: z.array(z.object({ camera_id: z.string() }).passthrough()).default([]),
-  search_progress: z.object({ jobs_total: z.number().optional(), jobs_by_state: z.record(z.string(), z.number()).optional(), processed_camera_seconds: z.number().optional() }).passthrough().default({}),
-  errors: z.array(z.object({ message: z.string().optional(), error: z.string().optional(), code: z.string().optional(), camera_id: z.string().optional() }).passthrough()).default([]),
-  unobserved_windows: z.array(z.object({ camera_id: z.string().optional(), t_from: z.string().optional(), t_to: z.string().optional(), reason: z.string().optional() }).passthrough()).default([]),
+  search_progress: z.object({ jobs_total: z.number().optional(), jobs_by_state: z.record(z.string(), z.number()).optional(), processed_camera_seconds: z.number().optional(), processing_status: z.string().optional(), processing_message: z.string().optional(), active_video_jobs: z.number().optional(), routing_failures: z.number().optional() }).passthrough().default({}),
+  errors: z.array(z.object({ message: z.string().nullish(), error: z.string().nullish(), code: z.string().nullish(), camera_id: z.string().nullish() }).passthrough()).default([]),
+  unobserved_windows: z.array(z.object({ camera_id: z.string().nullish(), t_from: z.string().nullish(), t_to: z.string().nullish(), reason: z.string().nullish() }).passthrough()).default([]),
   best_hypothesis: z.any().nullish(), alternatives: z.array(z.any()).optional(), estimate: z.any().nullish(),
   route_presentation: z.any().nullish(), clips: z.array(z.any()).optional(), export: z.any().nullish(),
 }).passthrough()

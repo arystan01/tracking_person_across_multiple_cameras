@@ -7,7 +7,7 @@ const stages = [
   { mode: 'PAST_SUMMARY', label: 'Review final route' },
 ] as const
 
-export function SearchStages({ mode, lifecycle, done }: { mode?: string | null; lifecycle: string; done: boolean }) {
+export function SearchStages({ mode, lifecycle, done, processingStatus }: { mode?: string | null; lifecycle: string; done: boolean; processingStatus?: string }) {
   const previous = useRef(mode)
   const [reacquired, setReacquired] = useState(false)
   useEffect(() => {
@@ -15,7 +15,8 @@ export function SearchStages({ mode, lifecycle, done }: { mode?: string | null; 
     previous.current = mode
   }, [mode])
 
-  const currentMode = lifecycle === 'FAILED' ? undefined
+  const blocked = processingStatus === 'BLOCKED'
+  const currentMode = lifecycle === 'FAILED' || blocked ? undefined
     : done || ['CLOSED', 'EXPORTING', 'SAVED'].includes(lifecycle) ? 'PAST_SUMMARY'
     : mode ?? (['PREPARING', 'SEARCHING'].includes(lifecycle) ? 'CATCHING_UP' : undefined)
 
@@ -25,8 +26,10 @@ export function SearchStages({ mode, lifecycle, done }: { mode?: string | null; 
         <span aria-hidden="true">{index + 1}</span>{stage.label}
       </li>)}
     </ol>
-    <div className="search-stage-message" role="status">
-      {reacquired && currentMode === 'LIVE_TRACKING' ? 'Camera coverage reacquired.'
+    <div className={'search-stage-message' + (blocked ? ' notice error' : '')} role={blocked ? 'alert' : 'status'}>
+      {blocked ? 'Routing failed. Search cannot advance until the failed tasks are recovered.'
+        : processingStatus === 'RETRYING' ? 'Retrying Routing after a temporary failure.'
+        : reacquired && currentMode === 'LIVE_TRACKING' ? 'Camera coverage reacquired.'
         : currentMode === 'WAITING' ? 'The search remains open while routing waits for another sighting.'
         : lifecycle === 'FAILED' ? 'Search failed. Check the reported errors.'
         : null}
