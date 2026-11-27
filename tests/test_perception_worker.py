@@ -506,6 +506,48 @@ def test_gallery_rebuild_removes_revoked_confirmed_sources():
     assert reconfirmed.source_count == 2
 
 
+def test_gallery_runner_manifests_real_command_files_after_confirm_rebuild_restart(tmp_path):
+    import hashlib
+    from javes_contracts import WorkerTaskEnvelope
+    from javes_perception.runtime.runner import PerceptionTaskRunner
+
+    worker, artifacts = make_worker()
+    store = PerceptionStateStore(tmp_path / "worker.sqlite")
+    worker.state_store = store
+    reference = add_reference(worker, artifacts)
+    result = worker.execute(job(reference), T0 + timedelta(minutes=1))
+    best = max(result.candidates, key=lambda c: c.score)
+    commands = [
+        TargetGalleryCommand(command_id="g1", case_id="c1", source="reference",
+            image_ref=ArtifactRef(object_key="cases/c1/reference.png")),
+        TargetGalleryCommand(command_id="g-confirm", case_id="c1", source="confirmed_tracklet",
+            tracklet_id=best.tracklet_id, base_gallery_ref=reference),
+        TargetGalleryCommand(command_id="g-rebuild", case_id="c1", source="rebuild",
+            image_ref=ArtifactRef(object_key="cases/c1/reference.png"), tracklet_ids=[best.tracklet_id]),
+    ]
+    for command in commands:
+        task = WorkerTaskEnvelope(
+            task_id=command.command_id, case_id="c1", component="perception",
+            operation="GALLERY_BUILD", attempt=1, lease_token="lease",
+            lease_expires_at=T0 + timedelta(minutes=5), payload=command.model_dump(mode="json"),
+        )
+        runner = PerceptionTaskRunner(worker, None, store)
+        response = runner._execute(task, T0)
+        for manifest in response.artifacts:
+            data, _ = artifacts.get(manifest.object_key)
+            assert hashlib.sha256(data).hexdigest() == manifest.sha256
+        if command.source == "confirmed_tracklet":
+            assert response.result["source_count"] == 2
+            assert len(response.artifacts) == 1  # matrix, not nonexistent legacy source 0001
+        restarted = PerceptionWorker(
+            worker.settings, artifacts, detector=FakeDetector(), embedder=fake_embedder,
+            archive=FakeArchive(), state_store=store,
+        )
+        replay = PerceptionTaskRunner(restarted, None, store)._execute(task, T0)
+        assert replay.model_dump() == response.model_dump()
+    store.close()
+
+
 def test_open_probe_before_its_start_is_done_empty():
     worker, artifacts = make_worker()
     probe = job(add_reference(worker, artifacts), t_from=10, t_to=None)

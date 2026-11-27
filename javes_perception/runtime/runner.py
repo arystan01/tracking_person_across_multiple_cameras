@@ -76,15 +76,21 @@ class PerceptionTaskRunner:
         self, task: WorkerTaskEnvelope, now: datetime, *, cancelled: bool = False
     ) -> WorkerTaskResultRequest:
         if task.operation == "GALLERY_BUILD":
-            result = self.worker.update_gallery(
-                TargetGalleryCommand.model_validate(task.payload)
-            )
+            command = TargetGalleryCommand.model_validate(task.payload)
+            result = self.worker.update_gallery(command)
             manifests = [self._manifest(result.gallery_ref, "gallery", now)]
-            for index in range(result.source_count):
-                source_key = (
-                    f"cases/{result.case_id}/perception/gallery/sources/{index:04d}.npz"
-                )
-                manifests.append(self._manifest(source_key, "gallery", now))
+            # A base-gallery confirm writes only its new complete matrix.
+            # source_count counts vectors, not newly created source files.
+            if command.source != "confirmed_tracklet" or not command.base_gallery_ref:
+                for index in range(result.source_count):
+                    prefix = f"cases/{result.case_id}/perception/gallery/sources/"
+                    manifests.append(self._manifest(
+                        f"{prefix}{command.command_id}/{index:04d}.npz", "gallery", now
+                    ))
+                    if command.source != "rebuild":
+                        manifests.append(self._manifest(
+                            f"{prefix}{index:04d}.npz", "gallery", now
+                        ))
             return WorkerTaskResultRequest(
                 lease_token=task.lease_token,
                 result=result.model_dump(mode="json"),
