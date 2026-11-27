@@ -566,6 +566,69 @@ def test_later_confirm_creates_gate_override_from_saved_review_evidence() -> Non
     assert "GATE_OVERRIDE" in override.visits[-1].flags
 
 
+@pytest.mark.parametrize("associated", [False, True])
+def test_rejected_hit_cannot_consume_candidate_beam_or_poison_accepted_visit(associated):
+    graph = SiteGraph(cameras={"A": CameraDef(id="A")}, edges=[])
+    params = RoutingParams(use_st=False, cands_per_probe=1)
+    state = init_state(CaseInfo(case_id="c", target_id="t", start_time=T0), graph, params)
+    before = state.model_dump_json()
+    accepted = _tracklet("accepted", "A", T0 + timedelta(seconds=5))
+    rejected = _tracklet("rejected", "A", accepted.t_out + timedelta(seconds=1))
+    result = ProbeResult(probe_id="review", status="DONE", tracklets=[accepted, rejected], candidates=[
+        Candidate(candidate_id="c-good", tracklet_id="accepted", appearance_score=0.6,
+                  association_id="same" if associated else None),
+        Candidate(candidate_id="c-bad", tracklet_id="rejected", appearance_score=0.99,
+                  association_id="same" if associated else None),
+    ])
+    anchors = Anchors(reject=["rejected"])
+    output = step(state, [result], graph, anchors, params, T0 + timedelta(seconds=60))
+    ids = {t for h in output.hypotheses for v in h.visits for t in v.tracklet_ids}
+    assert ids == {"accepted"}
+    assert state.model_dump_json() == before
+    assert output == step(SearchState.model_validate_json(before), [result], graph, anchors, params, T0 + timedelta(seconds=60))
+
+
+def test_evidence_replay_does_not_create_counterfactual_pending_probes():
+    graph = SiteGraph(
+        cameras={"A": CameraDef(id="A"), "B": CameraDef(id="B")},
+        edges=[EdgeDef(id="A-B", source="A", target="B", t_min=10, t_typ=20, t_max=60)],
+    )
+    params = RoutingParams()
+    state = init_state(CaseInfo(
+        case_id="c", target_id="t", start_time=T0,
+        last_known_camera="A", last_known_time=T0,
+    ), graph, params)
+    before = state.model_dump_json()
+    replayed = step(state, [], graph, Anchors(replay_evidence_only=True), params, T0 + timedelta(seconds=30))
+    assert replayed.probes == []
+    assert replayed.state.pending_probes == []
+    assert not replayed.done
+    assert state.model_dump_json() == before
+    resumed = step(replayed.state, [], graph, Anchors(), params, T0 + timedelta(seconds=30))
+    assert resumed.probes
+    assert {p.probe_id for p in resumed.state.pending_probes} == {p.probe_id for p in resumed.probes}
+
+
+def test_duplicate_done_settles_reissued_probe_without_double_charging():
+    from javes_routing.core.update import _process_probe_results
+
+    graph = SiteGraph(cameras={"A": CameraDef(id="A")}, edges=[])
+    params = RoutingParams()
+    state = init_state(CaseInfo(case_id="c", target_id="t", start_time=T0), graph, params)
+    probe = ProbeRequest(probe_id="already-done", camera="A", t_from=T0, t_to=T0 + timedelta(seconds=10))
+    result = ProbeResult(probe_id=probe.probe_id, status="DONE", processed_duration_s=10)
+    state.pending_probes = [probe]
+    _process_probe_results(state, [result], graph, params)
+    used = state.camera_minutes_used
+    windows = state.probed_windows.copy()
+    state.pending_probes = [probe]
+    tracklets, candidates, _ = _process_probe_results(state, [result], graph, params)
+    assert state.pending_probes == []
+    assert state.camera_minutes_used == used
+    assert state.probed_windows == windows
+    assert tracklets == candidates == []
+
+
 def test_candidate_below_probe_beam_remains_confirmable() -> None:
     graph = SiteGraph(cameras={"A": CameraDef(id="A")}, edges=[])
     params = RoutingParams(cands_per_probe=1)

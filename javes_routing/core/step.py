@@ -290,6 +290,23 @@ def step(
     advance_finished_frontier(state)
     retries = [probe for probe in state.pending_probes if probe.probe_id not in previous_pending]
 
+    if anchors.replay_evidence_only:
+        # Rebuild facts against the *actually issued* probe ledger. Planning
+        # counterfactual rounds here strands probes Main never dispatched and
+        # can make an already completed job look permanently in flight.
+        state.pending_probes = [
+            probe for probe in state.pending_probes if probe.probe_id in previous_pending
+        ]
+        state.done = False
+        state.stop_reason = None
+        state.hypotheses = update_dormant_and_ended(hypotheses, state, graph, params, now)
+        return StepResult(
+            state=state, probes=[], hypotheses=state.hypotheses,
+            best=_best(state.hypotheses), rejected=rejected,
+            estimate=compute_estimate(state.hypotheses, graph, now, state, params),
+            mode=state.mode,
+        )
+
     if anchors.review_only:
         from javes_contracts import StopReason
 
@@ -346,7 +363,7 @@ def step(
     historical_active = prepare_historical_shell(state, params, now)
     clamped_candidates: list[ProbeRequest] = []
     for probe in route_probes + watch_probes:
-        clamped = clamp_probe_to_shell(probe, state)
+        clamped = clamp_probe_to_shell(probe, state, now)
         if clamped is None:
             continue
         if clamped.t_from != probe.t_from or clamped.t_to != probe.t_to:

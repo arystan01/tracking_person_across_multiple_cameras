@@ -11,16 +11,54 @@ from javes_contracts import (
     EdgeDef,
     OutsideDef,
     ProbeResult,
+    ProbeRequest,
     SearchMode,
     SiteGraph,
     Tracklet,
 )
 from javes_routing.core.params import RoutingParams
 from javes_routing.core.step import init_state, step
+from javes_routing.core.frontier import clamp_probe_to_shell
 
 
 UTC = timezone.utc
 T0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+
+
+def test_case_window_still_bounds_probes_after_frontier_catchup():
+    graph = outside_graph()
+    params = RoutingParams()
+    state = historical_state(graph, params, window_end=T0 + timedelta(seconds=20))
+    state.search_frontier.reached_at = T0 + timedelta(seconds=20)
+    state.search_frontier.shell_to = None
+    after = ProbeRequest(probe_id="after", camera="B", t_from=T0 + timedelta(seconds=21), t_to=T0 + timedelta(seconds=25))
+    assert clamp_probe_to_shell(after, state, T0 + timedelta(days=10)) is None
+    partial = after.model_copy(update={"probe_id": "partial", "t_from": T0 + timedelta(seconds=19)})
+    bounded = clamp_probe_to_shell(partial, state, T0 + timedelta(days=10))
+    assert bounded.t_to == state.window_end
+    open_probe = partial.model_copy(update={"t_to": None})
+    assert clamp_probe_to_shell(open_probe, state, T0 + timedelta(days=10)).t_to == state.window_end
+    future = historical_state(graph, params, window_end=T0 + timedelta(seconds=20))
+    live = open_probe.model_copy(update={"t_from": T0 + timedelta(seconds=5)})
+    assert clamp_probe_to_shell(live, future, T0 + timedelta(seconds=10)).t_to is None
+
+
+def test_legacy_out_of_window_result_is_not_negative_case_evidence():
+    from javes_routing.core.update import _process_probe_results
+
+    graph = outside_graph()
+    params = RoutingParams()
+    state = historical_state(graph, params, window_end=T0 + timedelta(seconds=20))
+    state.pending_probes = [ProbeRequest(
+        probe_id="legacy-after", camera="B", t_from=T0 + timedelta(seconds=21),
+        t_to=T0 + timedelta(seconds=25),
+    )]
+    state.search_frontier.required_probe_ids = ["legacy-after"]
+    _process_probe_results(state, [ProbeResult(probe_id="legacy-after", status="UNAVAILABLE")], graph, params)
+    assert state.pending_probes == []
+    assert state.unobserved_windows == []
+    assert state.probed_windows == []
+    assert state.search_frontier.required_probe_ids == []
 
 
 def outside_graph(*, two_destinations: bool = False) -> SiteGraph:

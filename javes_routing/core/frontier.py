@@ -131,7 +131,20 @@ def prepare_historical_shell(
 def clamp_probe_to_shell(
     probe: ProbeRequest,
     state: SearchState,
+    now: datetime | None = None,
 ) -> ProbeRequest | None:
+    # The case window remains a hard boundary after historical catch-up. An
+    # exhausted shell must not turn neighbours beyond window_end into new work.
+    start = max(probe.t_from, state.window_start or probe.t_from)
+    end = probe.t_to
+    if state.window_end is not None:
+        if start >= state.window_end:
+            return None
+        if end is not None or (now is not None and state.window_end <= now):
+            end = min(end or state.window_end, state.window_end)
+    if end is not None and end <= start:
+        return None
+    probe = probe.model_copy(update={"t_from": start, "t_to": end})
     frontier = state.search_frontier
     if frontier is None:
         return probe

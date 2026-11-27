@@ -1160,11 +1160,28 @@ def _process_probe_results(
 
     for result in sorted(probe_results, key=lambda item: item.probe_id):
         fingerprint = _result_fingerprint(result)
-        if fingerprint in processed:
+        duplicate = fingerprint in processed
+        if duplicate and result.probe_id not in pending_by_id:
             logger.info("Ignoring duplicate ProbeResult %s", result.probe_id)
             continue
         processed.add(fingerprint)
         matching = pending_by_id.get(result.probe_id)
+        if matching is not None and (
+            (state.window_end is not None and matching.t_from >= state.window_end)
+            or (state.window_start is not None and matching.t_to is not None
+                and matching.t_to <= state.window_start)
+        ):
+            # Old deployments could dispatch neighbours after window_end.
+            # Their unavailable results are not gaps in this case's window.
+            finished_probe_ids.add(matching.probe_id)
+            if state.search_frontier is not None:
+                root = matching.retry_of or matching.probe_id
+                state.search_frontier.required_probe_ids = [
+                    probe_id for probe_id in state.search_frontier.required_probe_ids if probe_id != root
+                ]
+                state.search_frontier.reached_at_by_probe.pop(root, None)
+            logger.warning("Ignoring out-of-window probe result %s", result.probe_id)
+            continue
         valid_result_tracklets: list[Tracklet] = []
         for tracklet in result.tracklets:
             if tracklet.camera not in graph.cameras:
@@ -1228,17 +1245,17 @@ def _process_probe_results(
                         "coverage_ratio": effective_coverage,
                     }
                 )
-            state.probed_windows.append(
-                ProbedWindow(
-                    camera=matching.camera,
-                    t_from=matching.t_from,
-                    t_to=matching.t_to,
-                    probe_id=result.probe_id,
-                    status=result.status,
-                    coverage_ratio=miss_coverage,
-                    found=found,
-                )
+            window = ProbedWindow(
+                camera=matching.camera,
+                t_from=matching.t_from,
+                t_to=matching.t_to,
+                probe_id=result.probe_id,
+                status=result.status,
+                coverage_ratio=miss_coverage,
+                found=found,
             )
+            if window not in state.probed_windows:
+                state.probed_windows.append(window)
             if duration:
                 previous_duration = state.processed_duration_s_by_probe.get(result.probe_id, 0.0)
                 chargeable_duration = max(duration - previous_duration, 0.0)
@@ -1290,7 +1307,7 @@ def _process_probe_results(
                 terminal=terminal,
             )
 
-        if result.status == ProbeStatus.DONE:
+        if result.status == ProbeStatus.DONE and not duplicate:
             tracklets.extend(valid_result_tracklets)
             candidates.extend(valid_result_candidates)
 
@@ -1557,6 +1574,9 @@ def update_hypotheses(
         ]
     banned = set(state.rejected_tracklet_ids) | set(anchors.reject)
     confirmed = set(state.confirmed_tracklet_ids) | set(anchors.confirm)
+    # Reject before grouping/ranking. Otherwise a rejected fragment can consume
+    # a beam slot or poison an associated Visit containing accepted evidence.
+    tracklets = [tracklet for tracklet in tracklets if tracklet.id not in banned]
     visits = merge_tracklets_to_visits(tracklets, candidates, graph, params, now)
     # Beam expansion remains bounded by ``cands_per_probe``, but every
     # Candidate already exposed to Controls must remain confirmable later.

@@ -416,6 +416,15 @@ GOLDEN_FIXTURES: dict[str, Golden] = {
             "now": T0,
         },
     ),
+    "routing/replay-evidence-step-request.json": (
+        RoutingStepRequest,
+        {
+            "state": _state(), "probe_results": [],
+            "anchors": {"replay_evidence_only": True},
+            "site_id": "nvidia-12cam", "site_version": "site-v1",
+            "params_version": "params-v1", "now": T0,
+        },
+    ),
     "routing/step-response.json": (
         RoutingStepResponse,
         {

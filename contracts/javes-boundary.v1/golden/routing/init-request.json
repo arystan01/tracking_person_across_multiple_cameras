@@ -9,6 +9,7 @@
     "last_known_zone": null,
     "operator_closed": false,
     "reject": [],
+    "replay_evidence_only": false,
     "review_only": false
   },
   "case": {
