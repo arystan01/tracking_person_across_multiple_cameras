@@ -15,6 +15,7 @@ from javes_contracts import (
     ArtifactRef,
     CaseCommandBody,
     CaseInfo,
+    Candidate,
     CaseDetailView,
     CreateLegalHoldBody,
     ClipLifecycleState,
@@ -47,6 +48,7 @@ from javes_contracts import (
     SearchMode,
     TargetGalleryCommand,
     TargetGalleryResult,
+    Tracklet,
 )
 
 from javes_main.domain.models import (
@@ -80,6 +82,7 @@ from javes_main.ports import (
     SiteConfigPort,
 )
 from javes_main.projections import build_case_view
+from javes_main.persistence import RevisionConflict
 from javes_main.application.errors import ReferenceUploadError, ReplayEvidenceIncomplete
 from javes_contracts.acceptance import (
     check_clip_state_result,
@@ -119,7 +122,7 @@ class CaseManager:
         live_feed: LiveFeedPort,
         clock: Clock,
         ids: IdGenerator,
-        clip_padding_s: float = 5.0,
+        clip_padding_s: float = 2.0,
         job_deadline_s: float = 120.0,
         retention_ttl_s: float = DEFAULT_RETENTION_TTL_S,
     ) -> None:
@@ -196,12 +199,14 @@ class CaseManager:
         }
         route_by_decision: dict[str, int] = {}
         for item in self.repository.list_case_data(
-            case_id, kinds={CaseDataKind.ROUTING_INPUT.value}
+            case_id, kinds={CaseDataKind.ROUTING_INPUT.value, CaseDataKind.ROUTING_RUN.value}
         ):
             decision_id = item.payload.get("source_decision_id")
-            route_revision = item.payload.get("output_route_revision")
+            route_revision = item.payload.get("output_route_revision", item.payload.get("route_revision"))
             if decision_id is not None and route_revision is not None:
-                route_by_decision[str(decision_id)] = int(route_revision)
+                route_by_decision[str(decision_id)] = max(
+                    route_by_decision.get(str(decision_id), 0), int(route_revision)
+                )
         values: list[DecisionRecordView] = []
         for decision_id, decision in decisions.items():
             revoked = revocations.get(decision_id)
@@ -474,6 +479,87 @@ class CaseManager:
             )
         )
 
+    def _prepare_route_artifacts(self, case_id: str, revision: int, maps) -> list[dict]:
+        """Reserve ownership before CAS; a rollback must not orphan or poison SVG.
+
+        Bytes are published only after CAS, under their immutable content hash.
+        Intent/Retention survives a later aggregate rollback or process crash.
+        Only the committed ROUTE_REVISION maps make a blob publicly readable.
+        """
+        prepared: list[dict] = []
+        with self.repository.transaction():
+            if self.repository.get(case_id).lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
+                raise RevisionConflict("case no longer accepts route artifacts")
+            existing = {
+                item.record_id: item.payload
+                for item in self.repository.list_case_data(
+                    case_id, kinds={CaseDataKind.ARTIFACT_INTENT.value}
+                )
+            }
+            for item in maps:
+                data = item.svg.encode("utf-8")
+                digest = hashlib.sha256(data).hexdigest()
+                key = f"cases/{case_id}/routes/{revision}/{digest}/{item.floor_id}.svg"
+                artifact_id = self.ids.new("artifact", key)
+                artifact = existing.get(artifact_id)
+                if artifact is None:
+                    manifest = ArtifactManifest(
+                        object_key=key, kind="route_svg", size_bytes=len(data),
+                        sha256=digest, created_at=self.clock.now(),
+                        retention_class="case_14d", mime_type=item.mime_type,
+                    )
+                    artifact = {
+                        "artifact_id": artifact_id,
+                        "manifest": manifest.model_dump(mode="json"),
+                        "route_revision": revision, "floor_id": item.floor_id,
+                        "width": item.width, "height": item.height, "alt_text": item.alt_text,
+                    }
+                    self._record_case_data(
+                        case_id, CaseDataKind.ARTIFACT_INTENT, artifact_id, artifact
+                    )
+                self._enqueue_retention_resource(RetentionResource(
+                    resource_id=self.ids.new("resource", case_id, key),
+                    case_id=case_id, kind="ROUTE_SVG",
+                    retention_class=RetentionClass.CASE_RESULT,
+                    artifact_ref=ArtifactRef(object_key=key, sha256=digest),
+                ))
+                prepared.append(artifact)
+        return prepared
+
+    def _stored_route_key(self, case_id: str, revision: int, floor_id: str) -> str:
+        for record in self.repository.list_case_data(
+            case_id, kinds={CaseDataKind.ROUTE_REVISION.value}
+        ):
+            if record.payload.get("revision") != revision:
+                continue
+            for item in record.payload.get("maps", []):
+                if item.get("floor_id") == floor_id:
+                    # Previously committed revisions retain their original key.
+                    return item.get("object_key") or f"cases/{case_id}/routes/{revision}/{floor_id}.svg"
+        raise KeyError("route revision or floor is not committed")
+
+    def _superseded_route_resources(self, case: CaseRecord) -> list[RetentionResource]:
+        previous = case.latest_route
+        if previous is None:
+            return []
+        resources: list[RetentionResource] = []
+        for item in previous.rendered.maps:
+            key = self._stored_route_key(case.request.case_id, previous.revision, item.floor_id)
+            legacy = f"cases/{case.request.case_id}/routes/{previous.revision}/{item.floor_id}.svg"
+            resource_id = (
+                self.ids.new("resource", case.request.case_id, "route", previous.revision, item.floor_id)
+                if key == legacy else self.ids.new("resource", case.request.case_id, key)
+            )
+            resources.append(RetentionResource(
+                resource_id=resource_id, case_id=case.request.case_id,
+                kind="SUPERSEDED_ROUTE_SVG", retention_class=RetentionClass.EPHEMERAL,
+                artifact_ref=ArtifactRef(
+                    object_key=key,
+                    sha256=None if key == legacy else hashlib.sha256(item.svg.encode("utf-8")).hexdigest(),
+                ), revision=2,
+            ))
+        return resources
+
     @staticmethod
     def _artifact_ref_from_path(value: str) -> ArtifactRef:
         """Convert Perception-owned paths into stable Retention locators."""
@@ -594,7 +680,11 @@ class CaseManager:
         if current_case.lifecycle in {
             CaseLifecycle.DELETE_REQUESTED,
             CaseLifecycle.DELETED,
+            CaseLifecycle.EXPORTING,
+            CaseLifecycle.SAVED,
         }:
+            return current_case
+        if trigger.trigger_type == "HEARTBEAT" and current_case.lifecycle != CaseLifecycle.SEARCHING:
             return current_case
         if any(
             item.record_id == trigger.trigger_id
@@ -616,16 +706,17 @@ class CaseManager:
                 item.decision_id for item in self._active_decisions(trigger.case_id)
             }:
                 return current_case
-        anchors = trigger.anchors
-        if (
-            trigger.trigger_type == "OPERATOR_DECISION"
-            and current_case.lifecycle == CaseLifecycle.CLOSED
-        ):
-            anchors = anchors.model_copy(update={"review_only": True})
+            # A review changes the evidence set, not just the surviving beam.
+            # Filtering a previously pruned beam can erase a valid prefix when
+            # an unrelated later sighting is rejected, or lose a confirmed hit.
+            return self._replay_case(trigger)
         return self._routing_tick(
             trigger.case_id,
             probe_results=trigger.probe_results,
-            anchors=anchors,
+            anchors=(
+                trigger.anchors.model_copy(update={"review_only": True})
+                if current_case.lifecycle == CaseLifecycle.CLOSED else trigger.anchors
+            ),
             trigger_id=trigger.trigger_id,
             trigger_type=trigger.trigger_type,
             trigger_dedupe_key=trigger.dedupe_key,
@@ -701,9 +792,15 @@ class CaseManager:
             self._initial_anchors(case),
             case.created_at,
         )
-        active_ids = {
-            item.decision_id for item in self._active_decisions(case.request.case_id)
-        }
+        state.pending_probes = [
+            job.payload.probe.model_copy(deep=True)
+            for job in self.repository.list_jobs(case.request.case_id)
+        ]
+        decisions = self._active_decisions(case.request.case_id)
+        confirmed = {item.tracklet_id for item in decisions if item.decision == "CONFIRM"}
+        rejected = {item.tracklet_id for item in decisions if item.decision == "REJECT"}
+        seen_tracklets: set[str] = set()
+        effective_now = case.created_at
         last_result: RoutingWorkerResult | None = None
         replayed_inputs: list[str] = []
         for record in ordered:
@@ -724,8 +821,10 @@ class CaseManager:
                 raise ReplayEvidenceIncomplete(
                     "replay_evidence_incomplete: pinned site or params version changed"
                 )
-            source_decision_id = payload.get("source_decision_id")
-            if source_decision_id is not None and source_decision_id not in active_ids:
+            # Historical decisions are superseded by the current immutable
+            # decision/revocation ledger. Apply final rejects from the first
+            # round, before the beam can discard a correct alternative.
+            if payload.get("source_decision_id") is not None:
                 continue
             try:
                 effective_now = datetime.fromisoformat(str(payload["effective_now"]))
@@ -738,6 +837,16 @@ class CaseManager:
                 raise ReplayEvidenceIncomplete(
                     f"replay_evidence_incomplete: invalid routing input {record.record_id!r}"
                 ) from exc
+            seen_tracklets.update(
+                tracklet.id for result in probe_results for tracklet in result.tracklets
+            )
+            anchors = anchors.model_copy(update={
+                "confirm": sorted(confirmed & seen_tracklets),
+                "reject": sorted(rejected),
+                "review_only": False,
+                "operator_closed": False,
+                "replay_evidence_only": True,
+            })
             last_result = self.routing.advance(
                 state,
                 probe_results,
@@ -754,24 +863,30 @@ class CaseManager:
             raise ReplayEvidenceIncomplete(
                 "replay_evidence_incomplete: revocation removed every replayable routing input"
             )
+        previous_stop_reason = None
         if case.lifecycle == CaseLifecycle.CLOSED:
             previous_stop_reason = (
                 case.latest_route.step_result.stop_reason
                 if case.latest_route is not None
                 else last_result.step_result.stop_reason
             )
-            closed_step = last_result.step_result.model_copy(
-                update={
-                    "probes": [],
-                    "done": True,
+            # Re-render in review-only mode as well: patching the DTO after
+            # rendering leaves SVG status/position semantics out of sync.
+            state.stop_reason = previous_stop_reason
+        last_result = self.routing.advance(
+            state, [], graph,
+            Anchors(confirm=sorted(confirmed), reject=sorted(rejected),
+                    review_only=case.lifecycle == CaseLifecycle.CLOSED),
+            params, effective_now, floor_assets,
+        )
+        if case.lifecycle == CaseLifecycle.CLOSED:
+            last_result = last_result.model_copy(update={
+                "step_result": last_result.step_result.model_copy(update={
+                    "probes": [], "done": True,
                     "mode": SearchMode.PAST_SUMMARY,
                     "stop_reason": previous_stop_reason,
-                },
-                deep=True,
-            )
-            last_result = last_result.model_copy(
-                update={"step_result": closed_step}, deep=True
-            )
+                }, deep=True),
+            }, deep=True)
         return self._persist_replayed_routing_result(
             case,
             last_result,
@@ -793,77 +908,19 @@ class CaseManager:
         next_route_revision = max(
             (previous_route.revision + 1 if previous_route is not None else 1),
             worker_result.rendered_route.route_revision,
+            (case.routing_state.state_version + 1 if case.routing_state is not None else 1),
         )
         rendered = worker_result.rendered_route.model_copy(
             update={"route_revision": next_route_revision}, deep=True
         )
-        step = worker_result.step_result
-        route_resources: list[RetentionResource] = []
-        route_artifacts: list[dict[str, Any]] = []
-        for item in rendered.maps:
-            key = (
-                f"cases/{case.request.case_id}/routes/"
-                f"{next_route_revision}/{item.floor_id}.svg"
-            )
-            svg_bytes = item.svg.encode("utf-8")
-            self.artifacts.put(key, svg_bytes, item.mime_type)
-            manifest = ArtifactManifest(
-                object_key=key,
-                kind="route_svg",
-                size_bytes=len(svg_bytes),
-                sha256=hashlib.sha256(svg_bytes).hexdigest(),
-                created_at=now,
-                retention_class="case_14d",
-                mime_type=item.mime_type,
-            )
-            route_artifacts.append(
-                {
-                    "artifact_id": self.ids.new("artifact", key),
-                    "manifest": manifest.model_dump(mode="json"),
-                    "floor_id": item.floor_id,
-                    "width": item.width,
-                    "height": item.height,
-                    "alt_text": item.alt_text,
-                }
-            )
-            route_resources.append(
-                RetentionResource(
-                    resource_id=self.ids.new(
-                        "resource",
-                        case.request.case_id,
-                        "route",
-                        next_route_revision,
-                        item.floor_id,
-                    ),
-                    case_id=case.request.case_id,
-                    kind="ROUTE_SVG",
-                    retention_class=RetentionClass.CASE_RESULT,
-                    artifact_ref=ArtifactRef(object_key=key),
-                )
-            )
-        superseded_resources: list[RetentionResource] = []
-        if previous_route is not None:
-            for item in previous_route.rendered.maps:
-                key = (
-                    f"cases/{case.request.case_id}/routes/"
-                    f"{previous_route.revision}/{item.floor_id}.svg"
-                )
-                superseded_resources.append(
-                    RetentionResource(
-                        resource_id=self.ids.new(
-                            "resource",
-                            case.request.case_id,
-                            "route",
-                            previous_route.revision,
-                            item.floor_id,
-                        ),
-                        case_id=case.request.case_id,
-                        kind="SUPERSEDED_ROUTE_SVG",
-                        retention_class=RetentionClass.EPHEMERAL,
-                        artifact_ref=ArtifactRef(object_key=key),
-                        revision=2,
-                    )
-                )
+        step = worker_result.step_result.model_copy(deep=True)
+        # Replay omits obsolete decision rounds. Never reuse their state/route
+        # versions when the next live probe arrives after a searching review.
+        step.state.state_version = next_route_revision
+        route_artifacts = self._prepare_route_artifacts(
+            case.request.case_id, next_route_revision, rendered.maps
+        )
+        superseded_resources = self._superseded_route_resources(case)
 
         case.routing_state = step.state
         case.latest_route = StoredRoute(
@@ -873,15 +930,43 @@ class CaseManager:
             created_at=now,
         )
         case.updated_at = now
+        automatic_retention_command = None
+        if case.lifecycle == CaseLifecycle.SEARCHING:
+            params = self.sites.get_params(case.params_version)
+            case.next_heartbeat_at = now + timedelta(seconds=params.heartbeat_s)
+            if step.done:
+                case.lifecycle = CaseLifecycle.CLOSED
+                case.closed_at = now
+                case.retention_due_at = now + timedelta(seconds=self.retention_ttl_s)
+                automatic_retention_command = RetentionCommand(
+                    command_id=self.ids.new("retention", case.request.case_id, "routing-complete", next_route_revision),
+                    case_id=case.request.case_id, action="CLOSE_CASE",
+                    actor_id="routing-worker", occurred_at=now,
+                )
         if case.lifecycle == CaseLifecycle.CLOSED:
             case.live_feed = None
             case.next_heartbeat_at = None
         with self.repository.transaction():
             saved = self.repository.save(case, expected_revision)
+            # Publish only after acquiring the case revision. A worker callback
+            # can change the case while Routing runs over HTTP; a rejected CAS
+            # must not occupy the next immutable route key with stale SVG.
+            for item, artifact in zip(rendered.maps, route_artifacts, strict=True):
+                self.artifacts.put(
+                    artifact["manifest"]["object_key"],
+                    item.svg.encode("utf-8"),
+                    item.mime_type,
+                )
             if saved.lifecycle == CaseLifecycle.SEARCHING:
                 self._create_probe_jobs(saved, step.probes)
-            for resource in route_resources:
-                self._enqueue_retention_resource(resource)
+            if automatic_retention_command is not None:
+                self._enqueue(
+                    saved.request.case_id, OutboxTopic.RETENTION_COMMAND,
+                    f"retention-command:{automatic_retention_command.command_id}",
+                    {"command": automatic_retention_command.model_dump(mode="json")},
+                )
+                self._event(saved.request.case_id, "CASE_CLOSED", actor_id="routing-worker",
+                            payload={"reason": step.stop_reason, "retention_command_id": automatic_retention_command.command_id})
             for resource in superseded_resources:
                 self._enqueue_retention_resource(resource)
             for artifact in route_artifacts:
@@ -911,8 +996,9 @@ class CaseManager:
                             "width": item.width,
                             "height": item.height,
                             "alt_text": item.alt_text,
+                            "object_key": artifact["manifest"]["object_key"],
                         }
-                        for item in rendered.maps
+                        for item, artifact in zip(rendered.maps, route_artifacts, strict=True)
                     ],
                     "replay_trigger_id": trigger.trigger_id,
                 },
@@ -925,7 +1011,11 @@ class CaseManager:
                     "input_case_revision": expected_revision,
                     "output_case_revision": saved.revision,
                     "route_revision": next_route_revision,
-                    "trigger_type": "DECISION_REVOKE",
+                    "trigger_type": trigger.trigger_type,
+                    "source_decision_id": (
+                        trigger.dedupe_key.rsplit(":decision:", 1)[1]
+                        if ":decision:" in trigger.dedupe_key else None
+                    ),
                     "probe_result_ids": [],
                     "anchors": {},
                     "replayed_input_ids": replayed_inputs,
@@ -1274,67 +1364,11 @@ class CaseManager:
         route_changed = (
             previous_route is None or previous_route.revision != route_revision
         )
-        route_resources: list[RetentionResource] = []
-        superseded_route_resources: list[RetentionResource] = []
-        route_artifacts: list[dict[str, Any]] = []
-        for rendered in worker_result.rendered_route.maps:
-            if not route_changed:
-                continue
-            key = f"cases/{case_id}/routes/{route_revision}/" f"{rendered.floor_id}.svg"
-            svg_bytes = rendered.svg.encode("utf-8")
-            self.artifacts.put(key, svg_bytes, rendered.mime_type)
-            manifest = ArtifactManifest(
-                object_key=key,
-                kind="route_svg",
-                size_bytes=len(svg_bytes),
-                sha256=hashlib.sha256(svg_bytes).hexdigest(),
-                created_at=now,
-                retention_class="case_14d",
-                mime_type=rendered.mime_type,
-            )
-            route_artifacts.append(
-                {
-                    "artifact_id": self.ids.new("artifact", key),
-                    "manifest": manifest.model_dump(mode="json"),
-                    "floor_id": rendered.floor_id,
-                    "width": rendered.width,
-                    "height": rendered.height,
-                    "alt_text": rendered.alt_text,
-                }
-            )
-            route_resources.append(
-                RetentionResource(
-                    resource_id=self.ids.new(
-                        "resource", case_id, "route", route_revision, rendered.floor_id
-                    ),
-                    case_id=case_id,
-                    kind="ROUTE_SVG",
-                    retention_class=RetentionClass.CASE_RESULT,
-                    artifact_ref=ArtifactRef(object_key=key),
-                )
-            )
-        if previous_route is not None and route_changed:
-            for rendered in previous_route.rendered.maps:
-                old_key = (
-                    f"cases/{case_id}/routes/{previous_route.revision}/"
-                    f"{rendered.floor_id}.svg"
-                )
-                superseded_route_resources.append(
-                    RetentionResource(
-                        resource_id=self.ids.new(
-                            "resource",
-                            case_id,
-                            "route",
-                            previous_route.revision,
-                            rendered.floor_id,
-                        ),
-                        case_id=case_id,
-                        kind="SUPERSEDED_ROUTE_SVG",
-                        retention_class=RetentionClass.EPHEMERAL,
-                        artifact_ref=ArtifactRef(object_key=old_key),
-                        revision=2,
-                    )
-                )
+        route_artifacts = (
+            self._prepare_route_artifacts(case_id, route_revision, worker_result.rendered_route.maps)
+            if route_changed else []
+        )
+        superseded_route_resources = self._superseded_route_resources(case) if route_changed else []
         case.latest_route = StoredRoute(
             revision=route_revision,
             step_result=step,
@@ -1367,15 +1401,17 @@ class CaseManager:
         clip_commands = self._clip_hold_commands(case, probe_results)
         with self.repository.transaction():
             saved = self.repository.save(case, expected_revision)
+            if route_changed:
+                for rendered, artifact in zip(
+                    worker_result.rendered_route.maps, route_artifacts, strict=True
+                ):
+                    self.artifacts.put(
+                        artifact["manifest"]["object_key"],
+                        rendered.svg.encode("utf-8"),
+                        rendered.mime_type,
+                    )
             if saved.lifecycle == CaseLifecycle.SEARCHING:
                 self._create_probe_jobs(saved, step.probes)
-            for resource in route_resources:
-                self._enqueue(
-                    case_id,
-                    OutboxTopic.RETENTION_REGISTER,
-                    f"retention-register:{resource.resource_id}:{resource.retention_class.value}",
-                    {"resource": resource.model_dump(mode="json")},
-                )
             for resource in superseded_route_resources:
                 self._enqueue_retention_resource(resource)
             for resource in evidence_resources:
@@ -1448,8 +1484,9 @@ class CaseManager:
                                 "width": item.width,
                                 "height": item.height,
                                 "alt_text": item.alt_text,
+                                "object_key": artifact["manifest"]["object_key"],
                             }
-                            for item in worker_result.rendered_route.maps
+                            for item, artifact in zip(worker_result.rendered_route.maps, route_artifacts, strict=True)
                         ],
                     },
                 )
@@ -1530,6 +1567,19 @@ class CaseManager:
         now = self.clock.now()
         for probe in probes:
             job_id = self.ids.new("job", case.request.case_id, probe.probe_id)
+            try:
+                existing = self.repository.get_job(job_id)
+            except KeyError:
+                existing = None
+            if existing is not None:
+                requested = (probe.camera, probe.t_from, probe.t_to, probe.retry_count, probe.retry_of)
+                original = existing.payload.probe
+                identity = (original.camera, original.t_from, original.t_to, original.retry_count, original.retry_of)
+                if requested != identity:
+                    raise ValueError("probe id reused for a different physical request")
+                # Delivery already owns an immutable gallery/deadline. Review
+                # priorities or hypothesis IDs do not create another CV task.
+                continue
             job = JobRecord(
                 job_id=job_id,
                 case_id=case.request.case_id,
@@ -1560,7 +1610,8 @@ class CaseManager:
             )
 
     def _clip_hold_commands(
-        self, case: CaseRecord, probe_results: list[ProbeResult]
+        self, case: CaseRecord, probe_results: list[ProbeResult],
+        *, confirmed_tracklet_ids: set[str] | None = None,
     ) -> list[CutClipCommand]:
         if case.latest_route is None:
             return []
@@ -1570,6 +1621,7 @@ class CaseManager:
             for visit in hypothesis.visits
             for tracklet_id in visit.tracklet_ids
         }
+        surviving.update(confirmed_tracklet_ids or set())
         tracklet_models = {
             tracklet.id: tracklet
             for result in probe_results
@@ -1588,6 +1640,17 @@ class CaseManager:
                 if tracklet is None or tracklet.clip_ref is None:
                     continue
                 source = ArtifactRef.model_validate(tracklet.clip_ref)
+                # Context padding must stay inside the requested recording
+                # window. In particular, the first/last NVIDIA frames cannot
+                # provide context footage beyond that window.
+                clip_from = max(
+                    case.request.window.start,
+                    tracklet.t_in - timedelta(seconds=self.clip_padding_s),
+                )
+                clip_to = min(
+                    case.request.window.end,
+                    tracklet.t_out + timedelta(seconds=self.clip_padding_s),
+                )
                 commands.append(
                     CutClipCommand(
                         clip_request_id=self.ids.new(
@@ -1597,10 +1660,10 @@ class CaseManager:
                         candidate_id=candidate.id,
                         tracklet_id=tracklet.id,
                         camera_id=tracklet.camera,
-                        t_from=tracklet.t_in - timedelta(seconds=self.clip_padding_s),
-                        t_to=tracklet.t_out + timedelta(seconds=self.clip_padding_s),
-                        padding_before_s=self.clip_padding_s,
-                        padding_after_s=self.clip_padding_s,
+                        t_from=clip_from,
+                        t_to=clip_to,
+                        padding_before_s=max(0.0, (tracklet.t_in - clip_from).total_seconds()),
+                        padding_after_s=max(0.0, (clip_to - tracklet.t_out).total_seconds()),
                         source_ref=source,
                     )
                 )
@@ -1935,13 +1998,18 @@ class CaseManager:
                 anchors=anchors,
             )
             if body.decision == "CONFIRM" and searching:
+                confirmed_tracklets = sorted({
+                    item.tracklet_id for item in self._active_decisions(case_id)
+                    if item.decision == "CONFIRM"
+                } | {body.tracklet_id})
                 gallery_command = TargetGalleryCommand(
                     command_id=self.ids.new(
                         "gallery_cmd", case_id, "confirmed", body.tracklet_id
                     ),
                     case_id=case_id,
-                    source="confirmed_tracklet",
-                    tracklet_id=body.tracklet_id,
+                    source="rebuild",
+                    image_ref=case.request.reference_image_ref,
+                    tracklet_ids=confirmed_tracklets,
                     base_gallery_ref=case.gallery_ref,
                     model_version=(
                         case.gallery_model_version or "osnet_ain_x1_0_msmt17"
@@ -1954,6 +2022,22 @@ class CaseManager:
                     {"command": gallery_command.model_dump(mode="json")},
                 )
             clip_id = case.candidate_to_clip.get(body.candidate_id)
+            if clip_id is None and body.decision == "CONFIRM":
+                tracklet = Tracklet.model_validate(case.tracklets[body.tracklet_id])
+                evidence = ProbeResult(
+                    probe_id=tracklet.probe_id or "review-evidence",
+                    status=ProbeStatus.DONE,
+                    tracklets=[tracklet],
+                    candidates=[Candidate.model_validate(candidate)],
+                )
+                for cut in self._clip_hold_commands(
+                    case, [evidence], confirmed_tracklet_ids={body.tracklet_id}
+                ):
+                    self._enqueue(
+                        case_id, OutboxTopic.CLIP_CUT,
+                        f"clip-cut:{cut.clip_request_id}",
+                        {"command": cut.model_dump(mode="json")},
+                    )
             if clip_id is not None:
                 command = ClipStateCommand(
                     command_id=self.ids.new("clip_state", body.decision_id),
@@ -2245,10 +2329,13 @@ class CaseManager:
             clip.tracklet_id: clip
             for clip in case.clips.values()
             if clip.state == ClipLifecycleState.CONFIRMED
+            and clip.status == ClipProcessingStatus.READY
         }
         ordered: list[str] = []
-        for visit in best.visits:
-            for tracklet_id in visit.tracklet_ids:
+        for visit in sorted(best.visits, key=lambda item: (item.t_in, item.t_out, item.id)):
+            for tracklet_id in sorted(visit.tracklet_ids, key=lambda value: (
+                case.tracklets.get(value, {}).get("t_start", ""), value
+            )):
                 clip = clip_by_tracklet.get(tracklet_id)
                 if clip is not None and clip.clip_id not in ordered:
                     ordered.append(clip.clip_id)
@@ -2258,9 +2345,22 @@ class CaseManager:
         case = self.repository.get(case_id)
         if case.lifecycle not in {CaseLifecycle.CLOSED, CaseLifecycle.SAVED}:
             raise ValueError(f"cannot export case while it is {case.lifecycle.value}")
+        if any(
+            item.state.value in {"PENDING", "LEASED", "FAILED"}
+            and item.trigger_type in {"OPERATOR_DECISION", "DECISION_REVOKE"}
+            for item in self.repository.list_routing_triggers(case_id=case_id)
+        ):
+            raise ValueError("route recalculation must complete before clip export")
         ordered = self._ordered_confirmed_clips(case)
         if not ordered:
             raise ValueError("case has no confirmed clips in route order")
+        confirmed = {
+            item.tracklet_id for item in self._active_decisions(case_id)
+            if item.decision == "CONFIRM"
+        }
+        exported_tracklets = {case.clips[clip_id].tracklet_id for clip_id in ordered}
+        if not confirmed.issubset(exported_tracklets):
+            raise ValueError("all confirmed observations need ready clips on the current route before export")
         command = ExportClipsCommand(
             export_request_id=self.ids.new("export", case_id, body.command_id),
             case_id=case_id,
@@ -2456,13 +2556,24 @@ class CaseManager:
             allowed = (
                 {CaseLifecycle.PREPARING}
                 if command.source == "reference"
-                else {CaseLifecycle.SEARCHING, CaseLifecycle.CLOSED}
+                else {CaseLifecycle.SEARCHING}
             )
-            if case.lifecycle not in allowed:
+            current_sources = {
+                item.tracklet_id for item in self._active_decisions(message.case_id)
+                if item.decision == "CONFIRM"
+            }
+            stale_sources = (
+                command.source == "rebuild"
+                and set(command.tracklet_ids) != current_sources
+            ) or (
+                command.source == "confirmed_tracklet"
+                and command.tracklet_id not in current_sources
+            )
+            if case.lifecycle not in allowed or stale_sources:
                 self._event(
                     message.case_id,
                     "TARGET_GALLERY_IGNORED",
-                    payload={"lifecycle": case.lifecycle.value},
+                    payload={"lifecycle": case.lifecycle.value, "stale_sources": stale_sources},
                 )
                 return
             expected = case.revision
@@ -2556,11 +2667,16 @@ class CaseManager:
                         revision=record.revision,
                     )
                 )
-            action = None
-            if record.tracklet_id in case.pending_confirm_tracklet_ids:
-                action = "CONFIRM"
-            elif record.tracklet_id in case.pending_reject_tracklet_ids:
-                action = "RELEASE"
+            # Cuts can finish after route replay or revocation. The immutable
+            # active decision, not a transient routing/callback flag, owns state.
+            decision = next((
+                item for item in self._active_decisions(message.case_id)
+                if item.tracklet_id == record.tracklet_id
+            ), None)
+            action = (
+                ("CONFIRM" if decision.decision == "CONFIRM" else "RELEASE")
+                if decision is not None else None
+            )
             if action is not None:
                 command = ClipStateCommand(
                     command_id=self.ids.new(
@@ -3039,7 +3155,7 @@ class CaseManager:
         case = self.repository.get(case_id)
         if case.lifecycle in {CaseLifecycle.DELETE_REQUESTED, CaseLifecycle.DELETED}:
             raise KeyError("route is no longer available")
-        key = f"cases/{case_id}/routes/{route_revision}/{floor_id}.svg"
+        key = self._stored_route_key(case_id, route_revision, floor_id)
         data, mime_type = self.artifacts.get(key)
         if mime_type != "image/svg+xml":
             raise RuntimeError("stored route artifact has unexpected MIME type")

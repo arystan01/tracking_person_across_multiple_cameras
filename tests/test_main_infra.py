@@ -7,11 +7,13 @@ from threading import Barrier
 import pytest
 
 from javes_contracts import (
+    Anchors,
     ArtifactRef,
     CaseCommandBody,
     CaseWindow,
     CreateCaseBody,
     CreateLegalHoldBody,
+    CutClipCommand,
     LastKnown,
     ProbeRequest,
     ProbeResult,
@@ -407,7 +409,9 @@ def test_closed_case_review_recalculates_history_without_restarting_search(decis
         for item in app.repository.list_outbox(case_id="case-1")
         if item.topic == "TARGET_GALLERY"
     ]
-    assert app.manager.get_view("case-1").candidates
+    closed_view = app.manager.get_view("case-1")
+    assert closed_view.candidates
+    assert any(clip["state"] == "HOLD" for clip in closed_view.clips)
 
     body = ReviewDecisionBody(
         decision_id=f"closed-{decision}",
@@ -508,6 +512,128 @@ def test_closed_case_discards_probes_returned_by_routing_defence_in_depth(
     assert reviewed.latest_route is not None
     assert reviewed.latest_route.step_result.probes == []
     assert [item.job_id for item in app.repository.list_jobs("case-1")] == jobs_before
+
+
+@pytest.mark.parametrize("beam", [1, 5])
+@pytest.mark.parametrize("closed", [False, True])
+def test_review_rebuilds_confirmed_prefix_after_rejecting_later_false_hit(beam, closed):
+    app = build_in_memory_system(
+        graph=graph(), params=RoutingParams(B=beam, cands_per_probe=1),
+        now=BASE + timedelta(seconds=60),
+        observations=[
+            FakeObservation(
+                observation_id="good", camera_id="B", appearance_score=0.6,
+                t_start=BASE + timedelta(seconds=20),
+                t_end=BASE + timedelta(seconds=25),
+                clip_ref=ArtifactRef(archive_id="archive-B"),
+            ),
+            FakeObservation(
+                observation_id="false", camera_id="B", appearance_score=0.99,
+                t_start=BASE + timedelta(seconds=40),
+                t_end=BASE + timedelta(seconds=45),
+                clip_ref=ArtifactRef(archive_id="archive-B"),
+            ),
+        ],
+    )
+    app.manager.create_case(create_body(), idempotency_key="prefix-create")
+    app.scheduler.run_case_once("case-1")
+    candidates = sorted(app.manager.get_view("case-1").candidates, key=lambda c: c["t_start"])
+    good, false = candidates
+    if closed:
+        app.manager.command("case-1", CaseCommandBody(
+            command_id="prefix-close", action="CLOSE", operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=65),
+        ), idempotency_key="prefix-close")
+        app.routing_dispatcher.drain()
+    before = app.repository.get("case-1")
+    jobs_before = [job.job_id for job in app.repository.list_jobs("case-1")]
+    for candidate, decision in [(good, "CONFIRM"), (false, "REJECT")]:
+        body = ReviewDecisionBody(
+            decision_id=f"prefix-{decision}", candidate_id=candidate["candidate_id"],
+            tracklet_id=candidate["tracklet_id"], decision=decision,
+            operator_id="operator-1", occurred_at=BASE + timedelta(seconds=70),
+        )
+        app.manager.decide("case-1", body, idempotency_key=body.decision_id)
+        app.routing_dispatcher.drain()
+        app.outbox_dispatcher.drain()
+    view = app.manager.get_view("case-1")
+    assert view.best_hypothesis is not None
+    route_ids = {t for visit in view.best_hypothesis["visits"] for t in visit["tracklet_ids"]}
+    assert good["tracklet_id"] in route_ids
+    assert false["tracklet_id"] not in route_ids
+    assert any(c["tracklet_id"] == good["tracklet_id"] and c["state"] == "CONFIRMED" for c in view.clips)
+    assert all(d.resulting_route_revision is not None for d in app.manager.list_decisions("case-1"))
+    assert audit_case_replay_ledger(app.repository, app.repository.get("case-1"))["complete"]
+    reviewed = app.repository.get("case-1")
+    assert reviewed.routing_state.state_version == view.route_revision
+    if not closed:
+        app.manager.heartbeat("case-1")
+        app.routing_dispatcher.drain()
+        resumed = app.manager.get_view("case-1")
+        assert resumed.route_revision > view.route_revision
+        assert not [t for t in app.repository.list_routing_triggers(case_id="case-1") if t.state.value == "FAILED"]
+    if closed:
+        after = app.repository.get("case-1")
+        assert after.lifecycle == CaseLifecycle.CLOSED
+        assert (after.closed_at, after.retention_due_at) == (before.closed_at, before.retention_due_at)
+        assert after.latest_route.step_result.probes == []
+        assert [job.job_id for job in app.repository.list_jobs("case-1")] == jobs_before
+        app.manager.command("case-1", CaseCommandBody(
+            command_id="prefix-export", action="EXPORT", operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=80),
+        ), idempotency_key="prefix-export")
+        app.outbox_dispatcher.drain()
+        exported = app.manager.get_view("case-1")
+        assert exported.export["status"] == "READY"
+        assert len(exported.export["ordered_clip_ids"]) == 1
+
+
+def test_export_waits_for_decision_recalculation():
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="pending-export-create")
+    app.scheduler.run_case_once("case-1")
+    candidate = app.manager.get_view("case-1").candidates[0]
+    app.manager.command("case-1", CaseCommandBody(
+        command_id="pending-export-close", action="CLOSE", operator_id="operator-1",
+        occurred_at=BASE + timedelta(seconds=70),
+    ), idempotency_key="pending-export-close")
+    app.routing_dispatcher.drain()
+    app.manager.decide("case-1", ReviewDecisionBody(
+        decision_id="pending-confirm", candidate_id=candidate["candidate_id"],
+        tracklet_id=candidate["tracklet_id"], decision="CONFIRM", operator_id="operator-1",
+        occurred_at=BASE + timedelta(seconds=80),
+    ), idempotency_key="pending-confirm")
+    with pytest.raises(ValueError, match="recalculation must complete"):
+        app.manager.command("case-1", CaseCommandBody(
+            command_id="pending-export", action="EXPORT", operator_id="operator-1",
+            occurred_at=BASE + timedelta(seconds=81),
+        ), idempotency_key="pending-export")
+    assert app.repository.get("case-1").lifecycle == CaseLifecycle.CLOSED
+
+
+def test_stale_gallery_rebuild_does_not_resurrect_revoked_sources():
+    from javes_contracts import TargetGalleryCommand, TargetGalleryResult
+    from javes_main.domain import OutboxRecord
+
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="stale-gallery-create")
+    app.scheduler.run_case_once("case-1")
+    case = app.repository.get("case-1")
+    command = TargetGalleryCommand(
+        command_id="stale-gallery", case_id="case-1", source="rebuild",
+        image_ref=case.request.reference_image_ref, tracklet_ids=["revoked"],
+    )
+    message = OutboxRecord(
+        message_id="stale", case_id="case-1", topic="TARGET_GALLERY", dedupe_key="stale",
+        payload={"command": command.model_dump(mode="json")},
+        created_at=BASE, updated_at=BASE, available_at=BASE,
+    )
+    result = TargetGalleryResult(
+        command_id=command.command_id, case_id="case-1", source_count=2,
+        gallery_ref="revoked-gallery", model_version=command.model_version,
+    )
+    app.manager.apply_outbox_result(message, result.model_dump(mode="json"))
+    assert app.repository.get("case-1").gallery_ref == case.gallery_ref
 
 
 @pytest.mark.parametrize("decision", ["CONFIRM", "REJECT"])
@@ -840,6 +966,114 @@ def test_repository_optimistic_revision_check():
     app.repository.save(current, current.revision)
     with pytest.raises(RevisionConflict):
         app.repository.save(stale, stale.revision)
+
+
+def test_stale_routing_cas_does_not_publish_immutable_svg(monkeypatch):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="stale-svg-create")
+    app.outbox_dispatcher.drain()
+    app.routing_dispatcher.drain()
+    old_revision = app.manager.get_view("case-1").route_revision
+    old_keys = app.artifacts.keys()
+    original_save = app.repository.save
+
+    def concurrent_callback(case, expected_revision):
+        current = app.repository.get("case-1")
+        original_save(current, current.revision)
+        return original_save(case, expected_revision)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app.repository, "save", concurrent_callback)
+        with pytest.raises(RevisionConflict):
+            app.manager._routing_tick("case-1", probe_results=[], anchors=Anchors())
+
+    assert app.artifacts.keys() == old_keys
+    assert app.manager.get_view("case-1").route_revision == old_revision
+    # A recomputation at a later time can produce different SVG bytes. It must
+    # still be able to publish the unoccupied revision after a callback race.
+    app.clock.set(app.clock.now() + timedelta(seconds=1))
+    app.manager._routing_tick("case-1", probe_results=[], anchors=Anchors())
+    view = app.manager.get_view("case-1")
+    assert view.route_revision > old_revision
+    assert app.manager.get_route_svg("case-1", view.route_revision, "1F")
+
+
+def test_routing_cas_conflict_does_not_exhaust_delivery_budget(monkeypatch):
+    app = system()
+    app.manager.create_case(create_body(), idempotency_key="routing-contention")
+    app.outbox_dispatcher.drain()
+    trigger = app.repository.list_routing_triggers()[0]
+    trigger.max_attempts = 1
+    app.repository.save_routing_trigger(trigger)
+
+    def stale_result(_trigger):
+        raise RevisionConflict("concurrent Clip callback advanced the case")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app.manager, "process_routing_trigger", stale_result)
+        report = app.routing_dispatcher.run_once(limit=1)
+    assert report.retried == 1
+    assert report.failed == 0
+    pending = app.repository.get_routing_trigger(trigger.trigger_id)
+    assert pending.state.value == "PENDING"
+    assert pending.attempt == 0
+    assert app.routing_dispatcher.run_once(limit=1).completed == 1
+
+
+@pytest.mark.parametrize(
+    "window_start_s,window_end_s,expected_from_s,expected_to_s,before_s,after_s",
+    [(0, 35, 18, 32, 2, 2), (19, 31, 19, 31, 1, 1)],
+)
+def test_new_clip_uses_two_second_context_bounded_by_case_window(
+    window_start_s, window_end_s, expected_from_s, expected_to_s, before_s, after_s
+):
+    app = system()
+    body = create_body().model_copy(update={
+        "window": CaseWindow(
+            start=BASE + timedelta(seconds=window_start_s),
+            end=BASE + timedelta(seconds=window_end_s),
+        )
+    })
+    app.manager.create_case(body, idempotency_key="two-second-context")
+    app.outbox_dispatcher.drain()
+    app.routing_dispatcher.drain()
+    app.manager.run_pending_jobs("case-1")
+    app.routing_dispatcher.drain()
+    commands = [
+        CutClipCommand.model_validate(item.payload["command"])
+        for item in app.repository.list_outbox()
+        if item.topic == OutboxTopic.CLIP_CUT.value
+    ]
+    assert len(commands) == 1
+    command = commands[0]
+    assert command.t_from == BASE + timedelta(seconds=expected_from_s)
+    assert command.t_to == BASE + timedelta(seconds=expected_to_s)
+    assert command.padding_before_s == before_s
+    assert command.padding_after_s == after_s
+
+
+def test_clip_padding_is_bounded_by_recorded_case_window():
+    app = system()
+    app.manager.clip_padding_s = 30
+    body = create_body().model_copy(update={
+        "window": CaseWindow(start=BASE, end=BASE + timedelta(seconds=35))
+    })
+    app.manager.create_case(body, idempotency_key="bounded-clip")
+    app.outbox_dispatcher.drain()
+    app.routing_dispatcher.drain()
+    app.manager.run_pending_jobs("case-1")
+    app.routing_dispatcher.drain()
+    commands = [
+        CutClipCommand.model_validate(item.payload["command"])
+        for item in app.repository.list_outbox()
+        if item.topic == OutboxTopic.CLIP_CUT.value
+    ]
+    assert len(commands) == 1
+    command = commands[0]
+    assert command.t_from == BASE
+    assert command.t_to == BASE + timedelta(seconds=35)
+    assert command.padding_before_s == 20
+    assert command.padding_after_s == 5
 
 
 def test_case_keeps_pinned_routing_params_after_site_config_advances():

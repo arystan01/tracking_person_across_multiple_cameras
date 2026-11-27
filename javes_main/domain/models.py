@@ -113,6 +113,7 @@ class CaseDataKind(str, Enum):
     LEGAL_HOLD = "LEGAL_HOLD"
     LEGAL_HOLD_RELEASE = "LEGAL_HOLD_RELEASE"
     ARTIFACT = "ARTIFACT"
+    ARTIFACT_INTENT = "ARTIFACT_INTENT"
 
 
 class CaseDataRecord(DomainModel):

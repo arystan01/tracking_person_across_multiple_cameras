@@ -61,15 +61,19 @@ def test_real_nvidia_clip_cut_export_and_retention(tmp_path: Path) -> None:
                 candidate_id=f"candidate-{index}",
                 tracklet_id=f"tracklet-{index}",
                 camera_id=camera,
-                t_from=ORIGIN + timedelta(seconds=5),
-                t_to=ORIGIN + timedelta(seconds=7),
+                # A 5–7s sighting with the default two seconds of context.
+                # Main has already expanded the window; Clip must not pad twice.
+                t_from=ORIGIN + timedelta(seconds=3),
+                t_to=ORIGIN + timedelta(seconds=9),
+                padding_before_s=2,
+                padding_after_s=2,
                 source_ref=ArtifactRef(
                     archive_id=f"nvidia-mtmc-12cam:mtmc-12cam-v1:{camera}"
                 ),
             )
             clip = worker.cut(command)
             assert clip.status == "READY"
-            assert clip.duration_s == pytest.approx(2.0, abs=0.05)
+            assert clip.duration_s == pytest.approx(6.0, abs=0.05)
             clips.append(
                 worker.change_state(
                     ClipStateCommand(
@@ -90,7 +94,7 @@ def test_real_nvidia_clip_cut_export_and_retention(tmp_path: Path) -> None:
             )
         )
         assert export.status == "READY"
-        assert export.duration_s == pytest.approx(4.0, abs=0.1)
+        assert export.duration_s == pytest.approx(12.0, abs=0.1)
         assert export.artifact_ref is not None
 
         artifacts = FileArtifactStore(artifact_root)

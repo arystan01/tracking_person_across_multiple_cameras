@@ -30,6 +30,7 @@ def audit_case_replay_ledger(
             case_id, kinds={CaseDataKind.ROUTING_RUN.value}
         )
         if item.payload.get("trigger_type") != "DECISION_REVOKE"
+        and "replayed_input_ids" not in item.payload
     ]
     inputs = repository.list_case_data(
         case_id, kinds={CaseDataKind.ROUTING_INPUT.value}

@@ -9,6 +9,7 @@ from javes_main.application import CaseManager
 from javes_main.domain import RoutingTriggerState
 from javes_main.observability import redact
 from javes_main.ports import CaseRepository, Clock
+from javes_main.persistence import RevisionConflict
 from javes_telemetry import operation, record_counter
 
 
@@ -85,7 +86,14 @@ class RoutingTriggerDispatcher:
                     current.lease_expires_at = None
                     current.last_error = str(redact(f"{type(exc).__name__}: {exc}"))
                     current.updated_at = self.clock.now()
-                    if current.attempt >= current.max_attempts:
+                    # Concurrent worker callbacks legitimately advance the
+                    # case while Routing runs. Recompute from the new revision;
+                    # contention must not exhaust the transport failure budget.
+                    if isinstance(exc, RevisionConflict):
+                        current.attempt = max(0, current.attempt - 1)
+                        current.state = RoutingTriggerState.PENDING
+                        retried += 1
+                    elif current.attempt >= current.max_attempts:
                         current.state = RoutingTriggerState.FAILED
                         failed += 1
                     else:
